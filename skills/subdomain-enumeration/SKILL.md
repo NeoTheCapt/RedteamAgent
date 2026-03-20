@@ -72,41 +72,67 @@ run_tool ffuf -u http://TARGET_IP -H "Host: FUZZ.target.com" \
   -o /engagement/scans/vhost_fuzz_20k.json -of json
 ```
 
-### 3. Verify & Fingerprint Live Subdomains
+### 3. Filter, Verify & Fingerprint Subdomains
 
-Collect enough data for prioritization — not just alive/dead, but response characteristics:
+Three-stage filter: DNS resolution → web port open → fingerprint. Only subdomains that
+pass ALL stages enter the engagement pipeline.
 
 ```bash
-# For each subdomain, collect: status, server, title, size, interesting headers
-echo "subdomain|status|server|title|size|notes" > "$ENGAGEMENT_DIR/scans/subdomains_fingerprint.csv"
+# Stage 1: DNS resolution filter — drop subdomains that don't resolve
+> "$ENGAGEMENT_DIR/scans/subdomains_resolved.txt"
 while IFS= read -r sub; do
-  resp=$(/usr/bin/curl -s -o /tmp/sub_resp.html -w "%{http_code}|%{size_download}" \
-    -D /tmp/sub_headers.txt --connect-timeout 5 "http://$sub" 2>/dev/null)
-  code=$(echo "$resp" | cut -d'|' -f1)
-  size=$(echo "$resp" | cut -d'|' -f2)
-  [ "$code" = "000" ] && continue
+  ip=$(dig +short "$sub" 2>/dev/null | head -1)
+  if [ -n "$ip" ] && [ "$ip" != ";;" ]; then
+    echo "$sub" >> "$ENGAGEMENT_DIR/scans/subdomains_resolved.txt"
+  else
+    echo "  [SKIP] $sub — DNS does not resolve"
+  fi
+done < "$ENGAGEMENT_DIR/scans/subdomains.txt"
+echo "Resolved: $(wc -l < $ENGAGEMENT_DIR/scans/subdomains_resolved.txt) / $(wc -l < $ENGAGEMENT_DIR/scans/subdomains.txt)"
+
+# Stage 2: Web port check — try HTTP (80), HTTPS (443), then common alt ports (8080, 8443)
+> "$ENGAGEMENT_DIR/scans/subdomains_live.txt"
+while IFS= read -r sub; do
+  live=""
+  for proto_port in "http://$sub" "https://$sub" "http://$sub:8080" "https://$sub:8443"; do
+    code=$(/usr/bin/curl -s -o /dev/null -w "%{http_code}" --connect-timeout 3 -k "$proto_port" 2>/dev/null)
+    if [ "$code" != "000" ] && [ -n "$code" ]; then
+      echo "$sub $proto_port $code" >> "$ENGAGEMENT_DIR/scans/subdomains_live.txt"
+      live="yes"
+      break
+    fi
+  done
+  [ -z "$live" ] && echo "  [SKIP] $sub — no open web port (80/443/8080/8443)"
+done < "$ENGAGEMENT_DIR/scans/subdomains_resolved.txt"
+echo "Live web: $(wc -l < $ENGAGEMENT_DIR/scans/subdomains_live.txt)"
+
+# Stage 3: Fingerprint live subdomains for prioritization
+echo "subdomain|url|status|server|title|size|notes" > "$ENGAGEMENT_DIR/scans/subdomains_fingerprint.csv"
+while IFS=' ' read -r sub url code; do
+  resp=$(/usr/bin/curl -s -o /tmp/sub_resp.html -w "%{size_download}" \
+    -D /tmp/sub_headers.txt --connect-timeout 5 -k "$url" 2>/dev/null)
+  size="$resp"
   server=$(grep -i "^server:" /tmp/sub_headers.txt 2>/dev/null | head -1 | cut -d: -f2- | tr -d '\r')
   title=$(grep -oE '<title>[^<]+</title>' /tmp/sub_resp.html 2>/dev/null | head -1 | sed 's/<[^>]*>//g')
-  # Collect priority signals
   notes=""
   grep -qi "debug\|x-debug\|x-powered-by\|x-aspnet" /tmp/sub_headers.txt 2>/dev/null && notes="${notes}debug_headers "
   grep -qi "error\|exception\|traceback\|stack.trace" /tmp/sub_resp.html 2>/dev/null && notes="${notes}verbose_errors "
   [ "$code" = "401" ] || [ "$code" = "403" ] && notes="${notes}auth_protected "
-  echo "$sub|$code|$server|$title|$size|$notes" >> "$ENGAGEMENT_DIR/scans/subdomains_fingerprint.csv"
+  echo "$sub|$url|$code|$server|$title|$size|$notes" >> "$ENGAGEMENT_DIR/scans/subdomains_fingerprint.csv"
   echo "  $sub → $code ($server) [$title] ${notes}"
-done < "$ENGAGEMENT_DIR/scans/subdomains.txt"
-
-# Port check on discovered subdomains
-run_tool nmap -sV -p 80,443,8080,8443 -iL /engagement/scans/subdomains.txt \
-  -oN /engagement/scans/subdomain_ports.txt
+done < "$ENGAGEMENT_DIR/scans/subdomains_live.txt"
 ```
 
-The fingerprint CSV gives the operator enough data to prioritize:
-- **debug_headers**: likely dev/test environment
-- **verbose_errors**: misconfigured, easier to exploit
-- **auth_protected**: admin panel or internal tool
-- **Small response size**: might be API endpoint or minimal app
-- **Non-standard server**: unusual tech stack, potentially unpatched
+**Filter summary**: Only subdomains in `subdomains_fingerprint.csv` should enter engagements.
+Subdomains that fail DNS or have no web port are logged and skipped — do NOT create
+engagements for them.
+
+Fingerprint signals for prioritization:
+- **debug_headers**: likely dev/test environment → HIGH priority
+- **verbose_errors**: misconfigured → HIGH priority
+- **auth_protected**: admin panel or internal tool → test for bypass
+- **Small response size**: minimal app or API → less hardened
+- **Non-standard server**: unusual tech, potentially unpatched
 
 ### 4. Recursive Enumeration
 

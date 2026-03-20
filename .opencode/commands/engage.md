@@ -39,15 +39,17 @@ export ENGAGEMENT_DIR="$PARENT_DIR"
 
 # Run subfinder
 run_tool subfinder -d "$DOMAIN" -all -silent -o /engagement/scans/subdomains_raw.txt
+echo "Raw subdomains: $(wc -l < $PARENT_DIR/scans/subdomains_raw.txt)"
 
-# Verify live subdomains
-echo "=== Verifying live subdomains ==="
-while IFS= read -r sub; do
-  code=$(/usr/bin/curl -s -o /dev/null -w "%{http_code}" --connect-timeout 3 "http://$sub" 2>/dev/null)
-  [ "$code" != "000" ] && [ "$code" != "" ] && echo "$sub" >> "$PARENT_DIR/scans/subdomains_live.txt"
-done < "$PARENT_DIR/scans/subdomains_raw.txt"
+# Three-stage filter: DNS → web port → fingerprint
+# Follow the subdomain-enumeration skill's "Filter, Verify & Fingerprint" methodology.
+# Stage 1: DNS resolution — drop subdomains that don't resolve
+# Stage 2: Web port check — try 80/443/8080/8443, drop if none respond
+# Stage 3: Fingerprint — collect server, title, size, debug signals
+# Only subdomains in subdomains_fingerprint.csv proceed to engagements.
+# See subdomain-enumeration skill for exact commands.
 
-echo "Found $(wc -l < $PARENT_DIR/scans/subdomains_live.txt) live subdomains"
+echo "Filtered: $(wc -l < $PARENT_DIR/scans/subdomains_fingerprint.csv) reachable web targets"
 ```
 
 ### Phase 0.5: AI-Driven Prioritization
@@ -80,15 +82,18 @@ In auto-confirm mode: show the list briefly and proceed with option 1.
 
 ### Phase 0.9: Spawn Parallel Engagements
 
-For each subdomain in priority order, create an independent engagement:
+For each subdomain from the **prioritized fingerprint list** (not the raw list),
+create an independent engagement. Only subdomains that passed DNS + web port filters
+should be here — never create engagements for unreachable subdomains.
 
 ```bash
-# For each subdomain, create engagement directory and scope
-for sub in $(cat "$PARENT_DIR/scans/subdomains_prioritized.txt"); do
+# Read prioritized subdomains from fingerprint CSV (skip header, extract subdomain + url)
+tail -n +2 "$PARENT_DIR/scans/subdomains_fingerprint.csv" | while IFS='|' read -r sub url rest; do
   SUB_CLEAN="${sub//\./-}"
   SUB_DIR="engagements/${DATE}-${TIME}-${SUB_CLEAN}"
   mkdir -p "$SUB_DIR/tools" "$SUB_DIR/downloads" "$SUB_DIR/scans" "$SUB_DIR/pids"
-  # Create scope.json, log.md, findings.md, cases.db for each
+  # Create scope.json targeting this specific subdomain's verified URL
+  # Create log.md, findings.md, init cases.db for each
 done
 ```
 
