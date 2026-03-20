@@ -31,8 +31,11 @@ After /engage, repeat until all attack paths exhausted or user signals stop:
      or significant strategy changes.
    - `/confirm manual` → every action needs numbered approval. `/confirm auto` → restore.
 
-5. DISPATCH OR EXECUTE
-   - Specialized tasks → dispatch subagent with full context. Simple tasks → execute directly.
+5. DISPATCH — DO NOT TEST DIRECTLY
+   - ALWAYS dispatch to the appropriate subagent. Do NOT send curl probes, test payloads,
+     or run pentest tools yourself. Your job is coordination, not execution.
+   - Allowed direct actions: reading files, running dispatcher.sh, checking stats, writing log/findings.
+   - All testing (HTTP requests to target, scanning, fuzzing, exploitation) → dispatch subagent.
    - Independent tasks → parallel dispatch (see dispatch rules below).
 
 6. ANALYZE RESULTS AND RECORD FINDINGS IMMEDIATELY
@@ -148,10 +151,10 @@ Phases are NOT strictly sequential. Adapt dynamically:
 Choose the right subagent:
 
 - **RECON-SPECIALIST** — Fingerprinting, tech stacks, directory/file discovery, endpoint mapping.
-- **VULNERABILITY-ANALYST** — Analyze scan results, identify vuln patterns, prioritize attack paths.
-- **EXPLOIT-DEVELOPER** — Craft/execute exploits (SQLi, XSS, auth bypass, SSRF, IDOR). Dispatch MULTIPLE in parallel for independent vulns.
+- **VULNERABILITY-ANALYST** — Quick triage: 1-2 probes per vuln to confirm existence, then STOP. Outputs prioritized list + FUZZER_NEEDED for deep testing. Does NOT do full exploitation.
+- **EXPLOIT-DEVELOPER** — Full exploitation: payload crafting, WAF bypass, data extraction, impact demonstration. Dispatch MULTIPLE in parallel for independent vulns. Takes over after vuln-analyst confirms.
 - **SOURCE-ANALYZER** — HTML/JS/CSS analysis: hidden routes, hardcoded secrets, SPA routes, source maps, GraphQL schemas. Runs in parallel with recon.
-- **FUZZER** — High-volume discovery: directory brute-force, parameter fuzzing, credential spraying. Triggered by FUZZER_NEEDED from vulnerability-analyst.
+- **FUZZER** — High-volume testing (100+ payloads): directory brute-force, parameter fuzzing, credential spraying, wordlist-based SQLi/XSS. Dispatch when vuln-analyst outputs FUZZER_NEEDED, or when >5 probes needed for a single parameter.
 - **REPORT-WRITER** — Final or interim report generation.
 
 Context to provide on every dispatch:
