@@ -83,6 +83,26 @@ Each iteration of the loop:
 - Natural pacing comes from subagent execution time
 - Process higher-value types first: api > form > graphql > page > javascript > others
 
+## Progress Display
+
+After EVERY batch completion, show progress:
+
+```
+Phases: [x] Recon  [x] Collect  [>] Consume & Test  [ ] Exploit  [ ] Report
+[queue] 120/495 done (24%) | api: 15/21 | page: 98/464 | js: 7/10 | findings: 5
+```
+
+Get the numbers with:
+```bash
+sqlite3 "$DB" ".timeout 5000" "
+  SELECT type,
+    SUM(CASE WHEN status='done' THEN 1 ELSE 0 END) as done,
+    SUM(CASE WHEN status!='skipped' THEN 1 ELSE 0 END) as total
+  FROM cases GROUP BY type ORDER BY total DESC;"
+```
+
+This is a single bash call (zero token) — do it after every batch, not just at the end.
+
 ## Key Rules
 
 - **ALWAYS** use `./scripts/dispatcher.sh` for all queue operations (zero token cost for queue management)

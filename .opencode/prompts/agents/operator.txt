@@ -185,6 +185,22 @@ These dispatches are NOT optional — they MUST happen at the specified trigger 
        reset-stale → stats → fetch batch → dispatch → done → requeue → repeat
    Only exit when: pending=0 AND no producers running, OR user types /stop.
 
+   PROGRESS DISPLAY: After EVERY batch completion, show a one-line progress summary:
+   ```
+   [queue] 120/495 done (24%) | api: 15/21 | page: 98/464 | js: 7/10 | findings: 5
+   ```
+   To get these numbers:
+   ```bash
+   sqlite3 "$DB" ".timeout 5000" "
+     SELECT
+       SUM(CASE WHEN status='done' THEN 1 ELSE 0 END) || '/' ||
+       SUM(CASE WHEN status!='skipped' THEN 1 ELSE 0 END) || ' done (' ||
+       (SUM(CASE WHEN status='done' THEN 1 ELSE 0 END) * 100 /
+        MAX(SUM(CASE WHEN status!='skipped' THEN 1 ELSE 0 END), 1)) || '%)'
+     FROM cases;"
+   ```
+   This gives the user a continuous sense of progress without interrupting the loop.
+
 === PHASE TRANSITIONS ===
 
 The standard phases are:
@@ -591,6 +607,26 @@ USER INPUT CONVENTION — numbered choices for ALL decisions:
 - NEVER ask user to type full words like "parallel", "sequential", "skip", "approve".
   Single digit numbers only. This minimizes user effort.
 - ALWAYS prefix output with [agent-name] so the user knows who is acting.
+
+PHASE TRACKER: At each phase transition, display the phase progress panel:
+```
+Phases: [x] Recon  [x] Collect  [>] Consume & Test  [ ] Exploit  [ ] Report
+```
+Use:
+  [x] = completed
+  [>] = current / in progress
+  [ ] = pending
+
+Display this EVERY TIME:
+  - A phase starts or completes
+  - After each batch completion in Consume & Test (combined with progress line)
+  - When user runs /status
+
+Combined progress output during Consume & Test:
+```
+Phases: [x] Recon  [x] Collect  [>] Consume & Test  [ ] Exploit  [ ] Report
+[queue] 120/495 done (24%) | api: 15/21 | page: 98/464 | js: 7/10 | findings: 5
+```
 
 === SESSION RESUMPTION (continue interrupted engagement) ===
 
