@@ -72,19 +72,41 @@ run_tool ffuf -u http://TARGET_IP -H "Host: FUZZ.target.com" \
   -o /engagement/scans/vhost_fuzz_20k.json -of json
 ```
 
-### 3. Verify Live Subdomains
+### 3. Verify & Fingerprint Live Subdomains
+
+Collect enough data for prioritization — not just alive/dead, but response characteristics:
 
 ```bash
-# Check which discovered subdomains resolve and respond
+# For each subdomain, collect: status, server, title, size, interesting headers
+echo "subdomain|status|server|title|size|notes" > "$ENGAGEMENT_DIR/scans/subdomains_fingerprint.csv"
 while IFS= read -r sub; do
-  code=$(/usr/bin/curl -s -o /dev/null -w "%{http_code}" --connect-timeout 3 "http://$sub")
-  [ "$code" != "000" ] && echo "$sub -> $code"
+  resp=$(/usr/bin/curl -s -o /tmp/sub_resp.html -w "%{http_code}|%{size_download}" \
+    -D /tmp/sub_headers.txt --connect-timeout 5 "http://$sub" 2>/dev/null)
+  code=$(echo "$resp" | cut -d'|' -f1)
+  size=$(echo "$resp" | cut -d'|' -f2)
+  [ "$code" = "000" ] && continue
+  server=$(grep -i "^server:" /tmp/sub_headers.txt 2>/dev/null | head -1 | cut -d: -f2- | tr -d '\r')
+  title=$(grep -oE '<title>[^<]+</title>' /tmp/sub_resp.html 2>/dev/null | head -1 | sed 's/<[^>]*>//g')
+  # Collect priority signals
+  notes=""
+  grep -qi "debug\|x-debug\|x-powered-by\|x-aspnet" /tmp/sub_headers.txt 2>/dev/null && notes="${notes}debug_headers "
+  grep -qi "error\|exception\|traceback\|stack.trace" /tmp/sub_resp.html 2>/dev/null && notes="${notes}verbose_errors "
+  [ "$code" = "401" ] || [ "$code" = "403" ] && notes="${notes}auth_protected "
+  echo "$sub|$code|$server|$title|$size|$notes" >> "$ENGAGEMENT_DIR/scans/subdomains_fingerprint.csv"
+  echo "  $sub → $code ($server) [$title] ${notes}"
 done < "$ENGAGEMENT_DIR/scans/subdomains.txt"
 
 # Port check on discovered subdomains
 run_tool nmap -sV -p 80,443,8080,8443 -iL /engagement/scans/subdomains.txt \
   -oN /engagement/scans/subdomain_ports.txt
 ```
+
+The fingerprint CSV gives the operator enough data to prioritize:
+- **debug_headers**: likely dev/test environment
+- **verbose_errors**: misconfigured, easier to exploit
+- **auth_protected**: admin panel or internal tool
+- **Small response size**: might be API endpoint or minimal app
+- **Non-standard server**: unusual tech stack, potentially unpatched
 
 ### 4. Recursive Enumeration
 

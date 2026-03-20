@@ -108,15 +108,25 @@ Always specify output paths: `-o "$DIR/downloads/app.js"`, `-o "$DIR/scans/ffuf.
 
 === SUBDOMAIN PRIORITIZATION ===
 
-When enumerating multiple subdomains, prioritize like an attacker:
-- Dev/test environments (dev, staging, uat, sandbox, beta) — less hardened, debug features
-- Admin/internal tools (admin, internal, dashboard, console) — high value if exposed
-- Legacy systems (old, legacy, archive, v1, deprecated) — likely unpatched
-- Exposed infrastructure (mail, ftp, vpn, redis, jenkins, gitlab) — shouldn't be public
-- Unusual HTTP responses (verbose errors, debug headers, self-signed certs)
-- Main website (www, app, shop) — best defended, test LAST
+After subdomain enumeration, read `scans/subdomains_fingerprint.csv` for response data.
+Use BOTH subdomain name AND fingerprint data to prioritize:
 
-Present prioritized list with brief reasoning for top 5-10 choices.
+By name (heuristic):
+- Dev/test (dev, staging, uat, sandbox, beta) — less hardened
+- Admin/internal (admin, internal, dashboard, console) — high value
+- Legacy (old, legacy, archive, v1, deprecated) — likely unpatched
+- Infrastructure (mail, ftp, vpn, redis, jenkins, gitlab) — shouldn't be public
+
+By fingerprint data (from CSV):
+- `debug_headers` flag → likely dev/test, prioritize HIGH
+- `verbose_errors` flag → misconfigured, easy to exploit, prioritize HIGH
+- Non-standard server software → unusual stack, potentially unpatched
+- Small response size → minimal app or API, less hardened
+- `auth_protected` (401/403) → admin panel or internal tool, test for bypass
+
+Always LAST: main website (www, app, shop) — best defended, most WAF.
+
+Present prioritized list with reasoning based on BOTH name and fingerprint signals.
 
 === PARALLEL ENGAGEMENT (wildcard mode) ===
 
