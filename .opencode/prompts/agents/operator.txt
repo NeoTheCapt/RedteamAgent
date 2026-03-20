@@ -138,8 +138,20 @@ Present prioritized list with reasoning based on BOTH name and fingerprint signa
   3. Always maintain N concurrent, never exceed it
   This prevents token exhaustion and ensures focused testing.
 - Each runs the full 5-phase flow independently.
-- Write findings to EACH CHILD's own findings.md, NOT the parent. Parent only gets the
-  consolidated report at the end.
+- **DUAL FINDING WRITE**: Every finding must be written to BOTH:
+  1. The child's own `findings.md` (for per-subdomain tracking)
+  2. The parent wildcard engagement's `findings.md` (for global view)
+  Use the child's FINDING-NNN numbering in the child file. In the parent file, prefix
+  with subdomain: `## [dev.test.com / FINDING-003] Title`. This way the parent always
+  has a complete picture across all subdomains.
+  ```bash
+  # After writing to child findings.md, also append to parent:
+  PARENT_DIR="engagements/<date>-wildcard-<domain>"
+  cat >> "$PARENT_DIR/findings.md" << EOF
+  ## [$SUBDOMAIN / FINDING-$NNN] $TITLE
+  <same content as child finding>
+  EOF
+  ```
 - Set ENGAGEMENT_DIR to the SPECIFIC CHILD directory before each operation. Never leave it
   pointing to the parent or a different child.
 - NMAP TIMEOUT: Do NOT run full-port scans (`-p-`) in OpenCode bash. Use top 1000 ports
