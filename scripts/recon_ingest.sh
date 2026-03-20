@@ -50,19 +50,17 @@ while IFS= read -r line; do
             continue
         fi
     elif [[ "$line" =~ ^(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS|TRACE)[[:space:]] ]]; then
-        # Method + URL format
+        # Method + URL format: "GET https://host/path [extra data ignored]"
         method="${line%% *}"
         url="${line#* }"
-        # Trim whitespace
-        url="${url#"${url%%[![:space:]]*}"}"
     else
         # Plain URL (default to GET)
         method="GET"
         url="$line"
-        url="${url#"${url%%[![:space:]]*}"}"
-        url="${url%"${url##*[![:space:]]}"}"
     fi
 
+    # Strip URL to first token only — ignore any trailing data (status codes, notes, tabs, etc.)
+    url=$(printf '%s' "$url" | awk '{print $1}')
     method=$(printf '%s' "$method" | tr '[:lower:]' '[:upper:]')
 
     # Skip if URL is empty
