@@ -1,16 +1,18 @@
 # Command: Subdomain Enumeration
 
-The target domain is on the FIRST LINE of this message, after "TARGET_DOMAIN:".
-Read it now. Example: `TARGET_DOMAIN: example.com` means domain is `example.com`.
-
-If the first line says `TARGET_DOMAIN:` with nothing after it, ask the user for a domain.
-
 ## Step 1: Extract Domain
 
-From the TARGET_DOMAIN line at the top:
+Look for the target domain in this message. It appears near the top as `TARGET_DOMAIN: <domain>`
+or elsewhere in the text. Scan the ENTIRE message for a domain name pattern (e.g., `example.com`,
+`test.com`, `example.org`).
+
+Extract rules:
 - Strip scheme (`http://`, `https://`), wildcard (`*.`), trailing path
 - Check for `--deep` flag
 - Examples: `example.com` → domain=example.com | `*.test.com --deep` → domain=test.com, deep=yes
+
+If you truly cannot find ANY domain in this message, ask the user to provide one.
+But look carefully first — the domain IS in this message somewhere.
 
 ## Step 2: Run subfinder
 
