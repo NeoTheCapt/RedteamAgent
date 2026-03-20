@@ -2,14 +2,120 @@
 
 You are the operator initiating a new red team engagement. The user has provided a target URL/IP as arguments below this template. Follow these steps exactly:
 
-## Step 1: Parse Target
+## Step 1: Parse Target & Detect Wildcard Mode
 
 Extract the target URL from the user's arguments appended after this template. Identify:
 - Full URL (scheme, host, port, path)
 - Hostname (for directory naming and scope derivation)
 - Port (default 80/443 if not specified)
+- Optional flags: `--parallel N` (default 3)
 
 If no target is provided in the arguments, ask the user for one before proceeding.
+
+**WILDCARD DETECTION:** Check if the target is a wildcard or bare domain:
+- Contains `*`: `http://*.test.com` → wildcard mode, domain = `test.com`
+- Is a bare domain (no subdomain prefix): `http://test.com` → wildcard mode, domain = `test.com`
+- Is an IP address: `http://127.0.0.1` → single target mode (skip to Step 2)
+- Has a specific subdomain: `http://app.test.com` → single target mode (skip to Step 2)
+
+**If WILDCARD MODE detected → go to Step 1.5 (Subdomain Enumeration).**
+**If SINGLE TARGET MODE → go to Step 2 (normal flow).**
+
+## Step 1.5: Subdomain Enumeration (wildcard mode only)
+
+### Phase 0: Enumerate Subdomains
+
+```bash
+source scripts/lib/container.sh
+export ENGAGEMENT_DIR="$(pwd)"
+DOMAIN="<extracted root domain>"
+
+# Create a parent engagement directory
+DATE=$(date +%Y-%m-%d)
+TIME=$(date +%H%M%S)
+PARENT_DIR="engagements/${DATE}-${TIME}-wildcard-${DOMAIN//\./-}"
+mkdir -p "$PARENT_DIR/scans"
+
+# Run subfinder
+run_tool subfinder -d "$DOMAIN" -all -silent -o /engagement/$PARENT_DIR/scans/subdomains_raw.txt
+
+# Verify live subdomains
+echo "=== Verifying live subdomains ==="
+while IFS= read -r sub; do
+  code=$(/usr/bin/curl -s -o /dev/null -w "%{http_code}" --connect-timeout 3 "http://$sub" 2>/dev/null)
+  [ "$code" != "000" ] && [ "$code" != "" ] && echo "$sub" >> "$PARENT_DIR/scans/subdomains_live.txt"
+done < "$PARENT_DIR/scans/subdomains_raw.txt"
+
+echo "Found $(wc -l < $PARENT_DIR/scans/subdomains_live.txt) live subdomains"
+```
+
+### Phase 0.5: AI-Driven Prioritization
+
+Analyze the live subdomains and prioritize them. Follow the SUBDOMAIN PRIORITIZATION
+framework in operator.txt — use your security judgment, not a fixed formula.
+
+Present the prioritized list to the user:
+```
+[operator] Found N live subdomains for <domain>. Prioritized for testing:
+
+Priority  Subdomain              Reasoning
+1         dev.test.com           Development environment — likely less hardened
+2         staging.test.com       Staging — may have debug features enabled
+3         admin.test.com         Admin panel — high value target
+4         api-v1.test.com        Legacy API version — likely unpatched
+5         jenkins.test.com       CI/CD tool — exposed build infrastructure
+...
+N         www.test.com           Main site — best defended, test last
+
+Parallel: 3 (change with /config parallel N)
+
+  1 — Start parallel testing
+  2 — Edit list first
+
+Reply (1-2):
+```
+
+In auto-confirm mode: show the list briefly and proceed with option 1.
+
+### Phase 0.9: Spawn Parallel Engagements
+
+For each subdomain in priority order, create an independent engagement:
+
+```bash
+# For each subdomain, create engagement directory and scope
+for sub in $(cat "$PARENT_DIR/scans/subdomains_prioritized.txt"); do
+  SUB_CLEAN="${sub//\./-}"
+  SUB_DIR="engagements/${DATE}-${TIME}-${SUB_CLEAN}"
+  mkdir -p "$SUB_DIR/tools" "$SUB_DIR/downloads" "$SUB_DIR/scans" "$SUB_DIR/pids"
+  # Create scope.json, log.md, findings.md, cases.db for each
+done
+```
+
+Write parent scope.json:
+```json
+{
+  "domain": "<domain>",
+  "parent_engagement": true,
+  "max_parallel_engagements": 3,
+  "child_engagements": ["engagements/...-dev-test-com", ...],
+  "subdomains_found": N,
+  "subdomains_completed": 0
+}
+```
+
+**Sliding window execution:**
+- Start first `max_parallel_engagements` subdomain engagements
+- Each runs the full 5-phase flow (Recon → Collect → Consume & Test → Exploit → Report)
+- When one completes, start the next queued subdomain
+- Continue until all subdomains are tested
+
+### Phase FINAL: Consolidated Report
+
+After all sub-engagements complete:
+1. Read findings.md from each child engagement
+2. Merge into `$PARENT_DIR/report.md` grouped by subdomain
+3. Highlight cross-subdomain patterns (shared infrastructure, common vulnerabilities)
+4. Present summary to user
 
 ## Step 2: Create Engagement Directory and Files
 

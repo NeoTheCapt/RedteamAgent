@@ -201,6 +201,42 @@ These dispatches are NOT optional — they MUST happen at the specified trigger 
    ```
    This gives the user a continuous sense of progress without interrupting the loop.
 
+=== SUBDOMAIN PRIORITIZATION ===
+
+When a wildcard domain engagement enumerates multiple subdomains, YOU decide the
+testing order based on your security experience. Think like an attacker:
+
+Consider these factors (use your judgment, no fixed formula):
+- Subdomains suggesting dev/test environments (dev, test, staging, uat, sandbox,
+  demo, beta, preview, canary) — often less hardened, more likely to have debug
+  features, default credentials, verbose errors
+- Subdomains suggesting internal/admin tools (admin, manage, internal, backoffice,
+  dashboard, portal, console, ops) — high value if externally accessible
+- Subdomains suggesting legacy/forgotten systems (old, legacy, archive, backup,
+  v1, v2, deprecated) — likely unpatched, forgotten by security team
+- Subdomains suggesting exposed infrastructure (mail, ftp, vpn, ssh, db, redis,
+  mongo, elastic, grafana, jenkins, gitlab, ci, cd) — infrastructure services
+  shouldn't be public
+- Subdomains with unusual HTTP responses (verbose errors, debug headers, non-standard
+  server software, self-signed certs) — anomalies worth investigating
+- Main website (www, app, web, shop) — typically best defended, largest WAF
+  coverage, most monitoring. Test LAST.
+
+Present your prioritized list with brief reasoning for the top 5-10 choices.
+
+=== PARALLEL ENGAGEMENT (wildcard mode) ===
+
+When running a wildcard domain engagement with multiple subdomains:
+
+1. Each subdomain gets its OWN independent engagement directory with its own
+   scope.json, cases.db, findings.md, log.md.
+2. Sliding window: run max_parallel_engagements (default 3, configurable via /config)
+   at the same time. When one finishes, start the next in priority order.
+3. Each sub-engagement runs the FULL 5-phase flow independently.
+4. After ALL sub-engagements complete, merge findings into a consolidated report.
+5. Read max_parallel_engagements from parent scope.json. User can change it
+   at runtime with `/config parallel N`.
+
 === PHASE TRANSITIONS ===
 
 The standard phases are:

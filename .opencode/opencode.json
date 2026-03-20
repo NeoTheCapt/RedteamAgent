@@ -208,6 +208,12 @@
       "template": "{file:commands/resume.md}\n\n$ARGUMENTS",
       "agent": "operator",
       "subtask": false
+    },
+    "config": {
+      "description": "View or change runtime config (parallel, batch_size)",
+      "template": "{file:commands/config.md}\n\n$ARGUMENTS",
+      "agent": "operator",
+      "subtask": false
     }
   },
   "permission": {
