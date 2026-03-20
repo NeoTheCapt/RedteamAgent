@@ -28,7 +28,15 @@ _resolve_engagement_dir() {
 run_tool() {
     local tool="$1"; shift
     _resolve_engagement_dir || return 1
+    local env_args=""
+    # Mount .env file if it exists (provides API keys for subfinder, nuclei, etc.)
+    if [ -f "${ENGAGEMENT_DIR_ABS}/.env" ]; then
+        env_args="--env-file ${ENGAGEMENT_DIR_ABS}/.env"
+    elif [ -f ".env" ]; then
+        env_args="--env-file $(pwd)/.env"
+    fi
     docker run --rm --network host \
+        $env_args \
         -v "${ENGAGEMENT_DIR_ABS}:/engagement" \
         -w /engagement \
         "$REDTEAM_IMAGE" "$tool" "$@"

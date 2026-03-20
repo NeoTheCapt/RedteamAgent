@@ -15,6 +15,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     john \
     hashcat \
     nuclei \
+    subfinder \
     curl \
     wget \
     jq \

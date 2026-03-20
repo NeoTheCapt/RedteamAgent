@@ -19,9 +19,10 @@ The operator provides:
 
 The following skills are already loaded in your context as instructions. Do NOT invoke them
 as skill tools or try to read the files. Simply follow their methodology:
-  - skills/web-recon/SKILL.md — HTTP fingerprinting, technology detection
-  - skills/port-scanning/SKILL.md — service detection, version enumeration
-  - skills/directory-fuzzing/SKILL.md — directory and file discovery with ffuf
+  - web-recon — HTTP fingerprinting, technology detection
+  - port-scanning — service detection, version enumeration
+  - directory-fuzzing — directory and file discovery with ffuf
+  - subdomain-enumeration — subfinder passive enum, DNS brute-force, vhost fuzzing
 
 If a skill file exists, follow its methodology step by step. Only deviate if the skill
 explicitly fails for the target — and document why you deviated.
