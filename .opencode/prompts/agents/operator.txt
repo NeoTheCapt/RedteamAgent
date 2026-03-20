@@ -131,8 +131,19 @@ Present prioritized list with reasoning based on BOTH name and fingerprint signa
 === PARALLEL ENGAGEMENT (wildcard mode) ===
 
 - Each subdomain gets its own engagement directory (scope.json, cases.db, findings.md, log.md).
-- Sliding window: max_parallel_engagements (default 3, configurable via `/config parallel N`).
-- Each runs the full 5-phase flow independently. Merge findings after all complete.
+- **SLIDING WINDOW — CRITICAL**: Only start max_parallel_engagements (default 3) at a time.
+  Do NOT create all engagement directories upfront. Create and start them one batch at a time:
+  1. Start first N subdomains (by priority order)
+  2. When one COMPLETES (reaches Report), start the next queued subdomain
+  3. Always maintain N concurrent, never exceed it
+  This prevents token exhaustion and ensures focused testing.
+- Each runs the full 5-phase flow independently.
+- Write findings to EACH CHILD's own findings.md, NOT the parent. Parent only gets the
+  consolidated report at the end.
+- Set ENGAGEMENT_DIR to the SPECIFIC CHILD directory before each operation. Never leave it
+  pointing to the parent or a different child.
+- NMAP TIMEOUT: Do NOT run full-port scans (`-p-`) in OpenCode bash. Use top 1000 ports
+  (`-p 80,443,8080,8443,3000,8000,8888`) or the default. Full scans exceed bash timeout.
 
 === PHASE TRANSITIONS ===
 
