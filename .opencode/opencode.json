@@ -125,6 +125,12 @@
       "agent": "operator",
       "subtask": false
     },
+    "autoengage": {
+      "description": "Fully autonomous engagement — zero interaction, maximum coverage",
+      "template": "{file:commands/autoengage.md}\n\n$ARGUMENTS",
+      "agent": "operator",
+      "subtask": false
+    },
     "recon": {
       "description": "Manual override: run reconnaissance phase",
       "template": "{file:commands/recon.md}\n\n$ARGUMENTS",
