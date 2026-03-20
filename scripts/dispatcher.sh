@@ -87,6 +87,11 @@ case "$ACTION" in
 
   reset-stale)
     MINUTES="${3:?Missing minutes argument}"
+    # Validate MINUTES is numeric
+    if ! [[ "$MINUTES" =~ ^[0-9]+$ ]]; then
+      echo "ERROR: minutes must be a positive integer" >&2
+      exit 1
+    fi
     BEFORE=$(sql "SELECT COUNT(*) FROM cases WHERE status='processing' AND consumed_at < datetime('now', '-${MINUTES} minutes');")
     sql "UPDATE cases SET status='pending', assigned_agent=NULL, consumed_at=NULL WHERE status='processing' AND consumed_at < datetime('now', '-${MINUTES} minutes');"
     echo "Reset ${BEFORE} stale case(s) (stuck > ${MINUTES} min)"

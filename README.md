@@ -10,7 +10,7 @@
     <img src="https://img.shields.io/badge/platform-macOS%20|%20Linux-blue" alt="Platform">
     <img src="https://img.shields.io/badge/tools-Docker%20containerized-blue" alt="Docker">
     <img src="https://img.shields.io/badge/agents-7%20specialized-orange" alt="Agents">
-    <img src="https://img.shields.io/badge/skills-12%20attack%20methodologies-red" alt="Skills">
+    <img src="https://img.shields.io/badge/skills-28%20attack%20methodologies-red" alt="Skills">
     <img src="https://img.shields.io/badge/references-57%20files-green" alt="References">
   </p>
 </p>
@@ -106,7 +106,10 @@ Phase 5: REPORT ── report-writer with coverage statistics
 | `/report` | Generate final report |
 | `/stop` | Stop all background containers |
 | `/confirm auto/manual` | Toggle auto/manual approval mode |
-| `/recon` `/scan` `/enumerate` `/exploit` `/pivot` | Manual overrides |
+| `/config [key] [value]` | View or set runtime configuration |
+| `/subdomain <domain>` | Enumerate subdomains for a domain |
+| `/vuln-analyze` | Analyze scan results for vulnerabilities |
+| `/recon` `/scan` `/enumerate` `/exploit` `/pivot` | Manual phase overrides |
 
 ### Authentication
 
@@ -158,7 +161,7 @@ Producers              Queue (SQLite)         Consumers
 .opencode/           OpenCode config (agents, commands, skills, plugins)
 docker/              3 Dockerfiles + docker-compose.yml
 scripts/             Dispatcher, ingest scripts, shared libraries
-skills/              12 attack methodology skills
+skills/              28 attack methodology skills
 references/          57 reference files (OWASP, tools, tactics, AD)
 engagements/         Per-engagement output (scope, logs, findings, queue, report)
 ```
@@ -249,6 +252,8 @@ Phases: [x] Recon  [x] Collect  [>] Consume & Test  [ ] Exploit  [ ] Report
 | `/report` | 生成渗透测试报告 |
 | `/stop` | 停止所有后台容器 |
 | `/confirm auto/manual` | 切换自动/手动确认模式 |
+| `/config [key] [value]` | 查看或设置运行时配置 |
+| `/subdomain <domain>` | 枚举子域名 |
 
 ## 依赖
 

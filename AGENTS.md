@@ -66,7 +66,7 @@ When the operator dispatches a subagent, it **must** provide a context summary c
 
 ## Approval Gate
 
-**Every bash command that sends traffic to the target requires user approval.** This includes but is not limited to: HTTP requests, port scans, fuzzing, exploit payloads, DNS queries against the target. Local file operations (reading logs, parsing output, writing reports) do not require approval.
+**In auto-confirm mode (default), the operator proceeds autonomously after initial Phase 1 approval. In manual mode (`/confirm manual`), every bash command that sends traffic requires explicit approval.** This includes but is not limited to: HTTP requests, port scans, fuzzing, exploit payloads, DNS queries against the target. Local file operations (reading logs, parsing output, writing reports) do not require approval.
 
 ## Engagement State
 

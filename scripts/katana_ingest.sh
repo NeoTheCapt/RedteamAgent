@@ -67,7 +67,8 @@ echo "[katana_ingest] Monitoring $KATANA_OUTPUT for new crawl results..."
 count=0
 
 # tail -f the output file, process each new JSONL line
-tail -f "$KATANA_OUTPUT" 2>/dev/null | while IFS= read -r line; do
+# Use process substitution to avoid subshell (so count increments correctly)
+while IFS= read -r line; do
     # Skip empty lines
     [[ -z "$line" ]] && continue
 
@@ -117,6 +118,6 @@ tail -f "$KATANA_OUTPUT" 2>/dev/null | while IFS= read -r line; do
     if (( count % 50 == 0 )); then
         echo "[katana_ingest] Ingested $count cases so far..."
     fi
-done
+done < <(tail -f "$KATANA_OUTPUT" 2>/dev/null)
 
 echo "[katana_ingest] Ingested $count total cases from $TARGET"

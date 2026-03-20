@@ -26,8 +26,6 @@ If no target is provided in the arguments, ask the user for one before proceedin
 ### Phase 0: Enumerate Subdomains
 
 ```bash
-source scripts/lib/container.sh
-export ENGAGEMENT_DIR="$(pwd)"
 DOMAIN="<extracted root domain>"
 
 # Create a parent engagement directory
@@ -36,8 +34,11 @@ TIME=$(date +%H%M%S)
 PARENT_DIR="engagements/${DATE}-${TIME}-wildcard-${DOMAIN//\./-}"
 mkdir -p "$PARENT_DIR/scans"
 
+source scripts/lib/container.sh
+export ENGAGEMENT_DIR="$PARENT_DIR"
+
 # Run subfinder
-run_tool subfinder -d "$DOMAIN" -all -silent -o /engagement/$PARENT_DIR/scans/subdomains_raw.txt
+run_tool subfinder -d "$DOMAIN" -all -silent -o /engagement/scans/subdomains_raw.txt
 
 # Verify live subdomains
 echo "=== Verifying live subdomains ==="

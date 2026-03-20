@@ -29,6 +29,8 @@ jq '{
   batch_size: (.batch_size // 10),
   confirm_mode: (.confirm_mode // "auto")
 }' "$ENG_DIR/scope.json"
+echo ""
+echo "Note: confirm_mode is managed by /confirm command, not /config"
 ```
 
 ## Action: set parameter
