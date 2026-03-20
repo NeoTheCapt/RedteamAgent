@@ -217,7 +217,7 @@
     },
     "subdomain": {
       "description": "Enumerate subdomains for a target domain",
-      "template": "{file:commands/subdomain.md}\n\n$ARGUMENTS",
+      "template": "TARGET_DOMAIN: $ARGUMENTS\n\n{file:commands/subdomain.md}",
       "agent": "recon-specialist",
       "subtask": true
     }
