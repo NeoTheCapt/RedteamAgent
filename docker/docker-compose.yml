@@ -1,0 +1,16 @@
+version: "3.8"
+
+services:
+  kali-redteam:
+    build:
+      context: ./kali-redteam
+    image: kali-redteam:latest
+
+  mitmproxy:
+    build:
+      context: ..
+      dockerfile: docker/mitmproxy/Dockerfile
+    image: redteam-proxy:latest
+
+  katana:
+    image: projectdiscovery/katana:latest

@@ -1,0 +1,126 @@
+# ============================================
+# Claude Code / IDE
+# ============================================
+.claude/
+docs/superpowers/
+
+# ============================================
+# Engagement artifacts (per-engagement, never commit)
+# ============================================
+engagements/*/
+!engagements/.gitkeep
+
+# ============================================
+# Pentest tool output & artifacts
+# ============================================
+
+# nmap
+*.nmap
+*.gnmap
+*.xml
+
+# sqlmap
+output/
+.sqlmap/
+
+# ffuf / gobuster / dirb
+*.ffuf
+*.gobuster
+
+# Burp Suite
+*.burp
+*.jar
+
+# Metasploit
+*.rc
+loot/
+.msf4/
+
+# Nuclei
+nuclei-output/
+
+# Nikto
+*.csv
+
+# Hydra / John / Hashcat
+*.pot
+*.restore
+*.session
+
+# General scan output
+scan_results/
+scan-results/
+scans/
+
+# ============================================
+# Captured data & loot
+# ============================================
+loot/
+dumps/
+exfil/
+*.dump
+*.sql
+!scripts/schema.sql
+*.bak
+*.db
+*.sqlite
+*.sqlite3
+
+# Credentials & wordlists (user-specific)
+*.wordlist
+creds/
+credentials/
+
+# Screenshots & evidence (large binaries)
+screenshots/
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.bmp
+
+# ============================================
+# Generated scripts & payloads
+# ============================================
+payloads/
+exploits/
+shells/
+*.elf
+*.exe
+*.dll
+*.so
+*.war
+
+# ============================================
+# Node/TypeScript (plugin compilation)
+# ============================================
+node_modules/
+*.js
+*.d.ts
+*.js.map
+package-lock.json
+yarn.lock
+
+# ============================================
+# OS & editor
+# ============================================
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# ============================================
+# Misc runtime
+# ============================================
+*.log
+*.tmp
+*.temp
+*.pid
+*.cache
+__pycache__/
+*.pyc
+.env
+.env.*
