@@ -1,0 +1,1 @@
+FROM projectdiscovery/katana:latest

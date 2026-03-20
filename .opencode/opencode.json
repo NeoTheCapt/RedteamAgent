@@ -1,0 +1,202 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "",
+  "small_model": "",
+  "default_agent": "operator",
+  "instructions": [
+    "AGENTS.md",
+    ".opencode/instructions/INSTRUCTIONS.md",
+    "skills/web-recon/SKILL.md",
+    "skills/port-scanning/SKILL.md",
+    "skills/directory-fuzzing/SKILL.md",
+    "skills/parameter-fuzzing/SKILL.md",
+    "skills/sqli-testing/SKILL.md",
+    "skills/xss-testing/SKILL.md",
+    "skills/auth-bypass/SKILL.md",
+    "skills/ssrf-testing/SKILL.md",
+    "skills/file-inclusion/SKILL.md",
+    "skills/report-generation/SKILL.md",
+    "skills/source-analysis/SKILL.md",
+    "skills/case-dispatching/SKILL.md",
+    "references/INDEX.md"
+  ],
+  "plugin": [
+    "./.opencode/plugins"
+  ],
+  "agent": {
+    "operator": {
+      "description": "Lead red team operator. Drives pentest methodology, coordinates phases, dispatches subagents.",
+      "mode": "primary",
+      "prompt": "{file:prompts/agents/operator.txt}",
+      "read": true,
+      "write": true,
+      "edit": true,
+      "bash": true,
+      "glob": true,
+      "grep": true
+    },
+    "recon-specialist": {
+      "description": "Passive/active recon: fingerprinting, directory fuzzing, tech stack identification.",
+      "mode": "subagent",
+      "prompt": "{file:prompts/agents/recon-specialist.txt}",
+      "read": true,
+      "write": false,
+      "edit": false,
+      "bash": true,
+      "glob": true,
+      "grep": true
+    },
+    "vulnerability-analyst": {
+      "description": "Analyzes scan results, identifies vulnerability patterns, prioritizes attack paths.",
+      "mode": "subagent",
+      "prompt": "{file:prompts/agents/vulnerability-analyst.txt}",
+      "read": true,
+      "write": false,
+      "edit": false,
+      "bash": true,
+      "glob": true,
+      "grep": true
+    },
+    "exploit-developer": {
+      "description": "Crafts and executes exploits: SQLi payloads, XSS chains, auth bypass techniques.",
+      "mode": "subagent",
+      "prompt": "{file:prompts/agents/exploit-developer.txt}",
+      "read": true,
+      "write": false,
+      "edit": false,
+      "bash": true,
+      "glob": true,
+      "grep": true
+    },
+    "fuzzer": {
+      "description": "High-volume parameter/directory fuzzing, rapid iteration and result parsing.",
+      "mode": "subagent",
+      "prompt": "{file:prompts/agents/fuzzer.txt}",
+      "read": true,
+      "write": false,
+      "edit": false,
+      "bash": true,
+      "glob": true,
+      "grep": true
+    },
+    "source-analyzer": {
+      "description": "Deep static analysis of HTML/JS/CSS to extract hidden routes, API endpoints, and secrets.",
+      "mode": "subagent",
+      "prompt": "{file:prompts/agents/source-analyzer.txt}",
+      "read": true,
+      "write": false,
+      "edit": false,
+      "bash": true,
+      "glob": true,
+      "grep": true
+    },
+    "report-writer": {
+      "description": "Generates structured engagement report from logs and findings.",
+      "mode": "subagent",
+      "prompt": "{file:prompts/agents/report-writer.txt}",
+      "read": true,
+      "write": true,
+      "edit": true,
+      "bash": false,
+      "glob": true,
+      "grep": true
+    }
+  },
+  "command": {
+    "engage": {
+      "description": "Initialize a new engagement against a target",
+      "template": "{file:commands/engage.md}\n\n$ARGUMENTS",
+      "agent": "operator",
+      "subtask": false
+    },
+    "recon": {
+      "description": "Manual override: run reconnaissance phase",
+      "template": "{file:commands/recon.md}\n\n$ARGUMENTS",
+      "agent": "recon-specialist",
+      "subtask": true
+    },
+    "scan": {
+      "description": "Manual override: run active scanning phase",
+      "template": "{file:commands/scan.md}\n\n$ARGUMENTS",
+      "agent": "recon-specialist",
+      "subtask": true
+    },
+    "enumerate": {
+      "description": "Manual override: run enumeration phase",
+      "template": "{file:commands/enumerate.md}\n\n$ARGUMENTS",
+      "agent": "recon-specialist",
+      "subtask": true
+    },
+    "vuln-analyze": {
+      "description": "Manual override: run vulnerability analysis",
+      "template": "{file:commands/vuln-analyze.md}\n\n$ARGUMENTS",
+      "agent": "vulnerability-analyst",
+      "subtask": true
+    },
+    "exploit": {
+      "description": "Manual override: exploit a specific finding",
+      "template": "{file:commands/exploit.md}\n\n$ARGUMENTS",
+      "agent": "exploit-developer",
+      "subtask": true
+    },
+    "pivot": {
+      "description": "Force strategy change based on current findings",
+      "template": "{file:commands/pivot.md}\n\n$ARGUMENTS",
+      "agent": "operator",
+      "subtask": false
+    },
+    "status": {
+      "description": "Show engagement progress and findings summary",
+      "template": "{file:commands/status.md}\n\n$ARGUMENTS",
+      "agent": "operator",
+      "subtask": false
+    },
+    "report": {
+      "description": "Generate final engagement report",
+      "template": "{file:commands/report.md}\n\n$ARGUMENTS",
+      "agent": "report-writer",
+      "subtask": true
+    },
+    "proxy": {
+      "description": "Start or stop the mitmproxy interception proxy",
+      "template": "{file:commands/proxy.md}\n\n$ARGUMENTS",
+      "agent": "operator",
+      "subtask": false
+    },
+    "auth": {
+      "description": "Configure authentication credentials (cookies, headers)",
+      "template": "{file:commands/auth.md}\n\n$ARGUMENTS",
+      "agent": "operator",
+      "subtask": false
+    },
+    "queue": {
+      "description": "Show case queue statistics",
+      "template": "{file:commands/queue.md}\n\n$ARGUMENTS",
+      "agent": "operator",
+      "subtask": false
+    },
+    "stop": {
+      "description": "Stop all background engagement processes",
+      "template": "{file:commands/stop.md}\n\n$ARGUMENTS",
+      "agent": "operator",
+      "subtask": false
+    },
+    "confirm": {
+      "description": "Toggle auto/manual confirmation mode (default: auto)",
+      "template": "{file:commands/confirm.md}\n\n$ARGUMENTS",
+      "agent": "operator",
+      "subtask": false
+    },
+    "resume": {
+      "description": "Resume an interrupted engagement from where it left off",
+      "template": "{file:commands/resume.md}\n\n$ARGUMENTS",
+      "agent": "operator",
+      "subtask": false
+    }
+  },
+  "permission": {
+    "Read": "allow",
+    "Glob": "allow",
+    "Grep": "allow"
+  }
+}

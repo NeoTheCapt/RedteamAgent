@@ -1,0 +1,74 @@
+# Command: Generate Engagement Report
+
+You are the report-writer generating a final structured report for the current engagement.
+
+## Step 1: Locate Engagement Directory
+
+Find the most recent engagement directory under `engagements/`. If the user specifies a particular engagement in their arguments, use that one instead.
+
+If no engagement exists, inform the user that no engagement was found.
+
+## Step 2: Read Engagement Data
+
+Read the following files from the engagement directory:
+- `scope.json` -- target, scope, mode, timeline
+- `log.md` -- full chronological log of all actions
+- `findings.md` -- all confirmed findings with evidence
+
+## Step 3: Generate Report
+
+The report-generation skill is already loaded in your context as instructions. Do NOT invoke it as a skill tool. Follow its report format and methodology.
+
+Create `report.md` in the engagement directory with the following structure:
+
+```markdown
+# Penetration Test Report
+
+## Executive Summary
+- Target, scope, and engagement timeframe
+- High-level summary of results (total findings by severity)
+- Overall risk assessment
+
+## Scope and Methodology
+- Target definition and boundaries
+- Tools and techniques used
+- Methodology phases executed
+
+## Findings
+
+### [FINDING-NNN] Title
+- **Severity**: HIGH | MEDIUM | LOW | INFO
+- **OWASP Category**: classification
+- **Type**: vulnerability type
+- **Location**: endpoint and parameter
+- **Description**: detailed explanation of the vulnerability
+- **Evidence**:
+  - Command: exact command
+  - Response: relevant response excerpt
+- **Impact**: what an attacker can achieve
+- **Remediation**: recommended fix
+
+(Repeat for each finding, ordered by severity: HIGH first, then MEDIUM, LOW, INFO)
+
+## Attack Narrative
+Chronological walkthrough of the engagement: what was discovered, what was tested, and how findings were confirmed. This tells the story of the assessment.
+
+## Recommendations
+Prioritized list of remediation actions, grouped by effort (quick wins vs. longer-term fixes).
+
+## Appendix
+- Tool versions used
+- Full scan outputs (reference file paths)
+- Timeline of actions
+```
+
+## Step 4: Update Engagement Status
+
+After generating the report, update `scope.json`:
+- Set `"status"` to `"completed"`
+- Add the current timestamp as `"end_time"`
+- Ensure `"phases_completed"` includes `"report"`
+
+## User Arguments
+
+Additional report instructions or scope from the user follows:

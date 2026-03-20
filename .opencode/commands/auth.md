@@ -1,0 +1,109 @@
+# Command: Auth Configuration
+
+You are the operator managing authentication credentials for the current engagement. The user's arguments specify the auth type and value.
+
+## Step 1: Locate Active Engagement
+
+Find the most recent engagement directory under `engagements/`:
+
+```bash
+ls -td engagements/*/ 2>/dev/null | head -1
+```
+
+If no engagement directory exists, inform the user to run `/engage` first and stop.
+
+## Step 2: Parse Arguments
+
+Read the user's arguments appended below this template. Expect one of:
+- `cookie "session=abc; token=xyz"` — set cookie-based authentication
+- `header "Authorization: Bearer ..."` — set header-based authentication
+- `show` — display current auth.json contents
+- `clear` — delete auth.json entirely
+
+If no arguments are provided, default to `show`.
+
+## Action: cookie
+
+1. Read the existing auth.json if it exists:
+   ```bash
+   cat "<engagement_dir>/auth.json" 2>/dev/null || echo "{}"
+   ```
+
+2. Parse the cookie string from the user's arguments. The value is the quoted string after `cookie`.
+
+3. Parse the cookie string into a JSON dict (e.g., `session=abc; token=xyz` becomes `{"session":"abc","token":"xyz"}`). Then merge the new cookies into the existing auth.json. Use bash to write:
+   ```bash
+   # Parse cookie string into JSON dict
+   COOKIE_JSON=$(echo "<cookie string>" | tr ';' '\n' | sed 's/^ *//' | awk -F'=' '{
+     key=$1; val=""; for(i=2;i<=NF;i++){if(i>2)val=val"=";val=val $i}
+     if(key!="") printf "%s\t%s\n", key, val
+   }' | jq -Rn '[inputs | split("\t") | {(.[0]): (.[1] // "")}] | add // {}')
+
+   # Merge into existing auth.json
+   EXISTING=$(cat "<engagement_dir>/auth.json" 2>/dev/null || echo '{}')
+   echo "$EXISTING" | jq --argjson cookies "$COOKIE_JSON" '. * {"cookies": ((.cookies // {}) + $cookies)}' > "<engagement_dir>/auth.json"
+   ```
+
+4. Confirm what was saved. Display the updated auth.json contents.
+
+## Action: header
+
+1. Read the existing auth.json if it exists:
+   ```bash
+   cat "<engagement_dir>/auth.json" 2>/dev/null || echo "{}"
+   ```
+
+2. Parse the header string from the user's arguments. The value is the quoted string after `header`. Split on the first `:` to get header name and value.
+
+3. Merge the new header into the existing auth.json. Use bash `cat >` to write:
+   ```bash
+   cat > "<engagement_dir>/auth.json" << 'AUTH'
+   {
+     "cookies": "<preserve existing cookies if any>",
+     "headers": {
+       "<Header-Name>": "<header value>",
+       <preserve other existing headers>
+     }
+   }
+   AUTH
+   ```
+
+4. Confirm what was saved. Display the updated auth.json contents.
+
+## Action: show
+
+1. Read and display the contents of auth.json:
+   ```bash
+   cat "<engagement_dir>/auth.json" 2>/dev/null
+   ```
+
+2. If the file does not exist, inform the user that no auth credentials are configured.
+
+## Action: clear
+
+1. Remove the auth.json file:
+   ```bash
+   rm -f "<engagement_dir>/auth.json"
+   ```
+
+2. Confirm that auth credentials have been cleared.
+
+## Post-Auth Re-Collection
+
+After successfully configuring auth (cookie or header), if an active engagement exists
+and Katana was previously running (check for scans/katana_output.jsonl):
+
+1. Announce: "[operator] Auth configured. Re-crawling with credentials to discover authenticated endpoints."
+2. Restart Katana with new cookies:
+   ```bash
+   source scripts/lib/container.sh
+   export ENGAGEMENT_DIR="<engagement_dir>"
+   stop_katana
+   start_katana "$(jq -r .target <engagement_dir>/scope.json)"
+   ```
+3. New authenticated endpoints will flow into cases.db (dedup handles overlap with existing cases)
+4. Resume the consumption loop for any new pending cases
+
+## User Arguments
+
+The auth type, value, and any additional context from the user follows:
