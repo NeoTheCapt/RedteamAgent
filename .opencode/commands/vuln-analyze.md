@@ -14,11 +14,25 @@ If no engagement exists, inform the user to run `/engage` first.
 ## Step 2: Follow Attack Methodology
 
 The following attack skills are already loaded in your context as instructions. Do NOT invoke them as skill tools or try to read the files. Simply follow their detection methodology:
-- sqli-testing -- SQL injection testing
-- xss-testing -- Cross-site scripting testing
-- auth-bypass -- Authentication bypass techniques
-- ssrf-testing -- Server-side request forgery testing
-- file-inclusion -- Local/remote file inclusion testing
+- sqli-testing -- SQL injection
+- xss-testing -- Cross-site scripting
+- auth-bypass -- Authentication/authorization bypass
+- ssrf-testing -- Server-side request forgery
+- file-inclusion -- Local/remote file inclusion
+- command-injection -- OS command injection
+- ssti-testing -- Server-side template injection
+- idor-testing -- Insecure direct object references
+- csrf-testing -- Cross-site request forgery
+- xxe-testing -- XML external entity injection
+- deserialization-testing -- Insecure deserialization
+- jwt-testing -- JWT token attacks
+- websocket-testing -- WebSocket security
+- graphql-testing -- GraphQL security
+- file-upload-testing -- File upload vulnerabilities
+- cors-testing -- CORS misconfiguration
+- request-smuggling -- HTTP request smuggling
+- race-condition-testing -- Race conditions / TOCTOU
+- info-disclosure-testing -- Information disclosure
 
 For vulnerability classification guidance, check `references/INDEX.md` (already in your context) to find the relevant checklist, then use the Read tool to load the specific file (e.g., `references/vuln-checklists/A05-injection.md`).
 

@@ -438,23 +438,26 @@ When vulnerability-analyst returns FUZZER_NEEDED recommendations in its output:
 
 === SKILLS-FIRST PRINCIPLE ===
 
-Skills are ALREADY LOADED into your context via the instructions array in opencode.json.
-You do NOT need to invoke or call them — their content is part of your system prompt.
-Simply refer to the methodology described in the relevant skill when performing a technique.
+You have **26 attack methodology skills** loaded in your context. They cover:
 
-DO NOT use the Skill tool to invoke skills like "web-recon" or "sqli-testing".
-These are NOT callable skills — they are reference material already in your context.
+RECON: web-recon, port-scanning, directory-fuzzing, parameter-fuzzing, source-analysis
+INJECTION: sqli-testing, xss-testing, command-injection, ssti-testing, xxe-testing
+AUTH: auth-bypass, idor-testing, csrf-testing, jwt-testing, cors-testing
+ADVANCED: ssrf-testing, file-inclusion, deserialization-testing, file-upload-testing,
+          graphql-testing, websocket-testing, request-smuggling, race-condition-testing
+OTHER: info-disclosure-testing, report-generation, case-dispatching
 
-Before executing any technique:
+Skills are ALREADY LOADED — their content is part of your system prompt.
+Do NOT use the Skill tool to invoke them. Do NOT try to read the files.
 
-1. Recall the relevant skill content already in your context (e.g., the web-recon skill
-   describes HTTP fingerprinting methodology, the sqli-testing skill describes injection
-   detection steps).
-2. If a skill covers the technique, follow its methodology step by step.
-3. Only deviate from a skill when it explicitly fails — and document why.
-4. If no loaded skill covers the technique, check references/INDEX.md (in your context) for
-   relevant tool cheatsheets, then read the specific file (e.g., references/tools/recon/nmap.md).
-5. If still insufficient, propose a custom tool (see Tool Generation below).
+**MANDATORY: Before ANY testing technique, check this list:**
+1. Does a loaded skill cover this attack type? → YES → follow the skill methodology
+2. Skill covers it but target has specific defenses? → Follow skill first, then adapt
+3. No skill covers this specific technique? → Check references/INDEX.md for tool cheatsheets
+4. Still nothing? → Propose a custom tool (see Tool Generation below)
+
+NEVER write ad-hoc Python scripts for testing when a skill already covers the technique.
+The skill methodology has been validated — ad-hoc scripts waste tokens and miss steps.
 
 === TOOL GENERATION ===
 
