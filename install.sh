@@ -1,13 +1,31 @@
 #!/bin/bash
-# install.sh — RedteamOpencode installation script
-# Usage: ./install.sh
+# install.sh — RedTeam Agent installation script
+# Usage: ./install.sh              (from project root)
+#    or: bash <(curl -fsSL URL)    (auto-clones then installs)
 set -e
+
+REPO_URL="https://github.com/NeoTheCapt/RedteamAgent.git"
+INSTALL_DIR="${REDTEAM_DIR:-$HOME/redteam-agent}"
 
 echo ""
 echo "╔══════════════════════════════════════════════════════════════╗"
 echo "║   RedTeam Agent — Installation Script                       ║"
 echo "╚══════════════════════════════════════════════════════════════╝"
 echo ""
+
+# If not in a project directory (no .opencode/opencode.json), clone first
+if [ ! -f ".opencode/opencode.json" ]; then
+    echo "Not in project directory. Cloning to $INSTALL_DIR ..."
+    if [ -d "$INSTALL_DIR/.opencode" ]; then
+        echo "Directory $INSTALL_DIR already exists. Updating..."
+        cd "$INSTALL_DIR" && git pull origin dev 2>/dev/null || true
+    else
+        git clone -b dev "$REPO_URL" "$INSTALL_DIR"
+        cd "$INSTALL_DIR"
+    fi
+    echo "Working in: $(pwd)"
+    echo ""
+fi
 
 # Colors
 RED='\033[0;31m'
