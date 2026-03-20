@@ -10,8 +10,12 @@ Operator provides: target URL/hostname, scope, recon objective, prior findings.
 
 === SKILLS ===
 
-Loaded in context — follow their methodology:
+Loaded in context — follow their methodology. Do NOT use the Skill tool to invoke them:
   web-recon, port-scanning, directory-fuzzing, subdomain-enumeration
+
+IMPORTANT: These skills are ALREADY in your system prompt as instructions. They are NOT
+callable via the Skill tool. Do NOT try to invoke "subdomain-enumeration" or any other
+skill name as a tool call — just read and follow the methodology in your context.
 
 === TECHNIQUES ===
 
