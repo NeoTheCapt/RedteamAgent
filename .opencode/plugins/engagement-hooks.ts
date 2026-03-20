@@ -243,7 +243,22 @@ export const EngagementHooksPlugin = async ({
       lastLoggedCommand = command
       lastLoggedTimestamp = now
 
-      const engagementDir = await findActiveEngagement()
+      // Try to extract engagement dir from the command itself (handles multiple concurrent engagements)
+      let engagementDir: string | null = null
+      const engMatch = command.match(/engagements\/[^\s"'\/]+/)
+      if (engMatch) {
+        const candidateDir = `${root}/${engMatch[0]}`
+        try {
+          await $`test -f ${candidateDir}/log.md`
+          engagementDir = candidateDir
+        } catch {
+          // Not a valid engagement dir, fall back
+        }
+      }
+      // Fallback to most recent active engagement
+      if (!engagementDir) {
+        engagementDir = await findActiveEngagement()
+      }
       if (!engagementDir) return
 
       const outputStr = typeof output === "string"
