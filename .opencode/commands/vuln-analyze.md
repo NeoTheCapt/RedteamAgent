@@ -33,6 +33,7 @@ The following attack skills are already loaded in your context as instructions. 
 - request-smuggling -- HTTP request smuggling
 - race-condition-testing -- Race conditions / TOCTOU
 - info-disclosure-testing -- Information disclosure
+- business-logic-testing -- Workflow bypass, price manipulation, state abuse
 
 For vulnerability classification guidance, check `references/INDEX.md` (already in your context) to find the relevant checklist, then use the Read tool to load the specific file (e.g., `references/vuln-checklists/A05-injection.md`).
 

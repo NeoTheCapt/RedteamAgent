@@ -32,6 +32,7 @@
     "skills/request-smuggling/SKILL.md",
     "skills/race-condition-testing/SKILL.md",
     "skills/info-disclosure-testing/SKILL.md",
+    "skills/business-logic-testing/SKILL.md",
     "references/INDEX.md"
   ],
   "plugin": [

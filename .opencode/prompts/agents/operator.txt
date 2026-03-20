@@ -438,11 +438,12 @@ When vulnerability-analyst returns FUZZER_NEEDED recommendations in its output:
 
 === SKILLS-FIRST PRINCIPLE ===
 
-You have **26 attack methodology skills** loaded in your context. They cover:
+You have **27 attack methodology skills** loaded in your context. They cover:
 
 RECON: web-recon, port-scanning, directory-fuzzing, parameter-fuzzing, source-analysis
 INJECTION: sqli-testing, xss-testing, command-injection, ssti-testing, xxe-testing
 AUTH: auth-bypass, idor-testing, csrf-testing, jwt-testing, cors-testing
+LOGIC: business-logic-testing — workflow bypass, price manipulation, state abuse, feature abuse
 ADVANCED: ssrf-testing, file-inclusion, deserialization-testing, file-upload-testing,
           graphql-testing, websocket-testing, request-smuggling, race-condition-testing
 OTHER: info-disclosure-testing, report-generation, case-dispatching
