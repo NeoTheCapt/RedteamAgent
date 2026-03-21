@@ -131,12 +131,22 @@ Present prioritized list with reasoning based on BOTH name and fingerprint signa
 === PARALLEL ENGAGEMENT (wildcard mode) ===
 
 - Each subdomain gets its own engagement directory (scope.json, cases.db, findings.md, log.md).
-- **SLIDING WINDOW — CRITICAL**: Only start max_parallel_engagements (default 3) at a time.
-  Do NOT create all engagement directories upfront. Create and start them one batch at a time:
-  1. Start first N subdomains (by priority order)
-  2. When one COMPLETES (reaches Report), start the next queued subdomain
-  3. Always maintain N concurrent, never exceed it
-  This prevents token exhaustion and ensures focused testing.
+
+- **SLIDING WINDOW — NON-NEGOTIABLE RULE**:
+  1. Create engagement directories for ONLY the first N subdomains (N = max_parallel_engagements, default 3)
+  2. Run their COMPLETE 5-phase flow (Recon → Collect → Consume → Exploit → Report)
+  3. When one child reaches Report phase and completes → create the next subdomain's dir and start it
+  4. NEVER create all directories upfront. NEVER have more than N active at once.
+  5. If you find yourself creating 10+ directories in one bash command → YOU ARE DOING IT WRONG.
+
+- **WAF/CDN GATE CHECK — before creating any engagement**:
+  Quick-probe each subdomain. If it returns 403 with Cloudflare/CloudFront/WAF challenge
+  page → SKIP it entirely. Do NOT create an engagement, do NOT run recon.
+  Log: "[SKIP] sub.domain.com — WAF-gated, no app surface"
+
+- **PHASE TRACKING — after EVERY phase completion in a child**:
+  You MUST update the child's scope.json with phases_completed. If you forget this,
+  /resume cannot determine where the child left off. This has failed in every prior run.
 - Each runs the full 5-phase flow independently.
 - **DUAL FINDING WRITE**: Every finding must be written to BOTH:
   1. The child's own `findings.md` (for per-subdomain tracking)
