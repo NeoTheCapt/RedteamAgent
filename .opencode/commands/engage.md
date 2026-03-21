@@ -80,22 +80,35 @@ Reply (1-2):
 
 In auto-confirm mode: show the list briefly and proceed with option 1.
 
-### Phase 0.9: Spawn Parallel Engagements
+### Phase 0.9: Sliding Window Execution
 
-For each subdomain from the **prioritized fingerprint list** (not the raw list),
-create an independent engagement. Only subdomains that passed DNS + web port filters
-should be here — never create engagements for unreachable subdomains.
+**DO NOT create all engagement directories at once.** Process subdomains in batches
+of max_parallel_engagements (default 3). This is NOT optional.
 
-```bash
-# Read prioritized subdomains from fingerprint CSV (skip header, extract subdomain + url)
-tail -n +2 "$PARENT_DIR/scans/subdomains_fingerprint.csv" | while IFS='|' read -r sub url rest; do
-  SUB_CLEAN="${sub//\./-}"
-  SUB_DIR="engagements/${DATE}-${TIME}-${SUB_CLEAN}"
-  mkdir -p "$SUB_DIR/tools" "$SUB_DIR/downloads" "$SUB_DIR/scans" "$SUB_DIR/pids"
-  # Create scope.json targeting this specific subdomain's verified URL
-  # Create log.md, findings.md, init cases.db for each
-done
 ```
+BATCH 1: Create dirs for subdomain 1-3, run their full 5-phase flow
+  → When subdomain 1 finishes: create dir for subdomain 4, start it
+  → When subdomain 2 finishes: create dir for subdomain 5, start it
+  → ... continue sliding until all done
+```
+
+For each subdomain, before starting the full flow, do a **quick gate check**:
+```bash
+# Quick check: is this subdomain blocked by WAF/CDN?
+code=$(/usr/bin/curl -sk -o /dev/null -w "%{http_code}" --connect-timeout 5 "https://$sub")
+# If 403 with Cloudflare/CloudFront challenge page → skip this subdomain
+if [ "$code" = "403" ]; then
+  body=$(/usr/bin/curl -sk --connect-timeout 5 "https://$sub" | head -c 500)
+  if echo "$body" | grep -qiE "cloudflare|cloudfront|challenge|captcha|blocked"; then
+    echo "[SKIP] $sub — WAF/CDN gated (403 challenge). No app surface exposed."
+    # Do NOT create engagement for this subdomain. Move to next.
+    continue
+  fi
+fi
+```
+
+Only create an engagement directory for subdomains that pass the gate check.
+This avoids wasting time on 30+ Cloudflare-gated subdomains.
 
 Write parent scope.json:
 ```json
