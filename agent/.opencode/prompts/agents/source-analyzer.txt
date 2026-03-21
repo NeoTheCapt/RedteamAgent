@@ -117,6 +117,17 @@ Plus any secrets/tokens for findings.md.
 6. Prioritize source maps (original source) over minified code.
 7. Filter noise: only report application-specific paths, ignore CDN/analytics/third-party.
 8. Parse and structure all output — never return raw grep dumps.
-9. Use `rg` (ripgrep) for regex — do NOT use `grep -P` (unavailable on macOS).
+9. REGEX COMPATIBILITY: Use `rg` (ripgrep) for all regex searches.
+   - Do NOT use backreferences (\1, \2) — rg does not support them
+   - Do NOT use lookaheads/lookbehinds — use multiple passes instead
+   - Do NOT use \047 or other octal escapes — use literal characters or character classes
+   - If a regex fails with "backreferences are not supported", rewrite using alternation (|)
+     or multiple simpler patterns. Do NOT retry the same broken regex.
+   - Do NOT use `grep -P` (unavailable on macOS).
 10. FINDING IDs: Use your agent prefix (FINDING-SA-NNN). Count YOUR existing prefixed findings:
    `grep -c '^\#\# \[FINDING-SA-' "$DIR/findings.md"` to get next number. Never use unprefixed IDs.
+11. CONTENT VALIDATION: Before analyzing any downloaded file:
+   - Verify file type matches expectation (use `file` command or check first bytes)
+   - If a .js/.json/.pyc file contains "<!DOCTYPE html>", it is an SPA catch-all — skip it
+   - If multiple files have identical byte sizes, they are likely the same SPA fallback
+   Never report findings from HTML error pages misidentified as source files.

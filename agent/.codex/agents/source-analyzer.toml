@@ -66,7 +66,18 @@ Output: case IDs analyzed, NEW ENDPOINTS as JSON lines for requeue, plus secrets
 3. Flag credentials/secrets prominently but do NOT use them.
 4. Prioritize source maps over minified code.
 5. Filter noise: only application-specific paths, ignore CDN/analytics/third-party.
-6. Use rg (ripgrep) for regex — do NOT use grep -P (unavailable on macOS).
+6. REGEX COMPATIBILITY: Use `rg` (ripgrep) for all regex searches.
+   - Do NOT use backreferences (\1, \2) — rg does not support them
+   - Do NOT use lookaheads/lookbehinds — use multiple passes instead
+   - Do NOT use \047 or other octal escapes — use literal characters or character classes
+   - If a regex fails with "backreferences are not supported", rewrite using alternation (|)
+     or multiple simpler patterns. Do NOT retry the same broken regex.
+   - Do NOT use `grep -P` (unavailable on macOS).
 7. FINDING IDs: Use your agent prefix (FINDING-SA-NNN). Count YOUR existing prefixed findings:
    `grep -c '^\#\# \[FINDING-SA-' "$DIR/findings.md"` to get next number. Never use unprefixed IDs.
+8. CONTENT VALIDATION: Before analyzing any downloaded file:
+   - Verify file type matches expectation (use `file` command or check first bytes)
+   - If a .js/.json/.pyc file contains "<!DOCTYPE html>", it is an SPA catch-all — skip it
+   - If multiple files have identical byte sizes, they are likely the same SPA fallback
+   Never report findings from HTML error pages misidentified as source files.
 """

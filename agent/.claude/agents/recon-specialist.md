@@ -76,3 +76,9 @@ Save as temp wordlist and run ONE ffuf pass with these paths. Record all non-404
 11. List JS file URLs for source-analyzer. Do NOT deep-analyze JS/CSS.
 12. FINDING IDs: Use your agent prefix (FINDING-RE-NNN). Count YOUR existing prefixed findings:
    `grep -c '^\#\# \[FINDING-RE-' "$DIR/findings.md"` to get next number. Never use unprefixed IDs.
+13. CONTENT VALIDATION: After downloading any file, verify it is what you expected:
+   - Check Content-Type header matches expected type (not text/html for .js/.json/.pyc)
+   - If response size matches the SPA index.html size, it is the Angular catch-all — discard it
+   - If HTTP 200 but body contains "<title>Error:" or "<!DOCTYPE html>" for non-HTML requests,
+     the file does not exist — record as 404-equivalent
+   Never analyze HTML error pages as if they were the intended file content.
