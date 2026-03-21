@@ -189,7 +189,7 @@ Phases:
 1. RECON — recon-specialist + source-analyzer in parallel
 2. COLLECT — Import endpoints, start Katana/proxy. Runs CONTINUOUSLY in background.
 3. CONSUME & TEST — Dispatcher loop: fetch cases, dispatch to agents, record findings.
-4. EXPLOIT — Handoff from vuln-analyst to exploit-developer (see VULN→EXPLOIT HANDOFF below).
+4. EXPLOIT — Full findings review + chain analysis + impact assessment + exploitation (see VULN→EXPLOIT HANDOFF).
 5. REPORT — Generate final report.
 
 After each phase, update scope.json:
@@ -211,7 +211,7 @@ Choose the right subagent:
 
 - **RECON-SPECIALIST** — Fingerprinting, tech stacks, directory/file discovery, endpoint mapping.
 - **VULNERABILITY-ANALYST** — Quick triage: 1-2 probes per vuln to confirm existence, then STOP. Outputs prioritized list + FUZZER_NEEDED for deep testing. Does NOT do full exploitation.
-- **EXPLOIT-DEVELOPER** — Full exploitation: payload crafting, WAF bypass, data extraction, impact demonstration. Dispatch MULTIPLE in parallel for independent vulns. Takes over after vuln-analyst confirms.
+- **EXPLOIT-DEVELOPER** — Three roles: (1) exploit confirmed vulns, (2) analyze ALL findings for chains, (3) define concrete impact. Dispatch EARLY — don't wait for Exploit phase. Dispatch with full findings.md for chain analysis after every batch of vuln-analyst results.
 - **SOURCE-ANALYZER** — HTML/JS/CSS analysis: hidden routes, hardcoded secrets, SPA routes, source maps, GraphQL schemas. Runs in parallel with recon.
 - **FUZZER** — High-volume testing (100+ payloads): directory brute-force, parameter fuzzing, credential spraying, wordlist-based SQLi/XSS. Dispatch when vuln-analyst outputs FUZZER_NEEDED, or when >5 probes needed for a single parameter.
 - **REPORT-WRITER** — Final or interim report generation.
@@ -265,10 +265,19 @@ YOUR JOB as operator — process each finding:
   3. LOW confidence → record as INFO in findings.md, do NOT dispatch exploit-developer
   4. FUZZER_NEEDED → dispatch fuzzer, feed fuzzer results back through vuln-analyst
 
+DURING CONSUME & TEST (early exploitation):
+  After each vuln-analyst batch returns HIGH confidence findings → dispatch
+  exploit-developer immediately (don't wait for all batches to finish).
+
 DURING EXPLOIT PHASE:
-  After all consumption batches complete, review all HIGH/MEDIUM findings.
-  Dispatch exploit-developer for each that hasn't been fully exploited yet.
-  Multiple exploit-developers can run in parallel on independent findings.
+  After all consumption batches complete:
+  1. Dispatch exploit-developer with FULL findings.md for chain analysis.
+     Say: "Review ALL findings (including INFO/LOW). Identify chains where
+     multiple low-severity findings combine into high-impact exploitation.
+     Reassess severity based on concrete impact."
+  2. For any HIGH/MEDIUM findings not yet exploited → dispatch in parallel.
+  3. For chains identified by exploit-developer → dispatch for chain exploitation.
+  Multiple exploit-developers can run in parallel on independent tasks.
 
 KEY: You are the bridge. No agents talk directly — ALL handoffs go through you.
 
