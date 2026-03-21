@@ -173,17 +173,27 @@ echo ""
 if $DRY_RUN; then
     info "[DRY RUN] Would install to $INSTALL_DIR — skipping copy"
 elif [ "$SOURCE_DIR" = "$INSTALL_DIR" ]; then
-    info "Source and install directories are the same — skipping copy"
+    info "Source and install directories are the same — copying build output"
+    # Copy generated .claude/ and .codex/ from build/ to install dir
+    cp -a "$SOURCE_DIR/build/.claude" "$INSTALL_DIR/" 2>/dev/null
+    cp -a "$SOURCE_DIR/build/.codex" "$INSTALL_DIR/" 2>/dev/null
+    rm -rf "$SOURCE_DIR/build"
+    ok "Build output merged into install directory"
 else
     mkdir -p "$INSTALL_DIR"
     # Copy agent contents (not the agent/ dir itself) to install dir
     # Use rsync if available, otherwise cp
     if command -v rsync >/dev/null 2>&1; then
-        rsync -a --delete "$SOURCE_DIR/" "$INSTALL_DIR/"
+        rsync -a --delete --exclude='build/' "$SOURCE_DIR/" "$INSTALL_DIR/"
     else
         rm -rf "$INSTALL_DIR"/*
         cp -a "$SOURCE_DIR"/. "$INSTALL_DIR/"
+        rm -rf "$INSTALL_DIR/build"
     fi
+    # Merge build output into install dir
+    cp -a "$SOURCE_DIR/build/.claude" "$INSTALL_DIR/" 2>/dev/null
+    cp -a "$SOURCE_DIR/build/.codex" "$INSTALL_DIR/" 2>/dev/null
+    rm -rf "$SOURCE_DIR/build"
     ok "Agent files installed to $INSTALL_DIR"
 fi
 

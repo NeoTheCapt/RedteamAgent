@@ -8,8 +8,12 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 AGENT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 OPENCODE_JSON="$AGENT_DIR/.opencode/opencode.json"
 TXT_DIR="$AGENT_DIR/.opencode/prompts/agents"
-CLAUDE_DIR="$AGENT_DIR/.claude/agents"
-CODEX_DIR="$AGENT_DIR/.codex/agents"
+
+# Output to build/ directory — NEVER to .claude/ or .codex/ in source tree.
+# .claude/commands/ conflicts with OpenCode's .opencode/commands/ and causes hangs.
+BUILD_DIR="$AGENT_DIR/build"
+CLAUDE_DIR="$BUILD_DIR/.claude/agents"
+CODEX_DIR="$BUILD_DIR/.codex/agents"
 
 $DRY_RUN && echo "[DRY RUN] No files will be written."
 
@@ -23,8 +27,7 @@ fi
 
 if ! $DRY_RUN; then
   # Clean generated directories to remove stale files from deleted agents/commands
-  rm -f "$CLAUDE_DIR"/*.md "$CODEX_DIR"/*.toml 2>/dev/null
-  rm -f "$AGENT_DIR/.claude/commands"/*.md 2>/dev/null
+  rm -rf "$BUILD_DIR"
   mkdir -p "$CLAUDE_DIR" "$CODEX_DIR"
 fi
 
@@ -105,7 +108,7 @@ done
 
 # --- Commands: copy from OpenCode to Claude Code ---
 OPENCODE_CMDS="$AGENT_DIR/.opencode/commands"
-CLAUDE_CMDS="$AGENT_DIR/.claude/commands"
+CLAUDE_CMDS="$BUILD_DIR/.claude/commands"
 cmd_count=0
 
 if [ -d "$OPENCODE_CMDS" ]; then
