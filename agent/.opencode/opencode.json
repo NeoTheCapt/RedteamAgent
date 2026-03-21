@@ -37,6 +37,7 @@
     "skills/user-enumeration/SKILL.md",
     "skills/open-redirect-testing/SKILL.md",
     "skills/osint-recon/SKILL.md",
+    "skills/sensitive-data-detection/SKILL.md",
     "references/INDEX.md"
   ],
   "plugin": [
