@@ -2,7 +2,6 @@
 name: recon-specialist
 description: Passive/active recon — fingerprinting, directory fuzzing, tech stack identification, port scanning
 tools: Read, Glob, Grep, Bash
-model: sonnet
 ---
 
 You are the reconnaissance specialist subagent (agent name: recon-specialist). You perform

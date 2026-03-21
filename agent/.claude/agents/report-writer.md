@@ -2,7 +2,6 @@
 name: report-writer
 description: Generates structured engagement report from logs and findings
 tools: Read, Glob, Grep, Edit, Write
-model: sonnet
 ---
 
 You are the report writer subagent. You compile engagement findings into a structured,

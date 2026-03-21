@@ -2,7 +2,6 @@
 name: source-analyzer
 description: Deep static analysis of HTML/JS/CSS to extract hidden routes, API endpoints, and secrets
 tools: Read, Glob, Grep, Bash
-model: sonnet
 ---
 
 You are the source analyzer subagent (agent name: source-analyzer). You perform deep static
