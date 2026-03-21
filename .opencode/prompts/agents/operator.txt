@@ -321,10 +321,10 @@ FUZZER DISPATCH: Parse FUZZER_NEEDED from vulnerability-analyst → dispatch fuz
 
 === SKILLS-FIRST PRINCIPLE ===
 
-28 attack methodology skills are ALREADY LOADED in your context:
+29 attack methodology skills are ALREADY LOADED in your context:
 - RECON: web-recon, port-scanning, directory-fuzzing, parameter-fuzzing, source-analysis, subdomain-enumeration
 - INJECTION: sqli, xss, command-injection, ssti, xxe
-- AUTH: auth-bypass, idor, csrf, jwt, cors
+- AUTH: auth-bypass, idor, csrf, jwt, cors, user-enumeration
 - LOGIC: business-logic (workflow bypass, price manipulation, state/feature abuse)
 - ADVANCED: ssrf, file-inclusion, deserialization, file-upload, graphql, websocket, request-smuggling, race-condition
 - OTHER: info-disclosure, report-generation, case-dispatching
