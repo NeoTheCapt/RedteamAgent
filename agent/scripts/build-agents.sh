@@ -21,7 +21,12 @@ if ! command -v jq >/dev/null 2>&1; then
   echo "ERROR: jq is required but not installed" >&2; exit 1
 fi
 
-$DRY_RUN || mkdir -p "$CLAUDE_DIR" "$CODEX_DIR"
+if ! $DRY_RUN; then
+  # Clean generated directories to remove stale files from deleted agents/commands
+  rm -f "$CLAUDE_DIR"/*.md "$CODEX_DIR"/*.toml 2>/dev/null
+  rm -f "$AGENT_DIR/.claude/commands"/*.md 2>/dev/null
+  mkdir -p "$CLAUDE_DIR" "$CODEX_DIR"
+fi
 
 map_tools() {
   local agent="$1"

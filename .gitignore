@@ -130,6 +130,8 @@ __pycache__/
 *.pyc
 .env
 .env.*
+!.env.example
+!agent/.env.example
 
 # ============================================
 # CLI runtime files (local overrides, state, caches)
