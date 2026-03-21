@@ -28,7 +28,12 @@ ENG_DIR=$(ls -td engagements/*/ 2>/dev/null | head -1 | sed 's|/$||' || true)
 STATUS=$(jq -r '.status // "unknown"' "$ENG_DIR/scope.json" 2>/dev/null || echo "unknown")
 [ "$STATUS" != "in_progress" ] && exit 0
 
-TIMESTAMP=$(date +%H:%M:%S)
+TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+# --- Deduplication ---
+# Use a stamp file to track last logged command (within this engagement).
+# Skip if the same command was logged within the last 3 seconds.
+DEDUP_FILE="$ENG_DIR/.last_hook_log"
 
 case "$TOOL_NAME" in
   Bash)
@@ -39,6 +44,18 @@ case "$TOOL_NAME" in
     case "$COMMAND" in
       cat\ *|ls\ *|git\ *|echo\ *|test\ *|"["*|pwd*) exit 0 ;;
     esac
+
+    # Dedup check: compare first 200 chars + timestamp within 3s window
+    CMD_KEY=$(echo "$COMMAND" | head -c 200)
+    if [ -f "$DEDUP_FILE" ]; then
+      LAST_KEY=$(head -1 "$DEDUP_FILE" 2>/dev/null || true)
+      LAST_TS=$(tail -1 "$DEDUP_FILE" 2>/dev/null || echo "0")
+      NOW_TS=$(date +%s)
+      if [ "$CMD_KEY" = "$LAST_KEY" ] && [ -n "$LAST_TS" ] && [ $((NOW_TS - LAST_TS)) -lt 3 ]; then
+        exit 0
+      fi
+    fi
+    printf '%s\n%s\n' "$CMD_KEY" "$(date +%s)" > "$DEDUP_FILE"
 
     # Extract output summary (first 300 chars of stdout)
     OUTPUT_SUMMARY=$(echo "$INPUT" | jq -r '.tool_response.stdout // empty' 2>/dev/null | head -c 300 || true)
