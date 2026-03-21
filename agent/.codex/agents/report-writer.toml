@@ -70,5 +70,6 @@ Before generating the report:
 2. Do not fabricate findings or evidence.
 3. Write to <engagement-dir>/report.md.
 4. Verify report includes every finding from findings.md.
-5. Return file path to operator.
+5. If data missing, produce report with available data and note gaps.
+6. Return file path to operator.
 """

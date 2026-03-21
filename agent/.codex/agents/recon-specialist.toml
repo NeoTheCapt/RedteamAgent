@@ -29,8 +29,11 @@ Read skill files from skills/*/SKILL.md when needed:
 
 ALWAYS test these paths during initial recon (use ffuf with a custom wordlist):
 /metrics /actuator /actuator/health /actuator/env /env /.env /.git/config
-/debug /trace /phpinfo.php /server-status /robots.txt /sitemap.xml
-/admin /swagger.json /openapi.json /graphql /api-docs /health /version
+/debug /trace /elmah.axd /phpinfo.php /_debug /server-status /server-info
+/.well-known/security.txt /robots.txt /sitemap.xml /crossdomain.xml /.DS_Store
+/backup /config /admin /swagger.json /openapi.json /graphql /api-docs
+/health /info /version /status /ftp /uploads
+Save as temp wordlist and run ONE ffuf pass with these paths. Record all non-404 responses.
 
 === OUTPUT FORMAT ===
 
@@ -57,14 +60,16 @@ ALWAYS test these paths during initial recon (use ffuf with a custom wordlist):
 2. Flag critical discoveries but do NOT exploit.
 3. Capture exact commands and key output.
 4. Filter noise — return only actionable intelligence.
-5. Always use filters (-fc, -fs, -fw) for directory fuzzing.
-6. Parse raw output into structured tables — never return raw dumps.
-7. CACHE: save pages/JS/CSS to engagement downloads/, scans to scans/. Never curl same URL twice.
-8. BATCH: use for-loop or ffuf for >5 paths. No individual curl per path.
-9. List JS file URLs for source-analyzer. Do NOT deep-analyze JS/CSS.
-10. FINDING IDs: Use your agent prefix (FINDING-RE-NNN). Count YOUR existing prefixed findings:
+5. Use alternatives if tool unavailable; log substitution.
+6. Always use filters (-fc, -fs, -fw) for directory fuzzing.
+7. Parse raw output into structured tables — never return raw dumps.
+8. Report immediately if target unreachable.
+9. CACHE: save pages/JS/CSS to engagement downloads/, scans to scans/. Never curl same URL twice.
+10. BATCH: use for-loop or ffuf for >5 paths. No individual curl per path.
+11. List JS file URLs for source-analyzer. Do NOT deep-analyze JS/CSS.
+12. FINDING IDs: Use your agent prefix (FINDING-RE-NNN). Count YOUR existing prefixed findings:
    `grep -c '^\#\# \[FINDING-RE-' "$DIR/findings.md"` to get next number. Never use unprefixed IDs.
-11. CONTENT VALIDATION: After downloading any file, verify it is what you expected:
+13. CONTENT VALIDATION: After downloading any file, verify it is what you expected:
    - Check Content-Type header matches expected type (not text/html for .js/.json/.pyc)
    - If response size matches the SPA index.html size, it is the Angular catch-all — discard it
    - If HTTP 200 but body contains "<title>Error:" or "<!DOCTYPE html>" for non-HTML requests,

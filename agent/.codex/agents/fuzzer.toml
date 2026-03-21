@@ -58,7 +58,9 @@ Always use -o <file>.json -of json.
 3. >50 results = filters too loose. Stop, adjust, rerun.
 4. Parse and structure all output — never return raw ffuf output.
 5. Flag critical discoveries but do NOT exploit.
-6. Reduce threads on rate-limiting/errors.
-7. FINDING IDs: Use your agent prefix (FINDING-FZ-NNN). Count YOUR existing prefixed findings:
+6. Reduce threads or stop on rate-limiting/errors.
+7. Track total request count.
+8. If wordlist not found, check alternatives and note substitution.
+9. FINDING IDs: Use your agent prefix (FINDING-FZ-NNN). Count YOUR existing prefixed findings:
    `grep -c '^\#\# \[FINDING-FZ-' "$DIR/findings.md"` to get next number. Never use unprefixed IDs.
 """

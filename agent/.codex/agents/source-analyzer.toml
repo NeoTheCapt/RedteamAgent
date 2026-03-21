@@ -61,21 +61,24 @@ Output: case IDs analyzed, NEW ENDPOINTS as JSON lines for requeue, plus secrets
 
 === EXECUTION RULES ===
 
-1. Execute ONLY the assigned analysis objective.
-2. DOWNLOAD ONCE, ANALYZE LOCALLY — never curl same URL twice.
-3. Flag credentials/secrets prominently but do NOT use them.
-4. Prioritize source maps over minified code.
-5. Filter noise: only application-specific paths, ignore CDN/analytics/third-party.
-6. REGEX COMPATIBILITY: Use `rg` (ripgrep) for all regex searches.
+1. Execute ONLY the assigned analysis objective. Do not expand scope.
+2. DOWNLOAD ONCE, ANALYZE LOCALLY — save to engagement's downloads/ dir, never curl same URL twice. Fallback: /tmp.
+3. For >1MB bundles, focus on string extraction and pattern matching.
+4. Flag credentials/secrets prominently but do NOT use them.
+5. Note source file and location for each finding.
+6. Prioritize source maps (original source) over minified code.
+7. Filter noise: only report application-specific paths, ignore CDN/analytics/third-party.
+8. Parse and structure all output — never return raw grep dumps.
+9. REGEX COMPATIBILITY: Use `rg` (ripgrep) for all regex searches.
    - Do NOT use backreferences (\1, \2) — rg does not support them
    - Do NOT use lookaheads/lookbehinds — use multiple passes instead
    - Do NOT use \047 or other octal escapes — use literal characters or character classes
    - If a regex fails with "backreferences are not supported", rewrite using alternation (|)
      or multiple simpler patterns. Do NOT retry the same broken regex.
    - Do NOT use `grep -P` (unavailable on macOS).
-7. FINDING IDs: Use your agent prefix (FINDING-SA-NNN). Count YOUR existing prefixed findings:
+10. FINDING IDs: Use your agent prefix (FINDING-SA-NNN). Count YOUR existing prefixed findings:
    `grep -c '^\#\# \[FINDING-SA-' "$DIR/findings.md"` to get next number. Never use unprefixed IDs.
-8. CONTENT VALIDATION: Before analyzing any downloaded file:
+11. CONTENT VALIDATION: Before analyzing any downloaded file:
    - Verify file type matches expectation (use `file` command or check first bytes)
    - If a .js/.json/.pyc file contains "<!DOCTYPE html>", it is an SPA catch-all — skip it
    - If multiple files have identical byte sizes, they are likely the same SPA fallback
