@@ -10,20 +10,21 @@
     <img src="https://img.shields.io/badge/CLI-Claude%20Code%20|%20OpenCode%20|%20Codex-blue" alt="CLI">
     <img src="https://img.shields.io/badge/platform-macOS%20|%20Linux-blue" alt="Platform">
     <img src="https://img.shields.io/badge/tools-Docker%20containerized-blue" alt="Docker">
-    <img src="https://img.shields.io/badge/agents-7%20specialized-orange" alt="Agents">
-    <img src="https://img.shields.io/badge/skills-30%20attack%20methodologies-red" alt="Skills">
+    <img src="https://img.shields.io/badge/agents-8%20specialized-orange" alt="Agents">
+    <img src="https://img.shields.io/badge/skills-31%20attack%20methodologies-red" alt="Skills">
     <img src="https://img.shields.io/badge/references-57%20files-green" alt="References">
   </p>
 </p>
 
 ---
 
-An autonomous red team simulation agent that works with **Claude Code**, **OpenCode**, and **Codex**. It transforms any workspace into a full penetration testing environment for CTF/lab targets — featuring **7 AI agents**, **containerized Kali tools**, a **streaming case collection pipeline**, and **57 security reference files**.
+An autonomous red team simulation agent that works with **Claude Code**, **OpenCode**, and **Codex**. It transforms any workspace into a full penetration testing environment for CTF/lab targets — featuring **8 AI agents**, **containerized Kali tools**, a **streaming case collection pipeline**, and **57 security reference files**.
 
 **Key Features:**
 - **Multi-CLI support** — works with Claude Code, OpenCode, and Codex out of the box
-- **Autonomous workflow** — 5-phase methodology (Recon → Collect → Test → Exploit → Report) runs with minimal user interaction
-- **7 specialized agents** — operator, recon-specialist, source-analyzer, vulnerability-analyst, exploit-developer, fuzzer, report-writer
+- **Autonomous workflow** — 5-phase methodology (Recon → Collect → Test → Exploit+OSINT → Report) runs with minimal user interaction
+- **Intelligence collection** — `intel.md` accumulates tech stack, people, domains, credentials from recon through exploitation; OSINT agent enriches with CVE, breach, DNS history, and social data
+- **8 specialized agents** — operator, recon-specialist, source-analyzer, vulnerability-analyst, exploit-developer, fuzzer, osint-analyst, report-writer
 - **Containerized tools** — all pentest tools run in Docker (Kali toolbox, mitmproxy, Katana), zero local installation
 - **Case collection pipeline** — SQLite-backed queue with 4 producers, automatic type classification, zero-token dispatcher
 - **57 reference files** — OWASP Top 10:2025, API Security 2023, offensive tactics, AD/Kerberos attacks
@@ -109,9 +110,11 @@ Phase 2: COLLECT ─ Import endpoints → SQLite queue, start Katana crawler
 Phase 3: TEST ──── Consume queue → vulnerability-analyst + source-analyzer
     │               exploit-developer runs in parallel for HIGH/MEDIUM findings
     │               (continuous loop with progress display)
-Phase 4: EXPLOIT ── Full findings review: chain analysis across ALL severities,
-    │               concrete impact assessment, severity reassessment
-Phase 5: REPORT ── report-writer with coverage statistics
+Phase 4: EXPLOIT ── osint-analyst + exploit-developer (parallel)
+    │               osint-analyst: CVE/breach/DNS/social intel from intel.md
+    │               exploit-developer: chain analysis, impact assessment
+    │               OSINT high-value intel → 2nd round exploitation
+Phase 5: REPORT ── report-writer with coverage statistics + intelligence summary
 ```
 
 ### Commands
@@ -131,6 +134,7 @@ Phase 5: REPORT ── report-writer with coverage statistics
 | `/config [key] [value]` | View or set runtime configuration |
 | `/subdomain <domain>` | Enumerate subdomains for a domain |
 | `/vuln-analyze` | Analyze scan results for vulnerabilities |
+| `/osint` | Run OSINT intelligence gathering on current engagement |
 | `/recon` `/scan` `/enumerate` `/exploit` `/pivot` | Manual phase overrides |
 
 ### Authentication
@@ -144,25 +148,28 @@ Phase 5: REPORT ── report-writer with coverage statistics
 
 ## Architecture
 
-### 7 Agents
+### 8 Agents
 
 ```
                     ┌─────────────────────────┐
                     │        OPERATOR          │
                     │  (primary — drives all)  │
-                    └───┬──┬──┬──┬──┬──┬──────┘
-                        │  │  │  │  │  │
-  ┌─────────────────────┘  │  │  │  │  └───────────────────┐
-  ▼                        ▼  │  ▼  │                      ▼
-recon-         source-     │ vuln-  │              report-
-specialist     analyzer    │ analyst│              writer
-(network)      (code)      │ (test) │              (report)
-                           ▼        ▼
-                        fuzzer   exploit-
-                        (fuzz)   developer
-                                 (exploit +
-                                  chain analysis +
-                                  impact assessment)
+                    └──┬──┬──┬──┬──┬──┬──┬────┘
+                       │  │  │  │  │  │  │
+  ┌────────────────────┘  │  │  │  │  │  └──────────────────┐
+  ▼                       ▼  │  ▼  │  │                     ▼
+recon-         source-    │ vuln-  │  │             report-
+specialist     analyzer   │ analyst│  │             writer
+(network)      (code)     │ (test) │  │             (report)
+  │              │        ▼        ▼  ▼
+  │              │     fuzzer  exploit-  osint-
+  │              │     (fuzz)  developer analyst
+  │              │             (exploit) (OSINT)
+  │              │                ▲        │
+  │   intel.md ◄─┘                │        │
+  └──► intel.md                   └────────┘
+                              operator feeds
+                            OSINT intel → exploit
 ```
 
 ### Case Pipeline
@@ -190,17 +197,17 @@ RedteamOpencode/                ← dev workspace (git root)
     ├── CLAUDE.md               ← operator prompt (Claude Code)
     ├── AGENTS.md               ← operator prompt (Codex)
     ├── .claude/                ← Claude Code config
-    │   ├── agents/             ← 7 subagent definitions (.md)
-    │   ├── commands/           ← 18 slash commands (.md)
+    │   ├── agents/             ← 8 subagent definitions (.md)
+    │   ├── commands/           ← 19 slash commands (.md)
     │   └── settings.json       ← hooks (scope check + auto-logging)
     ├── .codex/                 ← Codex config
-    │   └── agents/             ← 7 subagent definitions (.toml)
+    │   └── agents/             ← 8 subagent definitions (.toml)
     ├── .opencode/              ← OpenCode config
     │   ├── opencode.json       ← agents, skills, commands, plugins
-    │   ├── prompts/agents/     ← 7 agent prompts (.txt)
-    │   ├── commands/           ← 18 slash commands (.md)
+    │   ├── prompts/agents/     ← 8 agent prompts (.txt)
+    │   ├── commands/           ← 19 slash commands (.md)
     │   └── plugins/            ← engagement hooks (TypeScript)
-    ├── skills/                 ← 30 attack methodology skills
+    ├── skills/                 ← 31 attack methodology skills
     ├── references/             ← 57 reference files (OWASP, tools, tactics, AD)
     ├── scripts/                ← dispatcher, ingest, hooks, shared libraries
     ├── docker/                 ← Dockerfiles + docker-compose.yml
@@ -212,9 +219,9 @@ RedteamOpencode/                ← dev workspace (git root)
 | Feature | Claude Code | OpenCode | Codex |
 |---------|-------------|----------|-------|
 | Operator prompt | `CLAUDE.md` | `.opencode/prompts/agents/operator.txt` | `AGENTS.md` |
-| Subagents (7) | `.claude/agents/*.md` | `.opencode/opencode.json` agents | `.codex/agents/*.toml` |
-| Slash commands (18) | `.claude/commands/*.md` | `.opencode/commands/*.md` | N/A |
-| Skills (30) | `skills/*/SKILL.md` (read on demand) | Loaded via instructions array | `skills/*/SKILL.md` (read on demand) |
+| Subagents (8) | `.claude/agents/*.md` | `.opencode/opencode.json` agents | `.codex/agents/*.toml` |
+| Slash commands (19) | `.claude/commands/*.md` | `.opencode/commands/*.md` | N/A |
+| Skills (31) | `skills/*/SKILL.md` (read on demand) | Loaded via instructions array | `skills/*/SKILL.md` (read on demand) |
 | Auto-logging | `.claude/settings.json` hooks | `.opencode/plugins/engagement-hooks.ts` | N/A |
 | Scope enforcement | Hook blocks out-of-scope | Hook warns out-of-scope | N/A |
 | Agent attribution | `agent_type` in hook JSON | `chat.message` event tracking | N/A |
@@ -270,8 +277,9 @@ RedTeam Agent 是一个自主红队模拟 Agent，支持 **Claude Code**、**Ope
 
 **核心特性：**
 - **多 CLI 支持** — 开箱即用支持 Claude Code、OpenCode、Codex
-- **自主工作流** — 5 阶段方法论（侦察 → 收集 → 测试 → 利用 → 报告），最少用户干预
-- **7 个专业 Agent** — 操作员、侦察专家、源码分析师、漏洞分析师、利用开发者、模糊测试器、报告撰写者
+- **自主工作流** — 5 阶段方法论（侦察 → 收集 → 测试 → 利用+OSINT → 报告），最少用户干预
+- **8 个专业 Agent** — 操作员、侦察专家、源码分析师、漏洞分析师、利用开发者、模糊测试器、OSINT 分析师、报告撰写者
+- **情报收集** — `intel.md` 从侦察阶段开始积累技术栈、人员、域名、凭证等情报；OSINT 分析师通过联网数据源（CVE、泄露数据库、DNS 历史、社工情报）富化分析
 - **容器化工具** — 所有渗透工具运行在 Docker 中（Kali 工具箱、mitmproxy、Katana），无需本地安装
 - **用例收集管道** — 基于 SQLite 的队列，4 个生产者，15 种内容分类，零 token 消耗的调度器
 - **57 个参考文件** — OWASP Top 10:2025、API 安全 2023、攻击战术、AD/Kerberos 攻击
@@ -302,7 +310,7 @@ codex               # Codex
 ## 工作流程
 
 ```
-/engage → 侦察(并行) → 收集用例 → 消费测试+早期利用(循环) → 全量利用+链式分析+影响评估 → 报告
+/engage → 侦察(并行) → 收集用例 → 消费测试+早期利用(循环) → 全量利用+OSINT情报(并行) → 报告
 
 进度显示：
 Phases: [x] Recon  [x] Collect  [>] Consume & Test  [ ] Exploit  [ ] Report
@@ -324,6 +332,7 @@ Phases: [x] Recon  [x] Collect  [>] Consume & Test  [ ] Exploit  [ ] Report
 | `/stop` | 停止所有后台容器 |
 | `/confirm auto/manual` | 切换自动/手动确认模式 |
 | `/config [key] [value]` | 查看或设置运行时配置 |
+| `/osint` | 对当前目标执行 OSINT 情报收集 |
 | `/subdomain <domain>` | 枚举子域名 |
 
 ## 依赖
