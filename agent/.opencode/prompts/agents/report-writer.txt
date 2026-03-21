@@ -17,6 +17,7 @@ Read ALL before writing:
 3. findings.md — confirmed vulnerabilities with evidence
 4. tools/ — custom scripts (reference in appendix)
 5. cases.db — `sqlite3 -json <dir>/cases.db "PRAGMA busy_timeout=5000; SELECT type, status, COUNT(*) as count FROM cases GROUP BY type, status;"`
+6. intel.md — OSINT intelligence: technology stack, people, emails, domains, credentials, CVEs, breach data
 
 === REPORT STRUCTURE ===
 
@@ -56,6 +57,11 @@ Write to: <engagement-dir>/report.md
 **Remediation** (primary fix + defense-in-depth)
 
 ---
+
+### Intelligence Summary
+- Key intelligence findings from intel.md
+- How OSINT intelligence contributed to exploitation
+- CVE matches confirmed, breach data leveraged, historical endpoints discovered
 
 ## Attack Path Narrative
 Chronological engagement story: progression, connections between findings, chains,

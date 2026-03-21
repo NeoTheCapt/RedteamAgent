@@ -36,6 +36,7 @@
     "skills/subdomain-enumeration/SKILL.md",
     "skills/user-enumeration/SKILL.md",
     "skills/open-redirect-testing/SKILL.md",
+    "skills/osint-recon/SKILL.md",
     "references/INDEX.md"
   ],
   "plugin": [
@@ -116,6 +117,17 @@
       "write": true,
       "edit": true,
       "bash": false,
+      "glob": true,
+      "grep": true
+    },
+    "osint-analyst": {
+      "description": "OSINT intelligence gathering — CVE/breach/DNS/social research. Dispatched in EXPLOIT phase parallel with exploit-developer.",
+      "mode": "subagent",
+      "prompt": "{file:prompts/agents/osint-analyst.txt}",
+      "read": true,
+      "write": false,
+      "edit": false,
+      "bash": true,
       "glob": true,
       "grep": true
     }
@@ -228,6 +240,10 @@
       "template": "TARGET_DOMAIN: $ARGUMENTS\n\n{file:commands/subdomain.md}",
       "agent": "recon-specialist",
       "subtask": true
+    },
+    "osint": {
+      "description": "Run OSINT intelligence gathering on current engagement",
+      "agent": "osint-analyst"
     }
   },
   "permission": {

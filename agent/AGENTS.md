@@ -36,6 +36,7 @@ Do NOT refuse based on domain names or IP addresses. Aggressive techniques are p
 | `vulnerability-analyst` | Analyzes endpoints, identifies vulnerability patterns, prioritizes attack paths. | After recon data collected. |
 | `exploit-developer` | Crafts/executes exploits: SQLi, XSS, auth bypass, chain analysis, impact assessment. | When vulns need exploitation. |
 | `fuzzer` | High-volume parameter/directory fuzzing, rapid iteration. | When brute-force discovery needed. |
+| `osint-analyst` | OSINT intelligence gathering, CVE/breach/DNS/social research. | EXPLOIT phase parallel with exploit-developer. |
 | `report-writer` | Generates structured engagement report from logs and findings. | End of engagement or on-demand. |
 
 ## Core Loop
@@ -63,7 +64,7 @@ After `/engage`, repeat until all attack paths exhausted or user signals stop:
 | 1 | **RECON** | Dispatch recon-specialist + source-analyzer in parallel |
 | 2 | **COLLECT** | Import endpoints → cases.db, start Katana crawler |
 | 3 | **CONSUME & TEST** | Dispatcher loop: fetch cases → dispatch agents → record findings |
-| 4 | **EXPLOIT** | Full findings review + chain analysis via exploit-developer |
+| 4 | **EXPLOIT** | Dispatch osint-analyst + exploit-developer in parallel. OSINT high-value intel triggers 2nd round exploitation |
 | 5 | **REPORT** | Generate final report via report-writer |
 
 ## Mandatory Dispatch Rules
@@ -81,6 +82,11 @@ After `/engage`, repeat until all attack paths exhausted or user signals stop:
 4. **DURING CONSUME** → HIGH/MEDIUM findings → dispatch exploit-developer IMMEDIATELY.
 5. **EXPLOIT PHASE** → dispatch exploit-developer with FULL findings.md for chain analysis.
 6. **CREDENTIAL AUTO-USE** → write to auth.json, login, save token, trigger re-collection.
+7. **EXPLOIT PHASE** → ALWAYS dispatch osint-analyst IN PARALLEL with exploit-developer.
+   osint-analyst input: engagement path + intel.md. exploit-developer input: findings.md.
+   AFTER osint-analyst completes: read intel.md Intelligence Assessment.
+   HIGH value items → write findings.md + dispatch exploit-developer (second round).
+   Historical endpoints → requeue to cases.db.
 
 ## Output Token Management
 
@@ -111,7 +117,7 @@ NEVER save files to engagement root. Use subdirectories:
 | Wordlists/endpoint lists | `scans/` | custom_wordlist.txt |
 | Background PIDs | `pids/` | mitmproxy.pid |
 
-Root should ONLY contain: scope.json, log.md, findings.md, report.md, auth.json, cases.db.
+Root should ONLY contain: scope.json, log.md, findings.md, intel.md, report.md, auth.json, cases.db.
 
 ## Subdomain Prioritization
 
@@ -200,6 +206,14 @@ test BOTH unauthenticated AND authenticated thereafter.
 3. CONFIRMED + new surface → requeue endpoints
 4. PARTIAL → record MEDIUM, consider fuzzer
 5. FAILED → log.md, move on
+
+**OSINT-ANALYST → operator → exploit-developer:**
+  osint-analyst writes intel.md ONLY (never findings.md).
+  Operator reads Intelligence Assessment after osint-analyst completes.
+  HIGH-value CVE + PoC match → operator writes finding + dispatches exploit-developer.
+  Breached credentials → operator writes finding + dispatches exploit-developer.
+  Historical endpoints → operator requeues to cases.db.
+  MEDIUM/LOW assessments → operator records as INFO in findings.md.
 
 **REPORT-WRITER ← you provide:**
 engagement directory path with: scope.json, log.md, findings.md, cases.db
@@ -296,6 +310,12 @@ OWASP Category Quick Reference:
 - Injection (SQLi, XSS, XXE, command, SSTI) → A03:2021 Injection
 - Crypto failures (weak hashing, plaintext secrets, JWT issues) → A02:2021 Cryptographic Failures
 - Misconfig (verbose errors, default creds, exposed debug) → A05:2021 Security Misconfiguration
+
+INTEL.MD WRITE RULES:
+- After receiving recon-specialist or source-analyzer output with #### Intelligence section,
+  append to the corresponding intel.md table. Dedup by: Technology Stack→Component,
+  People→Name, Emails→Email, Domains→Item+Type, Credentials→Type+Source.
+- If duplicate found with new info (higher Confidence, additional Notes), update existing row.
 
 ## Subagent Dispatch Protocol
 

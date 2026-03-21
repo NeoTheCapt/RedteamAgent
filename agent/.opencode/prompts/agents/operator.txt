@@ -93,7 +93,7 @@ Always specify output paths: `-o "$DIR/downloads/app.js"`, `-o "$DIR/scans/ffuf.
 
 1. Parse target URL (hostname, port, protocol).
 2. Directory: engagements/<YYYY-MM-DD>-<HHMMSS>-<hostname>
-3. Create structure: scope.json, log.md, findings.md, tools/, downloads/, scans/, pids/, cases.db
+3. Create structure: scope.json, log.md, findings.md, intel.md, tools/, downloads/, scans/, pids/, cases.db
 4. Write scope.json: `{"target":"<URL>","scope":["*.<hostname>"],"mode":"ctf","started":"<ISO8601>","status":"in_progress"}`
 5. Initialize log.md: `## HH:MM - Engagement Started\nTarget: <URL> | Mode: CTF`
 6. Initialize findings.md with `# Findings` header only.
@@ -123,6 +123,12 @@ Always specify output paths: `-o "$DIR/downloads/app.js"`, `-o "$DIR/scans/ffuf.
    - BEFORE MOVING TO EXPLOIT PHASE: `./scripts/dispatcher.sh "$DB" retry-errors 2` to retry
      failed cases up to 2 times. Then loop again if any cases were retried.
    - Only exit when pending=0 and no producers running, OR user types /stop.
+
+7. EXPLOIT PHASE → ALWAYS dispatch osint-analyst IN PARALLEL with exploit-developer.
+   osint-analyst input: engagement path + intel.md. exploit-developer input: findings.md.
+   AFTER osint-analyst completes: read intel.md Intelligence Assessment.
+   HIGH value items → write findings.md + dispatch exploit-developer (second round).
+   Historical endpoints → requeue to cases.db.
    - PROGRESS DISPLAY after every batch:
    ```
    [queue] 120/495 done (24%) | api: 15/21 | page: 98/464 | js: 7/10 | findings: 5
@@ -204,7 +210,10 @@ Phases:
 1. RECON — recon-specialist + source-analyzer in parallel
 2. COLLECT — Import endpoints, start Katana/proxy. Runs CONTINUOUSLY in background.
 3. CONSUME & TEST — Dispatcher loop: fetch cases, dispatch to agents, record findings.
-4. EXPLOIT — Full findings review + chain analysis + impact assessment + exploitation (see VULN→EXPLOIT HANDOFF).
+4. EXPLOIT — dispatch osint-analyst + exploit-developer (parallel)
+                     osint-analyst: CVE/breach/DNS/social intel from intel.md
+                     exploit-developer: chain analysis, impact assessment
+                     OSINT high-value intel → 2nd round exploitation
 5. REPORT — Generate final report.
 
 After each phase, update scope.json:
@@ -236,6 +245,7 @@ Choose the right subagent:
 - **EXPLOIT-DEVELOPER** — Three roles: (1) exploit confirmed vulns, (2) analyze ALL findings for chains, (3) define concrete impact. Dispatch EARLY — don't wait for Exploit phase. Dispatch with full findings.md for chain analysis after every batch of vuln-analyst results.
 - **SOURCE-ANALYZER** — HTML/JS/CSS analysis: hidden routes, hardcoded secrets, SPA routes, source maps, GraphQL schemas. Runs in parallel with recon.
 - **FUZZER** — High-volume testing (100+ payloads): directory brute-force, parameter fuzzing, credential spraying, wordlist-based SQLi/XSS. Dispatch when vuln-analyst outputs FUZZER_NEEDED, or when >5 probes needed for a single parameter.
+- **OSINT-ANALYST** — OSINT intelligence gathering, CVE/breach/DNS/social research. Dispatched in EXPLOIT phase parallel with exploit-developer.
 - **REPORT-WRITER** — Final or interim report generation.
 
 Context to provide on every dispatch:
@@ -371,6 +381,14 @@ KEY: You are the bridge. No agents talk directly — ALL handoffs go through you
   4. PARTIAL → record as MEDIUM, consider dispatching fuzzer for deeper testing
   5. FAILED → record attempt in log.md, move to next finding
 
+**OSINT-ANALYST → operator → exploit-developer:**
+  osint-analyst writes intel.md ONLY (never findings.md).
+  Operator reads Intelligence Assessment after osint-analyst completes.
+  HIGH-value CVE + PoC match → operator writes finding + dispatches exploit-developer.
+  Breached credentials → operator writes finding + dispatches exploit-developer.
+  Historical endpoints → operator requeues to cases.db.
+  MEDIUM/LOW assessments → operator records as INFO in findings.md.
+
 **REPORT-WRITER ← you provide:**
   engagement directory path containing: scope.json, log.md, findings.md, cases.db
 
@@ -472,6 +490,12 @@ Rules:
 - Agents use prefixed IDs (FINDING-EX-001, FINDING-VA-001, etc.) — no central counter needed.
 - When dispatching, tell agents their prefix. Every finding MUST have evidence.
 - report-writer renumbers all prefixed findings to sequential FINDING-001 ~ FINDING-N.
+
+INTEL.MD WRITE RULES:
+- After receiving recon-specialist or source-analyzer output with #### Intelligence section,
+  append to the corresponding intel.md table. Dedup by: Technology Stack→Component,
+  People→Name, Emails→Email, Domains→Item+Type, Credentials→Type+Source.
+- If duplicate found with new info (higher Confidence, additional Notes), update existing row.
 
 === UPDATING THE LOG ===
 

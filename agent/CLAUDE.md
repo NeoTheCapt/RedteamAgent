@@ -51,7 +51,7 @@ After `/engage`, repeat until all attack paths exhausted or user signals stop:
 | 1 | **RECON** | Dispatch @recon-specialist + @source-analyzer in parallel |
 | 2 | **COLLECT** | Import endpoints → cases.db, start Katana crawler |
 | 3 | **CONSUME & TEST** | Dispatcher loop: fetch cases → dispatch agents → record findings |
-| 4 | **EXPLOIT** | Full findings review + chain analysis via @exploit-developer |
+| 4 | **EXPLOIT** | Dispatch @osint-analyst + @exploit-developer in parallel. OSINT high-value intel triggers 2nd round exploitation |
 | 5 | **REPORT** | Generate final report via @report-writer |
 
 After each phase, update scope.json:
@@ -71,6 +71,7 @@ Use `@agent-name` to dispatch subagents. Each agent has a specific role:
 | @vulnerability-analyst | Analyzes endpoints, identifies vulnerability patterns, prioritizes attack paths | After recon data is collected and needs triage |
 | @exploit-developer | Crafts and executes exploits: SQLi payloads, XSS chains, auth bypass, chain analysis | When a confirmed/suspected vulnerability needs exploitation |
 | @fuzzer | High-volume parameter/directory fuzzing, rapid iteration | When brute-force discovery is needed (dirs, params, values) |
+| @osint-analyst | OSINT intelligence gathering, CVE/breach/DNS/social research | EXPLOIT phase parallel with exploit-developer |
 | @report-writer | Generates structured engagement report from logs and findings | End of engagement or on-demand status report |
 
 Context to provide on every dispatch:
@@ -97,6 +98,11 @@ ENDPOINT FOLLOW-UP:
 4. **DURING CONSUME** → HIGH/MEDIUM findings → dispatch @exploit-developer IMMEDIATELY (don't wait for Exploit phase).
 5. **EXPLOIT PHASE** → Dispatch @exploit-developer with FULL findings.md for chain analysis across ALL severities.
 6. **CREDENTIAL AUTO-USE** → When ANY agent discovers credentials: write to auth.json, login, save token, trigger POST-AUTH RE-COLLECTION.
+7. **EXPLOIT PHASE** → ALWAYS dispatch @osint-analyst IN PARALLEL with @exploit-developer.
+   @osint-analyst input: engagement path + intel.md. @exploit-developer input: findings.md.
+   AFTER @osint-analyst completes: read intel.md Intelligence Assessment.
+   HIGH value items → write findings.md + dispatch @exploit-developer (second round).
+   Historical endpoints → requeue to cases.db.
 
 ## Parallel vs Sequential Dispatch
 
@@ -259,6 +265,14 @@ KEY: You are the bridge. No agents talk directly — ALL handoffs go through you
   4. PARTIAL → record as MEDIUM, consider dispatching @fuzzer for deeper testing
   5. FAILED → record attempt in log.md, move to next finding
 
+**OSINT-ANALYST → operator → exploit-developer:**
+  osint-analyst writes intel.md ONLY (never findings.md).
+  Operator reads Intelligence Assessment after osint-analyst completes.
+  HIGH-value CVE + PoC match → operator writes finding + dispatches @exploit-developer.
+  Breached credentials → operator writes finding + dispatches @exploit-developer.
+  Historical endpoints → operator requeues to cases.db.
+  MEDIUM/LOW assessments → operator records as INFO in findings.md.
+
 **REPORT-WRITER ← you provide:**
   engagement directory path containing: scope.json, log.md, findings.md, cases.db
 
@@ -350,11 +364,17 @@ OWASP Category Quick Reference:
 - Crypto failures (weak hashing, plaintext secrets, JWT issues) → A02:2021 Cryptographic Failures
 - Misconfig (verbose errors, default creds, exposed debug) → A05:2021 Security Misconfiguration
 
+INTEL.MD WRITE RULES:
+- After receiving recon-specialist or source-analyzer output with #### Intelligence section,
+  append to the corresponding intel.md table. Dedup by: Technology Stack→Component,
+  People→Name, Emails→Email, Domains→Item+Type, Credentials→Type+Source.
+- If duplicate found with new info (higher Confidence, additional Notes), update existing row.
+
 ## Engagement Initialization (/engage handler)
 
 1. Parse target URL (hostname, port, protocol).
 2. Directory: `engagements/<YYYY-MM-DD>-<HHMMSS>-<hostname>`
-3. Create structure: scope.json, log.md, findings.md, tools/, downloads/, scans/, pids/, cases.db
+3. Create structure: scope.json, log.md, findings.md, intel.md, tools/, downloads/, scans/, pids/, cases.db
 4. Initialize cases.db: `sqlite3 "$DIR/cases.db" < scripts/schema.sql`
 5. Begin core loop.
 

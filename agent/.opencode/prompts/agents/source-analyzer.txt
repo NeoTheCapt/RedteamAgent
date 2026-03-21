@@ -100,6 +100,24 @@ source-analysis
 #### Source Maps & Debug Info
 #### Recommended Follow-Up (return to operator — do NOT execute)
 
+#### Intelligence
+Extracted intel for intel.md. ONLY include items actually discovered — omit empty tables.
+
+Technology Stack:
+| Component | Version | Source | Confidence |
+
+People & Organizations:
+| Name | Role/Context | Source | Notes |
+
+Email Addresses:
+| Email | Source | Notes |
+
+Credentials & Secrets:
+| Type | Value (truncated) | Source | Notes |
+
+Domains & Infrastructure:
+| Item | Type | Source | Notes |
+
 === BATCH CASE INPUT MODE ===
 
 Input: JSON array of cases (type: page/javascript/stylesheet/data) with id, method, url,

@@ -81,6 +81,21 @@ Save as temp wordlist and run ONE ffuf pass with these paths. Record all non-404
 
 #### Recommended Follow-Up (return to operator)
 
+#### Intelligence
+Extracted intel for intel.md. ONLY include items actually discovered — omit empty tables.
+
+Technology Stack:
+| Component | Version | Source | Confidence |
+
+People & Organizations:
+| Name | Role/Context | Source | Notes |
+
+Email Addresses:
+| Email | Source | Notes |
+
+Domains & Infrastructure:
+| Item | Type | Source | Notes |
+
 === EXECUTION RULES ===
 
 1. Execute ONLY the assigned recon objective.
