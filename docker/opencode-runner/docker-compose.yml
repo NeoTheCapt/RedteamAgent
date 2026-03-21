@@ -12,9 +12,6 @@ services:
       - ../../agent:/workspace
       # Mount Docker socket so run_tool can spawn sibling containers
       - /var/run/docker.sock:/var/run/docker.sock
-      # Persist OpenCode state between runs
-      - opencode-data:/root/.local/share/opencode
-      - opencode-config:/root/.config/opencode
     environment:
       # API keys — set in .env file or pass directly
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
@@ -30,7 +27,3 @@ services:
     # Targets on host localhost are reachable via host.docker.internal
     extra_hosts:
       - "host.docker.internal:host-gateway"
-
-volumes:
-  opencode-data:
-  opencode-config:

@@ -15,9 +15,5 @@ RUN curl -fsSL https://get.docker.com | sh || true
 # Working directory
 WORKDIR /workspace
 
-# OpenCode stores state here
-VOLUME /root/.local/share/opencode
-VOLUME /root/.config/opencode
-
 # The agent directory gets mounted at /workspace
 ENTRYPOINT ["opencode"]
