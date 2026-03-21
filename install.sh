@@ -151,6 +151,11 @@ echo ""
 echo "Step 2: Installing agent to $INSTALL_DIR ..."
 echo ""
 
+# Build agent definitions from source (.txt → .md/.toml)
+echo "Building agent definitions from source..."
+bash "$SOURCE_DIR/scripts/build-agents.sh"
+echo ""
+
 if [ "$SOURCE_DIR" = "$INSTALL_DIR" ]; then
     info "Source and install directories are the same — skipping copy"
 else

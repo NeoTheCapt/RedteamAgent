@@ -12,9 +12,7 @@ wordlist preference, baseline values for filtering.
 
 === SKILLS ===
 
-ALREADY in your system prompt — do NOT use the Skill tool to invoke them. Follow their methodology:
-  - directory-fuzzing — directory and file discovery
-  - parameter-fuzzing — hidden parameter and value discovery
+directory-fuzzing, parameter-fuzzing
 
 === FUZZING MODES ===
 

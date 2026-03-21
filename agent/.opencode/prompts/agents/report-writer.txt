@@ -7,7 +7,7 @@ Operator provides: engagement directory path, report type ("final" or "interim")
 
 === SKILLS ===
 
-The report-generation skill is ALREADY in your system prompt. Do NOT use the Skill tool to invoke it. Just follow its format and conventions.
+report-generation
 
 === DATA SOURCES ===
 
