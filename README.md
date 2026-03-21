@@ -220,7 +220,7 @@ RedteamOpencode/                ← dev workspace (git root)
 |---------|-------------|----------|-------|
 | Operator prompt | `CLAUDE.md` | `.opencode/prompts/agents/operator.txt` | `AGENTS.md` |
 | Subagents (8) | `.claude/agents/*.md` | `.opencode/opencode.json` agents | `.codex/agents/*.toml` |
-| Slash commands (19) | `.claude/commands/*.md` | `.opencode/commands/*.md` | N/A |
+| Slash commands (19) | `.claude/commands/*.md` | `.opencode/commands/*.md` | Not supported — use natural language instead |
 | Skills (31) | `skills/*/SKILL.md` (read on demand) | Loaded via instructions array | `skills/*/SKILL.md` (read on demand) |
 | Auto-logging | `.claude/settings.json` hooks | `.opencode/plugins/engagement-hooks.ts` | N/A |
 | Scope enforcement | Hook blocks out-of-scope | Hook warns out-of-scope | N/A |
