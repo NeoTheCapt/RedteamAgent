@@ -27,16 +27,16 @@ info() { echo -e "  ${BLUE}[INFO]${NC} $1"; }
 
 ERRORS=0
 
-# Determine source directory: if we're in the project root (has agent/), use that
-# Otherwise, clone the repo first
+# Determine source directory
 SOURCE_DIR=""
 if [ -d "agent/.opencode" ]; then
+    # Running from project root (git repo)
     SOURCE_DIR="$(pwd)/agent"
     info "Found agent/ in current directory"
-elif [ -d ".opencode" ] && [ ! -d "agent" ]; then
-    # Old layout (pre-restructure) — agent files in root
+elif [ -f ".opencode/opencode.json" ] && [ -d "skills" ]; then
+    # Running from inside agent/ directory (or already-installed ~/redteam-agent)
     SOURCE_DIR="$(pwd)"
-    info "Found legacy layout (pre-restructure)"
+    info "Running from agent directory"
 else
     # Not in project directory — clone first
     echo "Not in project directory. Cloning to /tmp/redteam-agent-src ..."
@@ -285,7 +285,7 @@ else
         echo "    OpenCode:"
         echo "      cd $INSTALL_DIR && opencode"
         echo "      Configure model in .opencode/opencode.json first:"
-        echo '        "model": "anthropic/claude-sonnet-4-5"'
+        echo '        "model": "anthropic/claude-sonnet-4-6"'
         echo ""
     fi
     if command -v codex >/dev/null 2>&1; then

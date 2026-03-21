@@ -86,7 +86,7 @@ codex               # Codex
 
 > **OpenCode users**: configure your LLM provider in `.opencode/opencode.json`:
 > ```json
-> { "model": "anthropic/claude-sonnet-4-5", "small_model": "anthropic/claude-haiku-4-5" }
+> { "model": "anthropic/claude-sonnet-4-6", "small_model": "anthropic/claude-haiku-4-5-20251001" }
 > ```
 
 ### `/engage` vs `/autoengage`
@@ -182,22 +182,29 @@ Producers              Queue (SQLite)         Consumers
 ### Directory Structure
 
 ```
-RedteamOpencode/              ← dev workspace (git root)
-├── CLAUDE.md                 ← dev rules only
-├── install.sh                ← installs agent/ to ~/redteam-agent
-├── README.md                 ← project docs
+RedteamOpencode/                ← dev workspace (git root)
+├── install.sh                  ← installs agent/ to ~/redteam-agent
+├── README.md                   ← project docs
 │
-└── agent/                    ← ALL runtime files
-    ├── CLAUDE.md             ← operator prompt (Claude Code)
-    ├── AGENTS.md             ← operator prompt (Codex)
-    ├── .claude/              ← Claude Code config (agents, commands, hooks)
-    ├── .codex/               ← Codex config (7 subagent TOML definitions)
-    ├── .opencode/            ← OpenCode config (agents, commands, plugins)
-    ├── skills/               ← 30 attack methodology skills
-    ├── references/           ← 57 reference files (OWASP, tools, tactics, AD)
-    ├── scripts/              ← dispatcher, ingest, hooks, shared libraries
-    ├── docker/               ← 3 Dockerfiles + docker-compose.yml
-    └── engagements/          ← per-engagement output (created at runtime)
+└── agent/                      ← ALL runtime files (what gets installed)
+    ├── CLAUDE.md               ← operator prompt (Claude Code)
+    ├── AGENTS.md               ← operator prompt (Codex)
+    ├── .claude/                ← Claude Code config
+    │   ├── agents/             ← 7 subagent definitions (.md)
+    │   ├── commands/           ← 18 slash commands (.md)
+    │   └── settings.json       ← hooks (scope check + auto-logging)
+    ├── .codex/                 ← Codex config
+    │   └── agents/             ← 7 subagent definitions (.toml)
+    ├── .opencode/              ← OpenCode config
+    │   ├── opencode.json       ← agents, skills, commands, plugins
+    │   ├── prompts/agents/     ← 7 agent prompts (.txt)
+    │   ├── commands/           ← 18 slash commands (.md)
+    │   └── plugins/            ← engagement hooks (TypeScript)
+    ├── skills/                 ← 30 attack methodology skills
+    ├── references/             ← 57 reference files (OWASP, tools, tactics, AD)
+    ├── scripts/                ← dispatcher, ingest, hooks, shared libraries
+    ├── docker/                 ← Dockerfiles + docker-compose.yml
+    └── engagements/            ← per-engagement output (created at runtime)
 ```
 
 ## CLI Compatibility
@@ -205,10 +212,12 @@ RedteamOpencode/              ← dev workspace (git root)
 | Feature | Claude Code | OpenCode | Codex |
 |---------|-------------|----------|-------|
 | Operator prompt | `CLAUDE.md` | `.opencode/prompts/agents/operator.txt` | `AGENTS.md` |
-| Subagents | `.claude/agents/*.md` | `.opencode/opencode.json` agents | `.codex/agents/*.toml` |
-| Slash commands | `.claude/commands/*.md` | `.opencode/commands/*.md` | N/A |
-| Hooks | `.claude/settings.json` | `.opencode/plugins/` | N/A |
-| Skills | `skills/*/SKILL.md` (read on demand) | Loaded via instructions array | `skills/*/SKILL.md` (read on demand) |
+| Subagents (7) | `.claude/agents/*.md` | `.opencode/opencode.json` agents | `.codex/agents/*.toml` |
+| Slash commands (18) | `.claude/commands/*.md` | `.opencode/commands/*.md` | N/A |
+| Skills (30) | `skills/*/SKILL.md` (read on demand) | Loaded via instructions array | `skills/*/SKILL.md` (read on demand) |
+| Auto-logging | `.claude/settings.json` hooks | `.opencode/plugins/engagement-hooks.ts` | N/A |
+| Scope enforcement | Hook blocks out-of-scope | Hook warns out-of-scope | N/A |
+| Agent attribution | `agent_type` in hook JSON | `chat.message` event tracking | N/A |
 
 ## Customization
 
@@ -232,10 +241,10 @@ Edit `model` in `agent/.opencode/opencode.json`. Supports Anthropic, OpenAI, Goo
 
 This repo has two layers:
 
-- **Root** (`RedteamOpencode/`): dev workspace. The root `CLAUDE.md` has dev rules (commit conventions, review checklist). Run `claude` here for development.
-- **Agent** (`agent/`): runtime files that get installed. The `agent/CLAUDE.md` is the operator prompt. Run `claude` in `agent/` (or `~/redteam-agent/`) for engagements.
+- **Root** (`RedteamOpencode/`): dev workspace with install script and README. Run your CLI here for development tasks.
+- **Agent** (`agent/`): all runtime files that get installed to `~/redteam-agent`. The `agent/CLAUDE.md` is the operator prompt. Run your CLI inside `agent/` (or `~/redteam-agent/`) for engagements.
 
-After modifying agent files, all paths should be relative to `agent/` as the working directory.
+After modifying agent files, all internal paths should be relative to `agent/` as the working directory.
 
 ## Troubleshooting
 
