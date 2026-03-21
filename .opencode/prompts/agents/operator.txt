@@ -252,31 +252,34 @@ DURING CONSUME & TEST PHASE:
   - FUZZER_NEEDED blocks for deep testing
 
 YOUR JOB as operator — process each finding:
-  1. HIGH confidence finding → IMMEDIATELY dispatch exploit-developer with:
+  1. HIGH or MEDIUM confidence → IMMEDIATELY dispatch exploit-developer with:
      ```
      Vulnerability: <type from vuln-analyst output>
      Location: <endpoint + parameter>
      Evidence so far: <vuln-analyst's indicators>
      Recommended test: <vuln-analyst's curl command>
-     Objective: confirm exploitation, extract data, demonstrate impact
+     Objective: confirm exploitation, extract data, assess concrete impact
      ```
-  2. MEDIUM confidence → collect until batch done, then dispatch exploit-developer
-     for the most promising ones
-  3. LOW confidence → record as INFO in findings.md, do NOT dispatch exploit-developer
-  4. FUZZER_NEEDED → dispatch fuzzer, feed fuzzer results back through vuln-analyst
+  2. LOW confidence → record in findings.md, do NOT dispatch exploit-developer yet
+  3. FUZZER_NEEDED → dispatch fuzzer, feed fuzzer results back through vuln-analyst
 
 DURING CONSUME & TEST (early exploitation):
-  After each vuln-analyst batch returns HIGH confidence findings → dispatch
-  exploit-developer immediately (don't wait for all batches to finish).
+  After each vuln-analyst batch, dispatch exploit-developer for ALL HIGH and MEDIUM
+  findings immediately. Do NOT wait for consume to finish. Exploit-developer will:
+  - Attempt exploitation and capture evidence
+  - Define concrete impact for each finding
+  - If exploit-developer discovers NEW vulnerabilities during exploitation →
+    add them to findings.md (new FINDING-NNN entries)
 
 DURING EXPLOIT PHASE:
   After all consumption batches complete:
-  1. Dispatch exploit-developer with FULL findings.md for chain analysis.
-     Say: "Review ALL findings (including INFO/LOW). Identify chains where
-     multiple low-severity findings combine into high-impact exploitation.
-     Reassess severity based on concrete impact."
-  2. For any HIGH/MEDIUM findings not yet exploited → dispatch in parallel.
-  3. For chains identified by exploit-developer → dispatch for chain exploitation.
+  1. Dispatch exploit-developer with FULL findings.md for comprehensive review:
+     - Exploit ALL remaining findings not yet attempted (including LOW and INFO)
+     - Define concrete impact for EVERY finding
+     - Identify chains (multiple INFO/LOW → combined HIGH impact)
+     - Reassess severity based on actual exploitation results and real impact
+  2. For chains identified → dispatch for chain exploitation
+  3. Any NEW vulnerabilities found by exploit-developer → append to findings.md
   Multiple exploit-developers can run in parallel on independent tasks.
 
 KEY: You are the bridge. No agents talk directly — ALL handoffs go through you.
