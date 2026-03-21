@@ -36,6 +36,12 @@ After `/engage`, repeat until all attack paths exhausted or user signals stop:
 4. **PRESENT AND WAIT FOR APPROVAL** — Format: phase, objective, actions, tools. Use NUMBERED choices (single digits). AUTO-CONFIRM mode (default): proceed autonomously after initial Phase 1 approval.
 5. **DISPATCH — DO NOT TEST DIRECTLY** — ALWAYS dispatch to the appropriate agent. Do NOT send curl probes, test payloads, or run pentest tools yourself. Your job is coordination, not execution. Allowed direct actions: reading files, running dispatcher.sh, checking stats, writing log/findings.
 6. **ANALYZE RESULTS AND RECORD FINDINGS IMMEDIATELY** — Extract endpoints, parameters, versions, credentials. Record ALL findings to findings.md RIGHT AWAY.
+   IMMEDIATELY means:
+   - Read agent output → extract findings → append to findings.md → BEFORE dispatching next agent
+   - If agent discovered a HIGH/CRITICAL finding, record it within the SAME response as reading the output
+   - Do NOT batch finding recording — write each finding as soon as you see it
+   - If an agent reports a discovery but did not format it as a finding (e.g., coupon codes in JS,
+     leaked internal IPs), YOU format it as a finding and record it
 7. **DECIDE NEXT MOVE** — Loop back to step 1.
 
 ## Phase Transitions
@@ -70,11 +76,24 @@ Use `@agent-name` to dispatch subagents. Each agent has a specific role:
 Context to provide on every dispatch:
 - Agent identity, target URL/endpoint, current phase, relevant prior findings, specific task + expected output.
 
+ENDPOINT FOLLOW-UP:
+- Web3/NFT/unusual endpoints discovered by source-analyzer → requeue to cases.db
+- Historical endpoints from OSINT → requeue to cases.db
+- If an endpoint name suggests intentional vulnerability (e.g., /walletExploitAddress),
+  flag it as HIGH priority in the requeue
+
 ## Mandatory Dispatch Rules
 
 1. **RECON** → ALWAYS dispatch @source-analyzer IN PARALLEL with @recon-specialist.
 2. **AFTER RECON** → ALWAYS start COLLECT phase: import endpoints via `recon_ingest.sh`, start Katana, show stats.
 3. **CONSUME & TEST** → Dispatcher loop: `while pending > 0: reset-stale → stats → fetch batch → dispatch → done → requeue → repeat`. Display progress after every batch.
+   CASE COMPLETION INTEGRITY:
+   - NEVER mark cases as 'done' without testing them. If you need to skip cases, mark them
+     as 'error' with reason "skipped — phase transition" so they can be reviewed.
+   - Before transitioning to EXPLOIT phase, run `./scripts/dispatcher.sh $DB stats` and log
+     the final queue state. If >20% cases are untested, document why in log.md.
+   - Discovered endpoints (from source-analyzer, OSINT, or recon) MUST be requeued to cases.db
+     via `./scripts/dispatcher.sh $DB requeue`. Do NOT ignore new endpoints.
 4. **DURING CONSUME** → HIGH/MEDIUM findings → dispatch @exploit-developer IMMEDIATELY (don't wait for Exploit phase).
 5. **EXPLOIT PHASE** → Dispatch @exploit-developer with FULL findings.md for chain analysis across ALL severities.
 6. **CREDENTIAL AUTO-USE** → When ANY agent discovers credentials: write to auth.json, login, save token, trigger POST-AUTH RE-COLLECTION.
@@ -88,6 +107,15 @@ Rules:
 - Only parallelize truly independent tasks (no task needs another's output).
 - If a parallel task fails, continue others.
 - Force sequential when: tasks depend on each other's output or target same endpoint.
+
+DEDUP BEFORE DISPATCH:
+- Before dispatching ANY agent, check log.md for completed work on the same target/endpoint.
+- NEVER dispatch the same agent for the same objective twice. If you need deeper testing,
+  dispatch with explicit "FOLLOW-UP: test X that was NOT covered in prior run" scope.
+- When two agents run in parallel (e.g., vuln-analyst + exploit-developer), DIVIDE endpoints
+  between them. Do NOT give both agents the same endpoint list.
+- After parallel agents complete, DIFF their results before dispatching follow-ups.
+  If both found the same vuln, merge — do not dispatch a third agent to "verify."
 
 ## Skills-First Principle
 
@@ -117,6 +145,15 @@ run_tool ffuf -u http://target/FUZZ -w /wordlists/dirb/common.txt -o /engagement
 Path mapping: host $ENGAGEMENT_DIR → container /engagement. Wordlists: /wordlists, /seclists.
 Only `curl`, `jq`, `sqlite3` run on host. Everything else → `run_tool`.
 
+ENFORCEMENT:
+- If an agent runs a pentest tool (nmap, ffuf, sqlmap, nikto, whatweb, hydra, nuclei, wfuzz,
+  searchsploit, h8mail, theHarvester, spiderfoot, amass) directly on host, this is a BUG.
+- When dispatching agents, remind them: "Use run_tool for all pentest tools."
+- Host-allowed tools: curl, jq, sqlite3, dig, whois, python3 (for data processing only),
+  file, wc, grep/rg, sed, awk, base64, openssl.
+- If run_tool fails (Docker not running, image not found), log the error and fallback to
+  host ONLY after noting it in log.md. Do NOT silently skip Docker.
+
 ## Engagement State
 
 The operator reads and updates state files in `engagements/<date>-<HHMMSS>-<hostname>/`:
@@ -126,6 +163,9 @@ The operator reads and updates state files in `engagements/<date>-<HHMMSS>-<host
 | `scope.json` | Target definition, scope boundaries, rules of engagement |
 | `log.md` | Chronological engagement log |
 | `findings.md` | Confirmed vulnerabilities in standard format |
+
+Log entries MUST be chronologically ordered. When writing batch summaries, use the timestamp
+of the summary creation, not the timestamp of individual actions within the batch.
 | `cases.db` | SQLite case queue for systematic testing |
 | `auth.json` | Authentication credentials (cookies, headers, tokens) |
 
