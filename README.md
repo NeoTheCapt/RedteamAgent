@@ -75,11 +75,27 @@ Any OpenCode-compatible provider works: Anthropic, OpenAI, Google, Ollama (local
 cd ~/redteam-agent
 opencode
 
-# Start an engagement
+# Semi-autonomous (asks for auth setup, confirms phases)
 /engage http://your-ctf-target:8080
+
+# Fully autonomous (zero interaction — just watch)
+/autoengage http://your-ctf-target:8080
+
+# Wildcard domain (enumerates subdomains, parallel testing)
+/autoengage *.target.com --parallel 5
 ```
 
-The agent automatically runs through 5 phases:
+### `/engage` vs `/autoengage`
+
+| | `/engage` | `/autoengage` |
+|---|---|---|
+| Auth setup | Asks you to choose (proxy/cookie/skip) | Auto-skip, auto-register if endpoint found, auto-use discovered creds |
+| Phase approval | Auto-confirm by default, first phase needs approval | Never asks. Every phase auto-proceeds. |
+| Decisions | Parallel by default, can choose sequential | Always parallel. No options. |
+| Errors | May stop on unexpected issues | Logs error, continues next task |
+| When to use | First time on a target, want oversight | Repeat runs, overnight scans, maximum coverage |
+
+The agent runs through 5 phases:
 
 ```
 Phase 1: RECON ─── recon-specialist + source-analyzer (parallel)
@@ -229,8 +245,14 @@ bash <(curl -fsSL https://raw.githubusercontent.com/NeoTheCapt/RedteamAgent/dev/
 # 启动
 cd ~/redteam-agent && opencode
 
-# 开始渗透
+# 半自主模式（需确认认证方式和首阶段）
 /engage http://your-ctf-target:8080
+
+# 全自动模式（零交互，自动注册、自动利用凭据、自动推进）
+/autoengage http://your-ctf-target:8080
+
+# 通配符域名（枚举子域名，并行渗透）
+/autoengage *.target.com --parallel 5
 ```
 
 ## 工作流程
