@@ -80,11 +80,8 @@ If target unreachable: STOP.
 ## Step 5: Configure Authentication
 
 **AUTONOMOUS**:
-- If `auth.json` has a token from prior session → use it
-- Otherwise → start unauthenticated, but actively seek auth during engagement:
-  - Registration endpoint found → auto-register, save creds
-  - Hardcoded credentials found → auto-login, save token
-  - After obtaining auth → POST-AUTH RE-COLLECTION automatically
+- If `auth.json` has a token → use it
+- Otherwise → start unauthenticated. Operator Credential Auto-Use rules apply during engagement.
 
 **INTERACTIVE**:
 ```
@@ -98,28 +95,12 @@ Reply (1-4):
 
 **→ NEXT: Step 6**
 
-## Step 6: Execute 5-Phase Engagement
+## Step 6: Begin Operator Core Loop
 
-Follow operator Phase Flow rules. Both modes run the same phases:
+Initialization complete. Now follow the **operator prompt** Phase Flow (RECON → COLLECT → TEST → EXPLOIT → REPORT) and Core Loop rules.
 
-1. **RECON** — dispatch recon-specialist + source-analyzer in parallel
-2. **COLLECT** — `recon_ingest.sh`, start Katana, show stats
-3. **CONSUME & TEST** — dispatcher loop until pending=0
-4. **EXPLOIT** — dispatch osint-analyst + exploit-developer in parallel
-5. **REPORT** — dispatch report-writer, update scope.json status=completed
-
-After each phase: update scope.json `phases_completed` and `current_phase`.
-
-**AUTONOMOUS differences during execution:**
-- Never ask for approval at phase transitions
-- Always parallel dispatch
-- If FUZZER_NEEDED → dispatch fuzzer automatically
-- Errors → log and continue, never stop
-- Progress display after every batch:
-```
-Phases: [x] Recon  [x] Collect  [>] Test  [ ] Exploit  [ ] Report
-[queue] 120/495 done (24%) | findings: 5
-```
+**AUTONOMOUS**: never ask approval, always parallel, errors → log and continue.
+**INTERACTIVE**: auto-confirm by default, ask for first phase approval.
 
 ---
 

@@ -26,13 +26,9 @@ RULES TO PREVENT HANGING:
 
 === ENGAGEMENT INITIALIZATION ===
 
-1. Parse target URL (hostname, port, protocol).
-2. Directory: `engagements/<YYYY-MM-DD>-<HHMMSS>-<hostname>`
-3. `mkdir -p "$DIR"/{tools,downloads,scans,pids}`
-4. Create: scope.json, log.md, findings.md, intel.md, auth.json
-5. scope.json: `{"target":"<URL>","hostname":"<host>","port":<port>,"protocol":"<proto>","mode":"single","confirm_mode":"auto","status":"in_progress","current_phase":"recon","phases_completed":[],"started_at":"<ISO>"}`
-6. `sqlite3 "$DIR/cases.db" < scripts/schema.sql`
-7. Begin core loop.
+Handled by /engage command (engage.md Steps 1-5). Creates: directory, scope.json,
+cases.db (via schema.sql), log.md, findings.md, intel.md, auth.json.
+After init completes, operator enters core loop.
 
 === SUBAGENT DISPATCH ===
 
