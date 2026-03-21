@@ -101,18 +101,31 @@ State files in `engagements/<date>-<HHMMSS>-<hostname>/`:
 
 ## Finding Format
 
+Agents use PREFIXED IDs to avoid collisions during parallel execution:
+
+| Agent | Prefix | Example |
+|-------|--------|---------|
+| exploit-developer | EX | FINDING-EX-001 |
+| vulnerability-analyst | VA | FINDING-VA-001 |
+| source-analyzer | SA | FINDING-SA-001 |
+| recon-specialist | RE | FINDING-RE-001 |
+| fuzzer | FZ | FINDING-FZ-001 |
+| osint-analyst | OS | FINDING-OS-001 (reserved) |
+
 ```markdown
-## [FINDING-NNN] Title
+## [FINDING-XX-NNN] Title
 - **Discovered by**: <agent-name>
-- **Severity**: HIGH | MEDIUM | LOW | INFO
+- **Severity**: CRITICAL | HIGH | MEDIUM | LOW | INFO
 - **OWASP Category**: e.g., A03:2021 Injection
-- **Type**: e.g., SQL Injection (Error-based)
-- **Parameter**: e.g., `id` in `/api/users?id=`
+- **Type**: e.g., SQL Injection (Union-based)
+- **Parameter**: e.g., `q` in `/api/search?q=`
 - **Evidence**:
   - Command: `<exact command>`
-  - Response: `<relevant response excerpt>`
-- **Impact**: description of what an attacker can achieve
+  - Response: `<relevant excerpt>`
+- **Impact**: what an attacker can achieve
 ```
+
+report-writer renumbers all FINDING-XX-NNN to sequential FINDING-001 ~ FINDING-N in the final report.
 
 ## Subagent Dispatch Protocol
 

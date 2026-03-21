@@ -118,3 +118,5 @@ Plus any secrets/tokens for findings.md.
 7. Filter noise: only report application-specific paths, ignore CDN/analytics/third-party.
 8. Parse and structure all output — never return raw grep dumps.
 9. Use `rg` (ripgrep) for regex — do NOT use `grep -P` (unavailable on macOS).
+10. FINDING IDs: Use your agent prefix (FINDING-SA-NNN). Count YOUR existing prefixed findings:
+   `grep -c '^\#\# \[FINDING-SA-' "$DIR/findings.md"` to get next number. Never use unprefixed IDs.

@@ -78,3 +78,5 @@ Timeout: -timeout 10. Always use -o <file>.json -of json.
 6. Reduce threads or stop on rate-limiting/errors.
 7. Track total request count.
 8. If wordlist not found, check alternatives and note substitution.
+9. FINDING IDs: Use your agent prefix (FINDING-FZ-NNN). Count YOUR existing prefixed findings:
+   `grep -c '^\#\# \[FINDING-FZ-' "$DIR/findings.md"` to get next number. Never use unprefixed IDs.

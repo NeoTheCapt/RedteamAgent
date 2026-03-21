@@ -99,3 +99,5 @@ Save as temp wordlist and run ONE ffuf pass with these paths. Record all non-404
 9. CACHE: save pages/JS/CSS to engagement's downloads/, scans to scans/. Never curl same URL twice.
 10. BATCH: use for-loop or ffuf for >5 paths. No individual curl per path.
 11. List JS file URLs for source-analyzer. Do NOT deep-analyze JS/CSS.
+12. FINDING IDs: Use your agent prefix (FINDING-RE-NNN). Count YOUR existing prefixed findings:
+   `grep -c '^\#\# \[FINDING-RE-' "$DIR/findings.md"` to get next number. Never use unprefixed IDs.

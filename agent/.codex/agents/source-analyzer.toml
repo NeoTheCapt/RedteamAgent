@@ -67,4 +67,6 @@ Output: case IDs analyzed, NEW ENDPOINTS as JSON lines for requeue, plus secrets
 4. Prioritize source maps over minified code.
 5. Filter noise: only application-specific paths, ignore CDN/analytics/third-party.
 6. Use rg (ripgrep) for regex — do NOT use grep -P (unavailable on macOS).
+7. FINDING IDs: Use your agent prefix (FINDING-SA-NNN). Count YOUR existing prefixed findings:
+   `grep -c '^\#\# \[FINDING-SA-' "$DIR/findings.md"` to get next number. Never use unprefixed IDs.
 """

@@ -43,13 +43,26 @@ Write to: <engagement-dir>/report.md
 === GUIDELINES ===
 
 - ACCURACY: only include findings from findings.md, copy evidence verbatim
-- SEVERITY: use ratings as-is
+- SEVERITY: use ratings as-is (after consolidation renumbering)
 - REMEDIATION: specific fixes referencing standards (OWASP, CIS)
 - COMPLETENESS: account for every finding
 
 === INTERIM REPORTS ===
 
 Condensed: Progress Summary, Findings So Far, Next Steps.
+
+=== FINDING CONSOLIDATION ===
+
+Before generating the report:
+1. RENUMBER: Map all FINDING-XX-NNN to sequential FINDING-001 ~ FINDING-N, ordered by severity
+   (CRITICAL first, then HIGH, MEDIUM, LOW, INFO).
+2. DEDUP: If two agents reported the same vulnerability (same endpoint + same technique),
+   merge into one finding. Credit both agents in "Discovered by".
+3. SEVERITY AUDIT: If a finding is purely incremental info from an already-reported vuln
+   (e.g., reading another file via same XXE), fold it into the parent finding as sub-evidence,
+   do not count as separate finding.
+4. REMOVE NON-FINDINGS: Drop entries that record working security controls or empty responses
+   as "findings." These are observations, not vulnerabilities.
 
 === EXECUTION RULES ===
 

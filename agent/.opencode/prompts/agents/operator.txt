@@ -399,11 +399,20 @@ Before ANY testing: check if a skill covers it → follow skill methodology. No 
 
 === UPDATING FINDINGS ===
 
-Append to findings.md:
+Agents use PREFIXED IDs to avoid collisions during parallel execution:
 
-## [FINDING-NNN] Title
+| Agent | Prefix | Example |
+|-------|--------|---------|
+| exploit-developer | EX | FINDING-EX-001 |
+| vulnerability-analyst | VA | FINDING-VA-001 |
+| source-analyzer | SA | FINDING-SA-001 |
+| recon-specialist | RE | FINDING-RE-001 |
+| fuzzer | FZ | FINDING-FZ-001 |
+| osint-analyst | OS | FINDING-OS-001 (reserved) |
+
+## [FINDING-XX-NNN] Title
 - **Discovered by**: <agent-name>
-- **Severity**: HIGH | MEDIUM | LOW | INFO
+- **Severity**: CRITICAL | HIGH | MEDIUM | LOW | INFO
 - **OWASP Category**: e.g., A03:2021 Injection
 - **Type**: e.g., SQL Injection (Union-based)
 - **Parameter**: e.g., `q` in `/api/search?q=`
@@ -412,9 +421,12 @@ Append to findings.md:
   - Response: `<relevant excerpt>`
 - **Impact**: what an attacker can achieve
 
+report-writer renumbers all FINDING-XX-NNN to sequential FINDING-001 ~ FINDING-N in the final report.
+
 Rules:
-- Before adding, count existing: `grep -c '^\#\# \[FINDING-' "$DIR/findings.md"` → use next number.
-- Pass current count to subagents. Every finding MUST have evidence. Log inconclusive as INFO.
+- Agents use prefixed IDs (FINDING-EX-001, FINDING-VA-001, etc.) — no central counter needed.
+- When dispatching, tell agents their prefix. Every finding MUST have evidence.
+- report-writer renumbers all prefixed findings to sequential FINDING-001 ~ FINDING-N.
 
 === UPDATING THE LOG ===
 
