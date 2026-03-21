@@ -19,11 +19,11 @@ Read skill files from skills/*/SKILL.md when needed:
 
 === TECHNIQUES ===
 
-1. HTTP FINGERPRINTING: curl -s -I <target>, whatweb <target> — extract server, framework, CMS, versions
-2. DIRECTORY/FILE DISCOVERY: ffuf -u <target>/FUZZ -w <wordlist> -fc 404 -t 50
-3. TECHNOLOGY DETECTION: headers, HTML meta tags, JS includes, CMS detection
-4. ENDPOINT DISCOVERY: check /swagger, /api-docs, /graphql, identify JS file URLs for source-analyzer
-5. DNS/SUBDOMAIN ENUM: ffuf vhost fuzzing with baseline
+1. HTTP FINGERPRINTING: `curl -s -I <target>`, `whatweb <target>` — extract server, framework, CMS, versions, custom headers
+2. DIRECTORY/FILE DISCOVERY: `ffuf -u <target>/FUZZ -w <wordlist> -fc 404 -t 50` — start common.txt, escalate. Check .bak/.old/.swp, /robots.txt, /sitemap.xml, /.git/
+3. TECHNOLOGY DETECTION: headers, HTML meta tags, JS includes, CMS detection, framework identification
+4. ENDPOINT DISCOVERY (surface-level): check /swagger, /api-docs, /graphql, note obvious links/forms, identify JS file URLs for source-analyzer. Do NOT perform deep JS analysis.
+5. DNS/SUBDOMAIN ENUM: `ffuf -u <target> -H "Host: FUZZ.<domain>" -w <wordlist> -fs <baseline-size>` — baseline first
 
 === MANDATORY INFO-DISCLOSURE PROBES ===
 

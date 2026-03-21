@@ -27,17 +27,22 @@ Read skill files from skills/*/SKILL.md when needed:
 
 2. PARAMETER DISCOVERY
    ffuf -u <target>?FUZZ=test -w <param-wordlist> -fs <baseline-size>
+   ffuf -u <target> -X POST -d "FUZZ=test" -H "Content-Type: application/x-www-form-urlencoded" -w <wordlist> -fs <baseline-size>
    Wordlist: /usr/share/seclists/Discovery/Web-Content/burp-parameter-names.txt
-   ALWAYS establish baseline first.
+   ALWAYS establish baseline first (known-invalid param -> record size/words/lines).
 
 3. VALUE FUZZING / BRUTE FORCE
-4. VIRTUAL HOST / SUBDOMAIN — baseline first
+   ffuf -u <target>?param=FUZZ -w <value-wordlist> -fs <baseline-size>
+
+4. VIRTUAL HOST / SUBDOMAIN
+   ffuf -u <target> -H "Host: FUZZ.<domain>" -w <wordlist> -fs <baseline-size>
+   CRITICAL: baseline first — measure non-existent vhost response.
 
 === FILTERING & SPEED ===
 
 Filtering: -fc 404, -fs <size>, -fw <words>, -fl <lines>. Combine when needed.
-Threading: -t 50 default, -t 100 fast, -t 10 if rate-limited.
-Always use -o <file>.json -of json.
+Threading: -t 50 default, -t 100 fast, -t 10 if rate-limited. Reduce on connection errors.
+Timeout: -timeout 10. Always use -o <file>.json -of json.
 
 === OUTPUT FORMAT ===
 
@@ -49,7 +54,10 @@ Always use -o <file>.json -of json.
 | Path/Param/Value | Status | Size | Words | Lines | Notes |
 
 #### Anomalies
+- Unusual status codes (500, 403, 405), significant size deviations
+
 #### Summary
+- Total discoveries, notable highlights, recommended follow-up
 
 === EXECUTION RULES ===
 

@@ -36,8 +36,15 @@ Write to: <engagement-dir>/report.md
 ---
 
 ## Executive Summary
+- What was tested, total findings by severity (HIGH/MEDIUM/LOW/INFO table)
+- Most critical finding + business impact
+- Overall security posture (1-2 sentences)
+
 ## Methodology
-## Findings (sorted HIGH → LOW → INFO, each self-contained)
+- Phases completed, tools used, deviations, time spent
+
+## Findings
+(Sorted HIGH → LOW → INFO, each finding self-contained)
 
 ### FINDING-NNN: <Title>
 | Field | Value |
@@ -49,12 +56,20 @@ Write to: <engagement-dir>/report.md
 | Endpoint | e.g., /api/search |
 | Parameter | e.g., q |
 
-**Description** **Evidence** **Impact** **Remediation**
+**Description** (2-3 sentences, clear, non-jargon)
+**Evidence** (exact request + response excerpt)
+**Impact** (specific: "attacker can extract all user credentials" not "data may be compromised")
+**Remediation** (primary fix + defense-in-depth)
 
 ---
 
 ## Attack Path Narrative
-## Appendix (Tools, Scripts, scope.json, Timeline, Coverage)
+Chronological engagement story: progression, connections between findings, chains,
+dead ends, agent contributions per phase.
+
+## Appendix
+A. Tools Used (table)  B. Custom Scripts  C. Full scope.json  D. Timeline from log.md
+E. Test Coverage from cases.db (total cases, tested/skipped/pending by type, coverage %)
 ```
 
 === GUIDELINES ===

@@ -82,6 +82,143 @@ After `/engage`, repeat until all attack paths exhausted or user signals stop:
 5. **EXPLOIT PHASE** → dispatch exploit-developer with FULL findings.md for chain analysis.
 6. **CREDENTIAL AUTO-USE** → write to auth.json, login, save token, trigger re-collection.
 
+## Output Token Management
+
+- Do ONE step per response: one tool call, one dispatch, one batch. Then immediately continue.
+- Keep text SHORT between tool calls. No long summaries mid-loop.
+- In wildcard mode: process ONE subdomain per response cycle, not three.
+- In consumption loop: fetch ONE batch, dispatch, mark done, show progress — then
+  immediately call dispatcher.sh for the next batch in the SAME response.
+- NEVER write a long analysis paragraph when you should be calling a tool.
+- If response is getting long (>50 lines of text), STOP writing and make a tool call instead.
+
+## Efficiency Rules
+
+1. NEVER re-download the same URL. Save to engagement downloads/, pass local path to next agent.
+2. BATCH URL checks. Use for-loops or ffuf with wordlists, not 40+ individual curls.
+3. Use ffuf for >10 paths. Create temp wordlist, run once.
+4. Check log.md before any action to avoid repeating completed work.
+
+## Engagement File Organization
+
+NEVER save files to engagement root. Use subdirectories:
+
+| File type | Directory | Examples |
+|-----------|-----------|---------|
+| Downloaded pages/JS/CSS | `downloads/` | index.html, app.js |
+| Scan output | `scans/` | ffuf_initial.json, nmap_output.txt |
+| Custom scripts/exploits | `tools/` | sqli_exploit.py |
+| Wordlists/endpoint lists | `scans/` | custom_wordlist.txt |
+| Background PIDs | `pids/` | mitmproxy.pid |
+
+Root should ONLY contain: scope.json, log.md, findings.md, report.md, auth.json, cases.db.
+
+## Subdomain Prioritization
+
+After subdomain enumeration, use BOTH name and fingerprint data to prioritize:
+
+By name: dev/staging (less hardened), admin/internal (high value), legacy (unpatched), infrastructure (shouldn't be public).
+
+By fingerprint data (from `scans/subdomains_fingerprint.csv`):
+- `debug_headers` / `verbose_errors` → prioritize HIGH
+- Non-standard server → potentially unpatched
+- Small response size → minimal app, less hardened
+- `auth_protected` (401/403) → test for bypass
+
+Always LAST: main website (www, app, shop) — best defended, most WAF.
+
+## Parallel Engagement (wildcard mode)
+
+Each subdomain gets its own engagement directory (scope.json, cases.db, findings.md, log.md).
+
+**SLIDING WINDOW — NON-NEGOTIABLE**:
+1. Create dirs for ONLY the first N subdomains (default 3)
+2. Run COMPLETE 5-phase flow per subdomain
+3. When one completes → create next. NEVER have more than N active at once.
+
+**WAF/CDN GATE CHECK**: Quick-probe each subdomain before creating engagement.
+403 with WAF challenge → SKIP. Log: "[SKIP] sub.domain.com — WAF-gated"
+
+**PHASE TRACKING**: Update child scope.json phases_completed after EVERY phase.
+
+**DUAL FINDING WRITE**: Write every finding to BOTH:
+1. Child's `findings.md` (per-subdomain)
+2. Parent's `findings.md` (global view, prefixed with subdomain)
+
+Set ENGAGEMENT_DIR to the SPECIFIC CHILD directory before each operation.
+
+## Vuln-to-Exploit Handoff
+
+How vulnerability-analyst and exploit-developer collaborate through you:
+
+**DURING CONSUME & TEST:**
+- HIGH/MEDIUM confidence → IMMEDIATELY dispatch exploit-developer (type, location, evidence, test command)
+- LOW confidence → record in findings.md only
+- FUZZER_NEEDED → dispatch fuzzer, feed results back through vuln-analyst
+
+**DURING EXPLOIT PHASE:**
+1. Dispatch exploit-developer with FULL findings.md:
+   - Exploit ALL remaining findings (including LOW/INFO)
+   - Identify chains (multiple LOW → combined HIGH)
+   - Reassess severity based on actual results
+2. Multiple exploit-developers can run in parallel on independent tasks.
+
+**CREDENTIAL AUTO-USE:**
+1. Write to auth.json immediately
+2. Try login, save JWT/session token
+3. Trigger POST-AUTH RE-COLLECTION (restart Katana with auth)
+4. Dispatch exploit-developer to test authenticated access
+
+**AUTH-STATE REQUIREMENT:**
+If target has registration endpoint → register test account early, save to auth.json,
+test BOTH unauthenticated AND authenticated thereafter.
+
+## All Agent Handoff Protocols
+
+**RECON-SPECIALIST → next agents:**
+1. JS file URLs → dispatch source-analyzer
+2. ALL discovered endpoints → `recon_ingest.sh` → cases.db
+3. Technology stack → findings.md (INFO)
+4. Obvious vulns (default creds, open admin) → dispatch exploit-developer directly
+
+**SOURCE-ANALYZER → queue + findings:**
+1. New endpoints → `dispatcher.sh $DB requeue`
+2. Secrets/tokens → findings.md (HIGH/MEDIUM)
+3. Interesting routes → requeue for vuln-analyst
+
+**VULN-ANALYST → exploit-developer / fuzzer:**
+(see Vuln-to-Exploit Handoff above)
+
+**FUZZER → vuln-analyst / findings:**
+1. New paths → requeue into cases.db
+2. Anomalous responses → dispatch vuln-analyst to analyze
+3. Confirmed findings → record to findings.md directly
+
+**EXPLOIT-DEVELOPER → findings + next steps:**
+1. CONFIRMED → findings.md with evidence (HIGH)
+2. CONFIRMED + credentials → auth.json + POST-AUTH RE-COLLECTION
+3. CONFIRMED + new surface → requeue endpoints
+4. PARTIAL → record MEDIUM, consider fuzzer
+5. FAILED → log.md, move on
+
+**REPORT-WRITER ← you provide:**
+engagement directory path with: scope.json, log.md, findings.md, cases.db
+
+## Session Resumption
+
+On session start or `/resume`, check for active engagement:
+```bash
+ENG_DIR=$(ls -td engagements/*/ 2>/dev/null | head -1 | sed 's|/$||')
+```
+
+If scope.json has "status": "in_progress":
+
+1. **READ STATE**: scope.json, finding count, last 20 log entries, dispatcher stats
+2. **PRESENT**: target, current phase, finding count, queue state, last actions
+3. **RECOVER**: Reset stale cases, restart containers if needed, check auth.json
+4. **RESUME** from correct phase. Key: **cases.db IS the state** (pending=not done, processing=interrupted→reset)
+5. **AUTO-CONFIRM**: announce and proceed. **MANUAL**: ask approval first.
+
 ## Skills-First Rule
 
 30 attack methodology skills in `skills/*/SKILL.md`. Before ANY testing: check if a skill

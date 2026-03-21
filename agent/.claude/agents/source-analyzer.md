@@ -36,6 +36,13 @@ Read skill files from `skills/*/SKILL.md` when needed: source-analysis
    - Data attributes: data-url, data-api, data-endpoint, data-action
    - HTML comments, inline JS with embedded URLs/keys, meta tags (og:url, canonical, csrf)
 
+   ```bash
+   curl -sL <target> | grep -oE '(href|src|action)="[^"]*"' | sort -u
+   curl -sL <target> | grep -oE '<input[^>]*type="hidden"[^>]*>'
+   curl -sL <target> | grep -oE '<!--[\s\S]*?-->'
+   curl -sL <target> | grep -oE 'data-[a-z-]+="[^"]*"' | sort -u
+   ```
+
 2. JAVASCRIPT STATIC ANALYSIS
    - Extract string literals with paths: /api/, /v1/, /graphql
    - Identify fetch/axios/XHR calls and URL arguments
@@ -43,14 +50,37 @@ Read skill files from `skills/*/SKILL.md` when needed: source-analysis
    - Hardcoded secrets: API keys, tokens, passwords, AWS keys
    - Webpack chunk manifests, source maps (.map files)
 
+   ```bash
+   curl -sL <js-url> | grep -oE '["'"'"'](/[a-zA-Z0-9_/\-\.]+)["'"'"']' | sort -u
+   curl -sL <js-url> | grep -oE '(fetch|axios\.\w+|\.ajax)\s*\(\s*['"'"'"][^'"'"'"]*['"'"'"]'
+   curl -sL <js-url> | grep -oiE '(api[_-]?key|token|secret|password|auth|bearer)\s*[:=]\s*['"'"'"][^'"'"'"]{8,}['"'"'"]'
+   curl -sI <js-url> | grep -i sourcemap
+   curl -sL <js-url>.map | jq -r '.sources[]' 2>/dev/null
+   ```
+
 3. CSS ANALYSIS
-   - url() references, @import paths
+   ```bash
+   curl -sL <css-url> | grep -oE 'url\(['"'"'"]*([^)'"'"'"]+)['"'"'"]*\)' | sort -u
+   curl -sL <css-url> | grep -oE '@import\s+['"'"'"]([^'"'"'"]+)['"'"'"]'
+   ```
 
 4. API SCHEMA DISCOVERY
-   - GraphQL introspection, Swagger/OpenAPI endpoints
+   ```bash
+   # GraphQL introspection
+   curl -s -X POST <target>/graphql -H "Content-Type: application/json" \
+     -d '{"query":"{ __schema { types { name fields { name type { name } } } } }"}'
+   # Swagger/OpenAPI
+   for path in /swagger.json /openapi.json /api-docs /v2/api-docs /swagger-ui.html; do
+     code=$(curl -s -o /dev/null -w "%{http_code}" "<target>$path")
+     [ "$code" != "404" ] && echo "[${code}] $path"
+   done
+   ```
 
 5. WEBPACK / BUNDLER ANALYSIS
-   - Chunk paths, window.__CONFIG__ objects
+   ```bash
+   curl -sL <main-js> | grep -oE '['"'"'"](?:static/js/|dist/|chunks/)[^'"'"'"]+\.js['"'"'"]' | sort -u
+   curl -sL <target> | grep -oE 'window\.__\w+__\s*=\s*\{[^}]*\}'
+   ```
 
 === OUTPUT FORMAT ===
 

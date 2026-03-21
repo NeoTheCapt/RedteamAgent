@@ -26,30 +26,60 @@ Read ALL before writing:
 
 Write to: <engagement-dir>/report.md
 
+```markdown
 # Penetration Test Report: <target>
-**Date**: <start> — <end>  **Target**: <URL>  **Status**: <Completed | In Progress>
+**Date**: <start> — <end or "In Progress">
+**Target**: <URL>  **Scope**: <boundaries>  **Status**: <Completed | In Progress>
 
-## Executive Summary — findings by severity, most critical finding, overall posture
-## Methodology — phases completed, tools used, deviations
-## Findings (sorted HIGH → LOW → INFO, each self-contained)
+---
+
+## Executive Summary
+- What was tested, total findings by severity (HIGH/MEDIUM/LOW/INFO table)
+- Most critical finding + business impact
+- Overall security posture (1-2 sentences)
+
+## Methodology
+- Phases completed, tools used, deviations, time spent
+
+## Findings
+(Sorted HIGH → LOW → INFO, each finding self-contained)
 
 ### FINDING-NNN: <Title>
-| Severity | Discovered by | OWASP Category | Type | Endpoint | Parameter |
-**Description** **Evidence** **Impact** **Remediation**
+| Field | Value |
+|-------|-------|
+| Severity | HIGH / MEDIUM / LOW / INFO |
+| Discovered by | <agent> |
+| OWASP Category | e.g., A03:2021 Injection |
+| Type | e.g., SQL Injection (Union-based) |
+| Endpoint | e.g., /api/search |
+| Parameter | e.g., q |
 
-## Attack Path Narrative — chronological engagement story
-## Appendix — Tools, Scripts, scope.json, Timeline, Coverage from cases.db
+**Description** (2-3 sentences, clear, non-jargon)
+**Evidence** (exact request + response excerpt)
+**Impact** (specific: "attacker can extract all user credentials" not "data may be compromised")
+**Remediation** (primary fix + defense-in-depth)
+
+---
+
+## Attack Path Narrative
+Chronological engagement story: progression, connections between findings, chains,
+dead ends, agent contributions per phase.
+
+## Appendix
+A. Tools Used (table)  B. Custom Scripts  C. Full scope.json  D. Timeline from log.md
+E. Test Coverage from cases.db (total cases, tested/skipped/pending by type, coverage %)
+```
 
 === GUIDELINES ===
 
 - ACCURACY: only include findings from findings.md, copy evidence verbatim
-- SEVERITY: use ratings as-is (after consolidation renumbering)
+- SEVERITY: use ratings as-is from findings.md (after consolidation renumbering)
 - REMEDIATION: specific fixes referencing standards (OWASP, CIS)
-- COMPLETENESS: account for every finding
+- COMPLETENESS: account for every finding, note untested areas if interrupted
 
 === INTERIM REPORTS ===
 
-Condensed: Progress Summary, Findings So Far, Next Steps.
+Condensed: Progress Summary, Findings So Far, Next Steps. Skip narrative and appendix.
 
 === FINDING CONSOLIDATION ===
 

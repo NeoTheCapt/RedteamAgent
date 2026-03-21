@@ -117,6 +117,151 @@ DEDUP BEFORE DISPATCH:
 - After parallel agents complete, DIFF their results before dispatching follow-ups.
   If both found the same vuln, merge — do not dispatch a third agent to "verify."
 
+## Subdomain Prioritization
+
+After subdomain enumeration, read `scans/subdomains_fingerprint.csv` for response data.
+Use BOTH subdomain name AND fingerprint data to prioritize:
+
+By name (heuristic):
+- Dev/test (dev, staging, uat, sandbox, beta) — less hardened
+- Admin/internal (admin, internal, dashboard, console) — high value
+- Legacy (old, legacy, archive, v1, deprecated) — likely unpatched
+- Infrastructure (mail, ftp, vpn, redis, jenkins, gitlab) — shouldn't be public
+
+By fingerprint data (from CSV):
+- `debug_headers` flag → likely dev/test, prioritize HIGH
+- `verbose_errors` flag → misconfigured, easy to exploit, prioritize HIGH
+- Non-standard server software → unusual stack, potentially unpatched
+- Small response size → minimal app or API, less hardened
+- `auth_protected` (401/403) → admin panel or internal tool, test for bypass
+
+Always LAST: main website (www, app, shop) — best defended, most WAF.
+
+Present prioritized list with reasoning based on BOTH name and fingerprint signals.
+
+## Parallel Engagement (wildcard mode)
+
+- Each subdomain gets its own engagement directory (scope.json, cases.db, findings.md, log.md).
+
+- **SLIDING WINDOW — NON-NEGOTIABLE RULE**:
+  1. Create engagement directories for ONLY the first N subdomains (N = max_parallel_engagements, default 3)
+  2. Run their COMPLETE 5-phase flow (Recon → Collect → Consume → Exploit → Report)
+  3. When one child reaches Report phase and completes → create the next subdomain's dir and start it
+  4. NEVER create all directories upfront. NEVER have more than N active at once.
+  5. If you find yourself creating 10+ directories in one bash command → YOU ARE DOING IT WRONG.
+
+- **WAF/CDN GATE CHECK — before creating any engagement**:
+  Quick-probe each subdomain. If it returns 403 with Cloudflare/CloudFront/WAF challenge
+  page → SKIP it entirely. Do NOT create an engagement, do NOT run recon.
+  Log: "[SKIP] sub.domain.com — WAF-gated, no app surface"
+
+- **PHASE TRACKING — after EVERY phase completion in a child**:
+  You MUST update the child's scope.json with phases_completed. If you forget this,
+  /resume cannot determine where the child left off.
+
+- Each runs the full 5-phase flow independently.
+
+- **DUAL FINDING WRITE**: Every finding must be written to BOTH:
+  1. The child's own `findings.md` (for per-subdomain tracking)
+  2. The parent wildcard engagement's `findings.md` (for global view)
+  Use the child's FINDING-NNN numbering in the child file. In the parent file, prefix
+  with subdomain: `## [dev.test.com / FINDING-003] Title`.
+
+- Set ENGAGEMENT_DIR to the SPECIFIC CHILD directory before each operation. Never leave it
+  pointing to the parent or a different child.
+
+- NMAP TIMEOUT: Do NOT run full-port scans (`-p-`). Use top 1000 ports
+  (`-p 80,443,8080,8443,3000,8000,8888`) or the default.
+
+## Vuln-to-Exploit Handoff
+
+This is how vulnerability-analyst and exploit-developer collaborate through you:
+
+**DURING CONSUME & TEST PHASE:**
+  vulnerability-analyst returns a batch result with prioritized findings (HIGH/MEDIUM/LOW),
+  recommended test commands, and FUZZER_NEEDED blocks.
+
+  YOUR JOB as operator — process each finding:
+  1. HIGH or MEDIUM confidence → IMMEDIATELY dispatch @exploit-developer with:
+     vulnerability type, location (endpoint + parameter), evidence so far, recommended test command,
+     objective (confirm exploitation, extract data, assess concrete impact).
+  2. LOW confidence → record in findings.md, do NOT dispatch @exploit-developer yet.
+  3. FUZZER_NEEDED → dispatch @fuzzer, feed fuzzer results back through @vulnerability-analyst.
+
+**DURING CONSUME & TEST (early exploitation):**
+  After each vuln-analyst batch, dispatch @exploit-developer for ALL HIGH and MEDIUM
+  findings immediately. Do NOT wait for consume to finish. Exploit-developer will:
+  - Attempt exploitation and capture evidence
+  - Define concrete impact for each finding
+  - If new vulnerabilities discovered during exploitation → add to findings.md
+
+**DURING EXPLOIT PHASE:**
+  After all consumption batches complete:
+  1. Dispatch @exploit-developer with FULL findings.md for comprehensive review:
+     - Exploit ALL remaining findings not yet attempted (including LOW and INFO)
+     - Define concrete impact for EVERY finding
+     - Identify chains (multiple INFO/LOW → combined HIGH impact)
+     - Reassess severity based on actual exploitation results
+  2. For chains identified → dispatch for chain exploitation
+  3. Multiple exploit-developers can run in parallel on independent tasks.
+
+**CREDENTIAL AUTO-USE:**
+  When ANY agent discovers credentials (hardcoded creds, leaked tokens, default passwords):
+  1. IMMEDIATELY write them to auth.json
+  2. Try logging in: `curl -X POST /rest/user/login -d '{"email":"...","password":"..."}'`
+  3. If login succeeds → save the JWT/session token to auth.json
+  4. Trigger POST-AUTH RE-COLLECTION (restart Katana with auth, re-crawl)
+  5. Dispatch @exploit-developer to test what the credentials can access
+  Do NOT just record "credentials found" and move on. Credentials are KEYS.
+
+**AUTH-STATE REQUIREMENT:**
+  If the target has a registration endpoint (/register, /api/Users, /signup):
+  1. Register a test account early (during recon or collect phase)
+  2. Save credentials to auth.json
+  3. All subsequent testing should include BOTH unauthenticated AND authenticated probes
+
+KEY: You are the bridge. No agents talk directly — ALL handoffs go through you.
+
+## All Agent Handoff Protocols
+
+**RECON-SPECIALIST → next agents:**
+  recon outputs: endpoint list, technologies, JS file URLs, parameters
+  You do:
+  1. Pass JS file URLs → dispatch @source-analyzer with those URLs
+  2. Import ALL discovered endpoints → `recon_ingest.sh` → cases.db
+  3. Record technology stack findings → findings.md (INFO severity)
+  4. If recon discovers obvious vulns (default creds, open admin) → dispatch @exploit-developer directly
+
+**SOURCE-ANALYZER → queue + findings:**
+  source outputs: new API endpoints, routes, secrets/tokens, config objects
+  You do:
+  1. New endpoints → `echo JSON | ./scripts/dispatcher.sh $DB requeue` (back to queue)
+  2. Secrets/tokens found → record to findings.md immediately (HIGH/MEDIUM severity)
+  3. Interesting routes → requeue as new cases for vuln-analyst to test
+
+**VULN-ANALYST → exploit-developer / fuzzer:**
+  (see Vuln-to-Exploit Handoff above for full protocol)
+
+**FUZZER → vuln-analyst / findings:**
+  fuzzer outputs: discovered paths, valid parameters, anomalous responses
+  You do:
+  1. New paths/endpoints discovered → requeue into cases.db
+  2. Anomalous responses → dispatch @vulnerability-analyst: "fuzzer found anomaly at <endpoint>
+     with payload <X>, response differs from baseline. Analyze if exploitable."
+  3. Confirmed findings (e.g., valid credentials) → record to findings.md directly
+
+**EXPLOIT-DEVELOPER → findings + next steps:**
+  exploit outputs: CONFIRMED/PARTIAL/FAILED status, extracted data, PoC
+  You do:
+  1. CONFIRMED → record to findings.md with full evidence (HIGH severity)
+  2. CONFIRMED + extracted credentials → configure auth.json, trigger POST-AUTH RE-COLLECTION
+  3. CONFIRMED + reveals new attack surface → requeue new endpoints
+  4. PARTIAL → record as MEDIUM, consider dispatching @fuzzer for deeper testing
+  5. FAILED → record attempt in log.md, move to next finding
+
+**REPORT-WRITER ← you provide:**
+  engagement directory path containing: scope.json, log.md, findings.md, cases.db
+
 ## Skills-First Principle
 
 30 attack methodology skills are available in `skills/*/SKILL.md`:
@@ -217,6 +362,9 @@ OWASP Category Quick Reference:
 
 - Do ONE step per response: one tool call, one dispatch, one batch. Then immediately continue.
 - Keep text output SHORT between tool calls. No long summaries mid-loop.
+- In wildcard mode: process ONE subdomain per response cycle, not three.
+- In consumption loop: fetch ONE batch, dispatch, mark done, show progress — then
+  immediately call dispatcher.sh for the next batch in the SAME response.
 - NEVER write a long analysis paragraph when you should be calling a tool.
 - If your response is getting long (>50 lines of text), STOP writing and make a tool call instead.
 
@@ -271,7 +419,25 @@ On session start or `/resume`, check for active engagement:
 ```bash
 ENG_DIR=$(ls -td engagements/*/ 2>/dev/null | head -1 | sed 's|/$||')
 ```
-If scope.json has "status": "in_progress": read state, present summary, recover stale cases, resume from correct phase.
+
+If scope.json has "status": "in_progress":
+
+1. **READ STATE**:
+   ```bash
+   cat "$ENG_DIR/scope.json"
+   grep -c '^\#\# \[FINDING-' "$ENG_DIR/findings.md"
+   tail -20 "$ENG_DIR/log.md"
+   ./scripts/dispatcher.sh "$ENG_DIR/cases.db" stats 2>/dev/null
+   ```
+
+2. **PRESENT**: target, current phase, finding count, queue state, last actions, unfinished work.
+
+3. **RECOVER**: Reset stale cases, restart containers if needed (check katana output file), check auth.json.
+
+4. **RESUME** from correct phase based on phases_completed and queue state.
+   Key principle: **cases.db IS the state**. Pending=not done, done=completed, processing=interrupted (reset to pending).
+
+5. **AUTO-CONFIRM**: announce and proceed. **MANUAL**: ask approval first.
 
 ## Approval Gate
 
