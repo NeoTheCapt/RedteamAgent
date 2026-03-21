@@ -9,30 +9,30 @@
 #   agent_type       — which subagent is running (only present in subagent context)
 #   hook_event_name  — PostToolUse
 
-set -euo pipefail
+# No set -e: jq/grep returning empty is expected, not an error.
 
 INPUT=$(cat)
 
 # Parse fields
-TOOL_NAME=$(echo "$INPUT" | jq -r '.tool_name // empty' 2>/dev/null)
+TOOL_NAME=$(echo "$INPUT" | jq -r '.tool_name // empty' 2>/dev/null || true)
 [ -z "$TOOL_NAME" ] && exit 0
 
-AGENT_TYPE=$(echo "$INPUT" | jq -r '.agent_type // "operator"' 2>/dev/null)
+AGENT_TYPE=$(echo "$INPUT" | jq -r '.agent_type // "operator"' 2>/dev/null || echo "operator")
 
 # Find active engagement directory
-ENG_DIR=$(ls -td engagements/*/ 2>/dev/null | head -1 | sed 's|/$||')
+ENG_DIR=$(ls -td engagements/*/ 2>/dev/null | head -1 | sed 's|/$||' || true)
 [ -z "$ENG_DIR" ] && exit 0
 [ ! -f "$ENG_DIR/log.md" ] && exit 0
 
 # Check scope.json status
-STATUS=$(jq -r '.status // "unknown"' "$ENG_DIR/scope.json" 2>/dev/null)
+STATUS=$(jq -r '.status // "unknown"' "$ENG_DIR/scope.json" 2>/dev/null || echo "unknown")
 [ "$STATUS" != "in_progress" ] && exit 0
 
 TIMESTAMP=$(date +%H:%M:%S)
 
 case "$TOOL_NAME" in
   Bash)
-    COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null)
+    COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null || true)
     [ -z "$COMMAND" ] && exit 0
 
     # Skip noise: pure file reads, git ops, test commands
@@ -41,8 +41,8 @@ case "$TOOL_NAME" in
     esac
 
     # Extract output summary (first 300 chars of stdout)
-    OUTPUT_SUMMARY=$(echo "$INPUT" | jq -r '.tool_response.stdout // empty' 2>/dev/null | head -c 300)
-    EXIT_CODE=$(echo "$INPUT" | jq -r '.tool_response.exitCode // empty' 2>/dev/null)
+    OUTPUT_SUMMARY=$(echo "$INPUT" | jq -r '.tool_response.stdout // empty' 2>/dev/null | head -c 300 || true)
+    EXIT_CODE=$(echo "$INPUT" | jq -r '.tool_response.exitCode // empty' 2>/dev/null || true)
 
     # Truncate command for log
     SHORT_CMD=$(echo "$COMMAND" | head -c 200)
@@ -59,9 +59,9 @@ case "$TOOL_NAME" in
 
   Agent)
     # Log subagent dispatch — critical for debugging
-    SUBAGENT=$(echo "$INPUT" | jq -r '.tool_input.subagent_type // .tool_input.description // empty' 2>/dev/null)
-    DESCRIPTION=$(echo "$INPUT" | jq -r '.tool_input.description // empty' 2>/dev/null)
-    PROMPT_PREVIEW=$(echo "$INPUT" | jq -r '.tool_input.prompt // empty' 2>/dev/null | head -c 150)
+    SUBAGENT=$(echo "$INPUT" | jq -r '.tool_input.subagent_type // .tool_input.description // empty' 2>/dev/null || true)
+    DESCRIPTION=$(echo "$INPUT" | jq -r '.tool_input.description // empty' 2>/dev/null || true)
+    PROMPT_PREVIEW=$(echo "$INPUT" | jq -r '.tool_input.prompt // empty' 2>/dev/null | head -c 150 || true)
 
     {
       printf '\n## [%s] %s — Dispatch Agent\n' "$TIMESTAMP" "$AGENT_TYPE"
@@ -72,7 +72,7 @@ case "$TOOL_NAME" in
     ;;
 
   Write|Edit)
-    FILE_PATH=$(echo "$INPUT" | jq -r '.tool_input.file_path // empty' 2>/dev/null)
+    FILE_PATH=$(echo "$INPUT" | jq -r '.tool_input.file_path // empty' 2>/dev/null || true)
     [ -z "$FILE_PATH" ] && exit 0
 
     # Only log engagement-related file writes (skip tmp, etc.)
