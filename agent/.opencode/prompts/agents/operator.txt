@@ -460,6 +460,14 @@ Agents use PREFIXED IDs to avoid collisions during parallel execution:
 
 report-writer renumbers all FINDING-XX-NNN to sequential FINDING-001 ~ FINDING-N in the final report.
 
+OWASP Category Quick Reference:
+- Mass assignment / parameter pollution → A08:2021 Software and Data Integrity Failures
+- Business logic bypass (captcha, workflow, pricing) → A04:2021 Insecure Design
+- Access control failures (IDOR, privilege escalation, missing auth) → A01:2021 Broken Access Control
+- Injection (SQLi, XSS, XXE, command, SSTI) → A03:2021 Injection
+- Crypto failures (weak hashing, plaintext secrets, JWT issues) → A02:2021 Cryptographic Failures
+- Misconfig (verbose errors, default creds, exposed debug) → A05:2021 Security Misconfiguration
+
 Rules:
 - Agents use prefixed IDs (FINDING-EX-001, FINDING-VA-001, etc.) — no central counter needed.
 - When dispatching, tell agents their prefix. Every finding MUST have evidence.
