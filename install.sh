@@ -1,16 +1,26 @@
 #!/bin/bash
 # install.sh — RedTeam Agent installation script
 # Usage: ./install.sh              (from project root)
+#        ./install.sh --dry-run    (validate everything without writing)
 #    or: bash <(curl -fsSL URL)    (auto-clones then installs)
 set -e
+
+DRY_RUN=false
+[ "${1:-}" = "--dry-run" ] && DRY_RUN=true
 
 REPO_URL="https://github.com/NeoTheCapt/RedteamAgent.git"
 INSTALL_DIR="${REDTEAM_DIR:-$HOME/redteam-agent}"
 
 echo ""
+if $DRY_RUN; then
+echo "╔══════════════════════════════════════════════════════════════╗"
+echo "║   RedTeam Agent — DRY RUN (no files will be written)        ║"
+echo "╚══════════════════════════════════════════════════════════════╝"
+else
 echo "╔══════════════════════════════════════════════════════════════╗"
 echo "║   RedTeam Agent — Installation Script                       ║"
 echo "╚══════════════════════════════════════════════════════════════╝"
+fi
 echo ""
 
 # Colors
@@ -153,10 +163,16 @@ echo ""
 
 # Build agent definitions from source (.txt → .md/.toml)
 echo "Building agent definitions from source..."
-bash "$SOURCE_DIR/scripts/build-agents.sh"
+if $DRY_RUN; then
+    bash "$SOURCE_DIR/scripts/build-agents.sh" --dry-run
+else
+    bash "$SOURCE_DIR/scripts/build-agents.sh"
+fi
 echo ""
 
-if [ "$SOURCE_DIR" = "$INSTALL_DIR" ]; then
+if $DRY_RUN; then
+    info "[DRY RUN] Would install to $INSTALL_DIR — skipping copy"
+elif [ "$SOURCE_DIR" = "$INSTALL_DIR" ]; then
     info "Source and install directories are the same — skipping copy"
 else
     mkdir -p "$INSTALL_DIR"
@@ -180,38 +196,51 @@ echo ""
 echo "Step 3: Building Docker images..."
 echo ""
 
-info "This may take several minutes on first run (downloading Kali base image ~2GB)"
-echo ""
-
-# Pull Katana (official image)
-info "Pulling projectdiscovery/katana:latest..."
-if docker pull projectdiscovery/katana:latest >/dev/null 2>&1; then
-    ok "Katana image: $(docker images projectdiscovery/katana:latest --format '{{.Size}}')"
+if $DRY_RUN; then
+    info "[DRY RUN] Would build 3 Docker images — skipping"
+    # Just verify Dockerfiles exist
+    for df in docker/kali-redteam/Dockerfile docker/mitmproxy/Dockerfile docker/docker-compose.yml; do
+        if [ -f "$df" ]; then
+            ok "Found: $df"
+        else
+            fail "Missing: $df"
+            ERRORS=$((ERRORS + 1))
+        fi
+    done
 else
-    fail "Failed to pull Katana image"
-    ERRORS=$((ERRORS + 1))
-fi
+    info "This may take several minutes on first run (downloading Kali base image ~2GB)"
+    echo ""
 
-# Build kali-redteam
-info "Building kali-redteam (Kali toolbox)... this is the largest image"
-if cd docker && docker compose build kali-redteam 2>&1 | tail -3; then
-    cd ..
-    ok "kali-redteam: $(docker images kali-redteam:latest --format '{{.Size}}')"
-else
-    cd ..
-    fail "Failed to build kali-redteam"
-    ERRORS=$((ERRORS + 1))
-fi
+    # Pull Katana (official image)
+    info "Pulling projectdiscovery/katana:latest..."
+    if docker pull projectdiscovery/katana:latest >/dev/null 2>&1; then
+        ok "Katana image: $(docker images projectdiscovery/katana:latest --format '{{.Size}}')"
+    else
+        fail "Failed to pull Katana image"
+        ERRORS=$((ERRORS + 1))
+    fi
 
-# Build mitmproxy
-info "Building redteam-proxy (mitmproxy)..."
-if cd docker && docker compose build mitmproxy 2>&1 | tail -3; then
-    cd ..
-    ok "redteam-proxy: $(docker images redteam-proxy:latest --format '{{.Size}}')"
-else
-    cd ..
-    fail "Failed to build redteam-proxy"
-    ERRORS=$((ERRORS + 1))
+    # Build kali-redteam
+    info "Building kali-redteam (Kali toolbox)... this is the largest image"
+    if cd docker && docker compose build kali-redteam 2>&1 | tail -3; then
+        cd ..
+        ok "kali-redteam: $(docker images kali-redteam:latest --format '{{.Size}}')"
+    else
+        cd ..
+        fail "Failed to build kali-redteam"
+        ERRORS=$((ERRORS + 1))
+    fi
+
+    # Build mitmproxy
+    info "Building redteam-proxy (mitmproxy)..."
+    if cd docker && docker compose build mitmproxy 2>&1 | tail -3; then
+        cd ..
+        ok "redteam-proxy: $(docker images redteam-proxy:latest --format '{{.Size}}')"
+    else
+        cd ..
+        fail "Failed to build redteam-proxy"
+        ERRORS=$((ERRORS + 1))
+    fi
 fi
 
 echo ""
@@ -223,48 +252,65 @@ fi
 # ============================================
 # Step 4: Verify images
 # ============================================
-echo ""
-echo "Step 4: Verifying images..."
-echo ""
-
-source scripts/lib/container.sh 2>/dev/null
-if check_images; then
-    ok "All 3 images verified"
+if $DRY_RUN; then
+    echo ""
+    echo "Step 4: [DRY RUN] Skipping image verification"
+    echo ""
+    echo "Step 5: [DRY RUN] Skipping smoke test"
+    echo ""
+    echo "Step 6: Verifying script files..."
+    echo ""
+    for script in scripts/build-agents.sh scripts/dispatcher.sh scripts/lib/container.sh scripts/hooks/scope-check.sh scripts/hooks/post-tool-log.sh; do
+        if [ -f "$script" ]; then
+            ok "Found: $script"
+        else
+            warn "Missing: $script"
+        fi
+    done
 else
-    fail "Image verification failed"
-    exit 1
+    echo ""
+    echo "Step 4: Verifying images..."
+    echo ""
+
+    source scripts/lib/container.sh 2>/dev/null
+    if check_images; then
+        ok "All 3 images verified"
+    else
+        fail "Image verification failed"
+        exit 1
+    fi
+
+    # ============================================
+    # Step 5: Quick smoke test
+    # ============================================
+    echo ""
+    echo "Step 5: Quick smoke test..."
+    echo ""
+
+    mkdir -p /tmp/redteam-test
+    export ENGAGEMENT_DIR="/tmp/redteam-test"
+    if run_tool echo "Container execution works" >/dev/null 2>&1; then
+        ok "run_tool: container execution works"
+    else
+        fail "run_tool: container execution failed"
+        ERRORS=$((ERRORS + 1))
+    fi
+
+    TOOL_COUNT=$(run_tool sh -c 'for t in nmap ffuf sqlmap nikto whatweb hydra gobuster nuclei wfuzz; do command -v $t >/dev/null 2>&1 && echo ok; done' 2>/dev/null | wc -l | tr -d ' ')
+    ok "Tools available in container: $TOOL_COUNT/9"
+
+    rm -r /tmp/redteam-test 2>/dev/null
+
+    # ============================================
+    # Step 6: Set permissions
+    # ============================================
+    echo ""
+    echo "Step 6: Setting permissions..."
+    echo ""
+
+    chmod +x scripts/*.sh scripts/lib/*.sh scripts/hooks/*.sh 2>/dev/null
+    ok "Script permissions set"
 fi
-
-# ============================================
-# Step 5: Quick smoke test
-# ============================================
-echo ""
-echo "Step 5: Quick smoke test..."
-echo ""
-
-mkdir -p /tmp/redteam-test
-export ENGAGEMENT_DIR="/tmp/redteam-test"
-if run_tool echo "Container execution works" >/dev/null 2>&1; then
-    ok "run_tool: container execution works"
-else
-    fail "run_tool: container execution failed"
-    ERRORS=$((ERRORS + 1))
-fi
-
-TOOL_COUNT=$(run_tool sh -c 'for t in nmap ffuf sqlmap nikto whatweb hydra gobuster nuclei wfuzz; do command -v $t >/dev/null 2>&1 && echo ok; done' 2>/dev/null | wc -l | tr -d ' ')
-ok "Tools available in container: $TOOL_COUNT/9"
-
-rm -r /tmp/redteam-test 2>/dev/null
-
-# ============================================
-# Step 6: Set permissions
-# ============================================
-echo ""
-echo "Step 6: Setting permissions..."
-echo ""
-
-chmod +x scripts/*.sh scripts/lib/*.sh scripts/hooks/*.sh 2>/dev/null
-ok "Script permissions set"
 
 # ============================================
 # Done
