@@ -138,69 +138,70 @@ After all sub-engagements complete:
 
 ## Step 2: Create Engagement Directory and Files
 
-**IMPORTANT: Use bash commands to create all engagement files. Do NOT use the Write tool — it will fail on new files.**
+**IMPORTANT: Use bash commands to create files. Do NOT use the Write tool.**
 
-Determine the directory name:
-- Format: `engagements/<YYYY-MM-DD>-<HHMMSS>-<hostname>/`
-- Use today's date in `YYYY-MM-DD` format and current time in `HHMMSS` format.
-- Sanitize the hostname (replace dots with dashes, remove special characters).
-- The timestamp ensures uniqueness — no collision even for multiple engagements against the same target on the same day.
+**CRITICAL: Run initialization as SEPARATE bash commands. Do NOT chain heredocs with `&&` — this causes zsh parse errors. Each bash tool call below is a separate invocation.**
 
-Use a single bash command block to create everything.
-
-**CRITICAL: Do NOT use single-quoted heredoc delimiters (like `<< 'SCOPE'`) for content that
-contains shell variables or command substitutions. Use unquoted delimiters (like `<< SCOPE`)
-so that `$VARIABLE` and `$(command)` are properly expanded.**
-
-Compute all values FIRST as shell variables, then write files using those variables:
+### Step 2a: Create directory and compute variables
 
 ```bash
-# Compute values first
+TARGET="<full target URL>"
 DATE=$(date +%Y-%m-%d)
 TIME=$(date +%H%M%S)
-HOSTNAME_CLEAN="<hostname with dots replaced by dashes>"
-TARGET="<full target URL>"
-HOSTNAME_RAW="<original hostname>"
-PORT=<port number>
-START_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+HOST="<hostname>"
+PORT=<port>
+PROTO="<http or https>"
+ISO=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+DIR="engagements/${DATE}-${TIME}-${HOST}"
+mkdir -p "$DIR"/{tools,downloads,scans,pids}
+echo "$DIR"
+```
 
-DIR="engagements/${DATE}-${TIME}-${HOSTNAME_CLEAN}"
-mkdir -p "$DIR/tools" "$DIR/downloads" "$DIR/scans" "$DIR/pids"
+### Step 2b: Write scope.json (separate bash call)
 
-# NOTE: Use unquoted heredoc (no quotes around EOF) so variables expand
+```bash
+DIR="<DIR from 2a>"
 cat > "$DIR/scope.json" << EOF
 {
-  "target": "${TARGET}",
-  "hostname": "${HOSTNAME_RAW}",
-  "port": ${PORT},
-  "scope": ["${HOSTNAME_RAW}", "*.${HOSTNAME_RAW}"],
-  "mode": "ctf",
+  "target": "<target>",
+  "hostname": "<host>",
+  "port": <port>,
+  "protocol": "<proto>",
+  "mode": "single",
+  "confirm_mode": "auto",
   "status": "in_progress",
-  "start_time": "${START_TIME}",
+  "current_phase": "recon",
   "phases_completed": [],
-  "current_phase": "recon"
+  "started_at": "<ISO>"
 }
 EOF
+```
+
+### Step 2c: Initialize cases.db (separate bash call)
+
+```bash
+DIR="<DIR from 2a>"
+sqlite3 "$DIR/cases.db" < scripts/schema.sql
+```
+
+### Step 2d: Write log.md, findings.md, intel.md, auth.json (separate bash call)
+
+```bash
+DIR="<DIR from 2a>"
 
 cat > "$DIR/log.md" << EOF
-# Engagement Log
-
-- **Target**: ${TARGET}
-- **Date**: ${DATE}
-- **Mode**: CTF
-- **Status**: In Progress
-
----
+# Engagement Log — <target>
+## $(date -u +%Y-%m-%dT%H:%M:%SZ) — Engagement initialized
+- Target: <target>
+- Mode: single target
 EOF
 
 cat > "$DIR/findings.md" << EOF
-# Findings
+# Findings — <target>
+EOF
 
-- **Target**: ${TARGET}
-- **Engagement Date**: ${DATE}
-- **Finding Count**: 0
-
----
+cat > "$DIR/auth.json" << EOF
+{}
 EOF
 
 cat > "$DIR/intel.md" << 'INTELEOF'
@@ -246,10 +247,9 @@ cat > "$DIR/intel.md" << 'INTELEOF'
 INTELEOF
 ```
 
-Replace all `<placeholder>` comments above with actual parsed values from Step 1.
-The key point: `$DATE`, `$START_TIME` etc. MUST be shell variables that expand at write time.
+Replace all `<placeholder>` values with actual parsed values from Step 1.
 
-## Step 3: Environment Check (Docker)
+## Step 3: Docker Environment Check
 
 All pentest tools run in Docker containers. Check prerequisites:
 
@@ -281,15 +281,7 @@ Wait for user to confirm images are built before proceeding.
 
 If Docker is not installed, the engagement CANNOT proceed. Tell the user to install Docker first.
 
-## Step 4: Initialize Case Queue
-
-Initialize the SQLite case queue database:
-
-```bash
-sqlite3 "$DIR/cases.db" < scripts/schema.sql
-```
-
-## Step 5: Configure Authentication
+## Step 4: Configure Authentication
 
 Present to user:
 ```
@@ -313,7 +305,7 @@ execute normally. Katana crawls without cookies, vulnerability tests run without
 headers. Collect and Consume phases still happen — they just test unauthenticated attack
 surface. The user can configure auth later at any time with `/auth`.
 
-## Step 6: Start Producers
+## Step 5: Start Producers
 
 Start the pipeline regardless of auth choice (skip or configured):
 
@@ -322,7 +314,7 @@ Start the pipeline regardless of auth choice (skip or configured):
    (Katana crawls without auth if skipped — still discovers unauthenticated endpoints)
 3. ALL subsequent phases (Recon → Collect → Consume & Test → Exploit → Report) proceed normally
 
-## Step 7: Begin Autonomous Engagement Loop
+## Step 6: Begin Autonomous Engagement Loop
 
 ### Phase 1: RECON
 
