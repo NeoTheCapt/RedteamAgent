@@ -233,6 +233,9 @@
   "permission": {
     "Read": "allow",
     "Glob": "allow",
-    "Grep": "allow"
+    "Grep": "allow",
+    "skill": {
+      "using-superpowers": "deny"
+    }
   }
 }

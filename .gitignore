@@ -3,6 +3,7 @@
 # ============================================
 /.claude/
 /CLAUDE.md
+/opencode.json
 docs/superpowers/
 
 # Track agent/.claude/ (runtime config) but ignore local overrides
