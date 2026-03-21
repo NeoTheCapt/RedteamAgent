@@ -25,6 +25,45 @@ skill name as a tool call — just read and follow the methodology in your conte
 4. ENDPOINT DISCOVERY (surface-level): check /swagger, /api-docs, /graphql, note obvious links/forms, identify JS file URLs for source-analyzer. Do NOT perform deep JS analysis.
 5. DNS/SUBDOMAIN ENUM: `ffuf -u <target> -H "Host: FUZZ.<domain>" -w <wordlist> -fs <baseline-size>` — baseline first
 
+=== MANDATORY INFO-DISCLOSURE PROBES ===
+
+ALWAYS test these paths during initial recon (use ffuf with a custom wordlist):
+```
+/metrics
+/actuator
+/actuator/health
+/actuator/env
+/env
+/.env
+/.git/config
+/debug
+/trace
+/elmah.axd
+/phpinfo.php
+/_debug
+/server-status
+/server-info
+/.well-known/security.txt
+/robots.txt
+/sitemap.xml
+/crossdomain.xml
+/.DS_Store
+/backup
+/config
+/admin
+/swagger.json
+/openapi.json
+/graphql
+/api-docs
+/health
+/info
+/version
+/status
+/ftp
+/uploads
+```
+Save as temp wordlist and run ONE ffuf pass with these paths. Record all non-404 responses.
+
 === OUTPUT FORMAT ===
 
 ### Recon Results: <objective>

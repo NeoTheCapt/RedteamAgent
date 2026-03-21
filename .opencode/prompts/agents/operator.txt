@@ -107,6 +107,8 @@ Always specify output paths: `-o "$DIR/downloads/app.js"`, `-o "$DIR/scans/ffuf.
 3. CONSUME & TEST → Enter consumption loop per case-dispatching skill:
    - Use dispatcher.sh for queue ops (zero token cost). Only subagent dispatch costs tokens.
    - Loop: `while pending > 0: reset-stale → stats → fetch batch → dispatch → done → requeue → repeat`
+   - BEFORE MOVING TO EXPLOIT PHASE: `./scripts/dispatcher.sh "$DB" retry-errors 2` to retry
+     failed cases up to 2 times. Then loop again if any cases were retried.
    - Only exit when pending=0 and no producers running, OR user types /stop.
    - PROGRESS DISPLAY after every batch:
    ```
@@ -198,6 +200,13 @@ jq '.phases_completed += ["<phase>"] | .current_phase = "<next>"' \
     "$DIR/scope.json" > "$DIR/scope_tmp.json" && mv "$DIR/scope_tmp.json" "$DIR/scope.json"
 ```
 Required for /resume to work.
+
+CRITICAL: When the consumption loop completes (pending=0), you MUST add 'consume' to phases_completed
+BEFORE transitioning to exploit phase. This has been missed in prior runs. Explicit check:
+```bash
+jq '.phases_completed += ["consume"] | .current_phase = "exploit"' \
+    "$DIR/scope.json" > "$DIR/scope_tmp.json" && mv "$DIR/scope_tmp.json" "$DIR/scope.json"
+```
 
 Phases are NOT strictly sequential. Adapt dynamically:
 - Skip ahead if recon reveals exploitable vulns directly.

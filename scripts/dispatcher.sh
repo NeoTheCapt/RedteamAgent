@@ -16,6 +16,8 @@ if [[ -z "$DB" || -z "$ACTION" ]]; then
   echo "  done <id_list>                 Mark comma-separated IDs as done"
   echo "  error <id_list>                Mark comma-separated IDs as error"
   echo "  reset-stale <minutes>          Recover stuck processing cases"
+  echo "  retry-errors [max_retries]     Retry error cases (default max: 2)"
+  echo "  migrate                        Add retry_count column if missing"
   echo "  requeue                        Read JSON lines from stdin, insert as pending"
   exit 1
 fi
@@ -23,6 +25,9 @@ fi
 sql() {
   sqlite3 "$DB" ".timeout 5000" "$1"
 }
+
+# Auto-migrate: add retry_count column if missing
+sql "ALTER TABLE cases ADD COLUMN retry_count INTEGER DEFAULT 0;" 2>/dev/null || true
 
 case "$ACTION" in
   stats)
@@ -81,8 +86,23 @@ case "$ACTION" in
       echo "ERROR: id_list must contain only numeric IDs separated by commas" >&2
       exit 1
     fi
-    sql "UPDATE cases SET status='error' WHERE id IN (${ID_LIST});"
+    sql "UPDATE cases SET status='error', retry_count = COALESCE(retry_count,0) + 1 WHERE id IN (${ID_LIST});"
     echo "Marked error: ${ID_LIST}"
+    ;;
+
+  migrate)
+    sql "ALTER TABLE cases ADD COLUMN retry_count INTEGER DEFAULT 0;" 2>/dev/null || true
+    ;;
+
+  retry-errors)
+    MAX_RETRIES="${3:-2}"
+    if ! [[ "$MAX_RETRIES" =~ ^[0-9]+$ ]]; then
+      echo "ERROR: max_retries must be a positive integer" >&2
+      exit 1
+    fi
+    BEFORE=$(sql "SELECT COUNT(*) FROM cases WHERE status='error' AND COALESCE(retry_count,0) < ${MAX_RETRIES};")
+    sql "UPDATE cases SET status='pending', assigned_agent=NULL, consumed_at=NULL WHERE status='error' AND COALESCE(retry_count,0) < ${MAX_RETRIES};"
+    echo "Retried ${BEFORE} error case(s) (max retries: ${MAX_RETRIES})"
     ;;
 
   reset-stale)
@@ -133,7 +153,7 @@ case "$ACTION" in
 
   *)
     echo "Unknown action: ${ACTION}"
-    echo "Usage: $0 <db_path> {stats|fetch|done|error|reset-stale|requeue}"
+    echo "Usage: $0 <db_path> {stats|fetch|done|error|reset-stale|retry-errors|migrate|requeue}"
     exit 1
     ;;
 esac

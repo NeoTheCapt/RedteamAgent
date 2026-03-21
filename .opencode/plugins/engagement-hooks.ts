@@ -234,13 +234,15 @@ export const EngagementHooksPlugin = async ({
       const command = String(input.args?.command || input.args || "")
       if (!command) return
 
-      // Deduplication: skip if same command was logged within the last 2 seconds
+      // Deduplication: skip if same command was logged within the last 3 seconds.
+      // Use first 200 chars to handle minor whitespace differences in long commands.
       const now = Date.now()
-      if (command === lastLoggedCommand && now - lastLoggedTimestamp < 2000) {
+      const commandKey = command.slice(0, 200)
+      if (commandKey === lastLoggedCommand && now - lastLoggedTimestamp < 3000) {
         log("debug", "[Engagement] Skipping duplicate log entry")
         return
       }
-      lastLoggedCommand = command
+      lastLoggedCommand = commandKey
       lastLoggedTimestamp = now
 
       // Try to extract engagement dir from the command itself (handles multiple concurrent engagements)

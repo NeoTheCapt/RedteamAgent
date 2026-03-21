@@ -63,6 +63,11 @@ while IFS= read -r line; do
     url=$(printf '%s' "$url" | awk '{print $1}')
     method=$(printf '%s' "$method" | tr '[:lower:]' '[:upper:]')
 
+    # Skip URLs containing ffuf/fuzzing placeholders
+    if [[ "$url" == *"FUZZ"* || "$url" == *"PARAM"* || "$url" == *"{{"* ]]; then
+        continue
+    fi
+
     # Skip if URL is empty
     [[ -z "$url" ]] && continue
 

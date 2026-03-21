@@ -118,6 +118,33 @@ Active Directory attack techniques. Used by: exploit-developer, operator.
 | `ad-persistence.md` | DCSync, DCShadow, AdminSDHolder, shadow credentials, trust abuse |
 | `adcs-attacks.md` | Certificate template abuse (ESC1), PetitPotam + NTLM relay, Certify/Certipy |
 
+## payloads/ — Attack Payload Library (from PayloadsAllTheThings)
+
+Copy-pasteable payloads organized by attack type. Used by: exploit-developer, vulnerability-analyst, fuzzer.
+
+| File | Category |
+|------|----------|
+| `sqli-payloads.md` | UNION, blind, error-based, time-based, WAF bypass, auth bypass per DB type |
+| `nosql-injection-payloads.md` | MongoDB operators ($gt, $ne, $regex, $where), auth bypass, blind extraction |
+| `xss-payloads.md` | DOM XSS, reflected, stored, filter bypass, CSP bypass, polyglots |
+| `ssti-payloads.md` | Per-engine detection and RCE (Jinja2, Twig, Pug, Freemarker, ERB, etc.) |
+| `command-injection-payloads.md` | Blind detection, filter bypass, Linux/Windows, argument injection |
+| `xxe-payloads.md` | File read, OOB/blind XXE, DoS, context-specific (SOAP, SVG, DOCX) |
+| `ssrf-payloads.md` | URL schemas, IP bypass, cloud metadata (AWS/GCP/Azure) |
+| `jwt-payloads.md` | alg:none, key confusion (RS256→HS256), JWK/kid injection, weak secret brute-force |
+| `file-inclusion-payloads.md` | Path traversal, PHP wrappers, null byte, log poisoning, interesting files |
+| `directory-traversal-payloads.md` | Encoding variants, null byte, double URL encoding, OS-specific paths |
+| `upload-payloads.md` | Extension bypass, Content-Type bypass, magic bytes, SVG XSS, zip slip |
+| `deserialization-payloads.md` | Java (ysoserial), PHP, Python (pickle), Node.js, .NET |
+| `cors-payloads.md` | Null origin, subdomain wildcard, pre-flight bypass |
+| `csrf-payloads.md` | Auto-submit forms, JSON CSRF, token bypass techniques |
+| `graphql-payloads.md` | Introspection, batching, field suggestion, injection in variables |
+| `request-smuggling-payloads.md` | CL.TE, TE.CL, TE.TE obfuscation, HTTP/2 downgrade |
+| `race-condition-payloads.md` | HTTP/2 single-packet, limit overrun, multi-endpoint race |
+| `open-redirect-payloads.md` | URL parsing confusion, protocol-relative, unicode normalization |
+| `business-logic-payloads.md` | Negative quantity, coupon abuse, payment bypass, mass assignment |
+| `info-disclosure-probes.md` | Standard endpoints checklist (/metrics, /.env, /actuator, cloud metadata) |
+
 ## tools/ — CLI Tool Cheatsheets
 
 Quick-reference per tool, organized by usage phase.
