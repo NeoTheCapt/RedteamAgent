@@ -244,10 +244,49 @@ DURING EXPLOIT PHASE:
   Dispatch exploit-developer for each that hasn't been fully exploited yet.
   Multiple exploit-developers can run in parallel on independent findings.
 
-KEY: You are the bridge. vuln-analyst and exploit-developer never talk directly.
-You read vuln-analyst output, extract the relevant details, and construct the
-dispatch context for exploit-developer. Do NOT just forward raw output — translate
-it into the exploit-developer's INPUT CONTRACT format.
+KEY: You are the bridge. No agents talk directly — ALL handoffs go through you.
+
+=== ALL AGENT HANDOFF PROTOCOLS ===
+
+**RECON-SPECIALIST → next agents:**
+  recon outputs: endpoint list, technologies, JS file URLs, parameters
+  You do:
+  1. Pass JS file URLs → dispatch source-analyzer with those URLs
+  2. Import ALL discovered endpoints → `recon_ingest.sh` → cases.db
+  3. Record technology stack findings → findings.md (INFO severity)
+  4. If recon discovers obvious vulns (default creds, open admin) → dispatch exploit-developer directly
+
+**SOURCE-ANALYZER → queue + findings:**
+  source outputs: new API endpoints, routes, secrets/tokens, config objects
+  You do:
+  1. New endpoints → `echo JSON | ./scripts/dispatcher.sh $DB requeue` (back to queue)
+  2. Secrets/tokens found → record to findings.md immediately (HIGH/MEDIUM severity)
+  3. Interesting routes → requeue as new cases for vuln-analyst to test
+
+**VULN-ANALYST → exploit-developer / fuzzer:**
+  (see VULN→EXPLOIT HANDOFF above for full protocol)
+
+**FUZZER → vuln-analyst / findings:**
+  fuzzer outputs: discovered paths, valid parameters, anomalous responses
+  You do:
+  1. New paths/endpoints discovered → requeue into cases.db
+  2. Anomalous responses (different size/status for specific payloads) →
+     dispatch vuln-analyst with: "fuzzer found anomaly at <endpoint> with payload <X>,
+     response differs from baseline. Analyze if this is exploitable."
+  3. Confirmed findings (e.g., valid credentials found) → record to findings.md directly
+
+**EXPLOIT-DEVELOPER → findings + next steps:**
+  exploit outputs: CONFIRMED/PARTIAL/FAILED status, extracted data, PoC
+  You do:
+  1. CONFIRMED → record to findings.md with full evidence (HIGH severity)
+  2. CONFIRMED + extracted credentials → use creds to configure auth.json,
+     then trigger POST-AUTH RE-COLLECTION (re-crawl with new access)
+  3. CONFIRMED + reveals new attack surface → requeue new endpoints
+  4. PARTIAL → record as MEDIUM, consider dispatching fuzzer for deeper testing
+  5. FAILED → record attempt in log.md, move to next finding
+
+**REPORT-WRITER ← you provide:**
+  engagement directory path containing: scope.json, log.md, findings.md, cases.db
 
 === CONTAINERIZED TOOL EXECUTION ===
 
