@@ -1,14 +1,17 @@
 # ============================================
-# Claude Code / IDE
+# Claude Code / IDE (dev workspace)
 # ============================================
-.claude/
+/.claude/
 docs/superpowers/
+
+# Track agent/.claude/ (runtime config) but ignore local overrides
+!agent/.claude/
 
 # ============================================
 # Engagement artifacts (per-engagement, never commit)
 # ============================================
-engagements/*/
-!engagements/.gitkeep
+agent/engagements/*/
+!agent/engagements/.gitkeep
 
 # ============================================
 # Pentest tool output & artifacts
@@ -60,7 +63,7 @@ dumps/
 exfil/
 *.dump
 *.sql
-!scripts/schema.sql
+!agent/scripts/schema.sql
 *.bak
 *.db
 *.sqlite
@@ -83,7 +86,7 @@ screenshots/
 # Generated scripts & payloads
 # ============================================
 payloads/
-!references/payloads/
+!agent/references/payloads/
 exploits/
 shells/
 *.elf
@@ -125,3 +128,16 @@ __pycache__/
 *.pyc
 .env
 .env.*
+
+# ============================================
+# CLI runtime files (local overrides, state, caches)
+# ============================================
+
+# Claude Code
+agent/.claude/settings.local.json
+agent/.claude/todos.json
+agent/.claude/statsig/
+
+# Codex
+agent/.codex/config.toml
+agent/.codex/state/

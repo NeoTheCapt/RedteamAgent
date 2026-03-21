@@ -36,6 +36,10 @@ export const EngagementHooksPlugin = async ({
   const log = (level: "debug" | "info" | "warn" | "error", message: string) =>
     client.app.log({ body: { service: "engagement", level, message } })
 
+  // Track current agent for log attribution.
+  // Updated by chat.message hook, consumed by tool.execute.after.
+  let currentAgent = "operator"
+
   // Deduplication: track last logged command to prevent double-logging.
   // OpenCode may fire tool.execute.after multiple times for the same command.
   let lastLoggedCommand = ""
@@ -185,6 +189,26 @@ export const EngagementHooksPlugin = async ({
     },
 
     /**
+     * chat.message
+     *
+     * Track which agent is currently active for log attribution.
+     * The `agent` field in the input identifies the current agent.
+     */
+    "chat.message": async (
+      input: {
+        sessionID: string
+        agent?: string
+        model?: { providerID: string; modelID: string }
+        messageID?: string
+        variant?: string
+      },
+    ) => {
+      if (input.agent) {
+        currentAgent = input.agent
+      }
+    },
+
+    /**
      * tool.execute.before
      *
      * For bash tool calls, extract hostnames/URLs from the command and
@@ -274,13 +298,13 @@ export const EngagementHooksPlugin = async ({
 
       const entry = [
         "",
-        `## [${timestamp}]`,
+        `## [${timestamp}] ${currentAgent} — Bash`,
         "",
         "```bash",
         command,
         "```",
         "",
-        summary ? `**Output summary:** ${summary}` : "*No output*",
+        summary ? `**Output**: ${summary}` : "*No output*",
         "",
       ].join("\n")
 

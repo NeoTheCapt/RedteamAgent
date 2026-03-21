@@ -13,20 +13,6 @@ echo "║   RedTeam Agent — Installation Script                       ║"
 echo "╚══════════════════════════════════════════════════════════════╝"
 echo ""
 
-# If not in a project directory (no .opencode/opencode.json), clone first
-if [ ! -f ".opencode/opencode.json" ]; then
-    echo "Not in project directory. Cloning to $INSTALL_DIR ..."
-    if [ -d "$INSTALL_DIR/.opencode" ]; then
-        echo "Directory $INSTALL_DIR already exists. Updating..."
-        cd "$INSTALL_DIR" && git pull origin dev 2>/dev/null || true
-    else
-        git clone -b dev "$REPO_URL" "$INSTALL_DIR"
-        cd "$INSTALL_DIR"
-    fi
-    echo "Working in: $(pwd)"
-    echo ""
-fi
-
 # Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -40,6 +26,27 @@ warn() { echo -e "  ${YELLOW}[WARN]${NC} $1"; }
 info() { echo -e "  ${BLUE}[INFO]${NC} $1"; }
 
 ERRORS=0
+
+# Determine source directory: if we're in the project root (has agent/), use that
+# Otherwise, clone the repo first
+SOURCE_DIR=""
+if [ -d "agent/.opencode" ]; then
+    SOURCE_DIR="$(pwd)/agent"
+    info "Found agent/ in current directory"
+elif [ -d ".opencode" ] && [ ! -d "agent" ]; then
+    # Old layout (pre-restructure) — agent files in root
+    SOURCE_DIR="$(pwd)"
+    info "Found legacy layout (pre-restructure)"
+else
+    # Not in project directory — clone first
+    echo "Not in project directory. Cloning to /tmp/redteam-agent-src ..."
+    CLONE_DIR="/tmp/redteam-agent-src"
+    rm -rf "$CLONE_DIR"
+    git clone -b dev "$REPO_URL" "$CLONE_DIR"
+    SOURCE_DIR="$CLONE_DIR/agent"
+    echo "Working from: $SOURCE_DIR"
+    echo ""
+fi
 
 # ============================================
 # Step 1: Check prerequisites
@@ -78,14 +85,30 @@ else
     ERRORS=$((ERRORS + 1))
 fi
 
-# OpenCode
+# CLI tool — at least one of: claude, opencode, codex
+CLI_FOUND=""
+if command -v claude >/dev/null 2>&1; then
+    ok "Claude Code: $(claude --version 2>&1 | head -1 || echo 'installed')"
+    CLI_FOUND="claude"
+fi
 if command -v opencode >/dev/null 2>&1; then
     OPENCODE_VERSION=$(opencode --version 2>&1 | head -1 || echo "unknown")
     ok "OpenCode: $OPENCODE_VERSION"
-else
-    fail "OpenCode is not installed"
-    info "Install from: https://opencode.ai or npm install -g opencode-ai"
+    CLI_FOUND="${CLI_FOUND:+$CLI_FOUND, }opencode"
+fi
+if command -v codex >/dev/null 2>&1; then
+    ok "Codex: $(codex --version 2>&1 | head -1 || echo 'installed')"
+    CLI_FOUND="${CLI_FOUND:+$CLI_FOUND, }codex"
+fi
+
+if [ -z "$CLI_FOUND" ]; then
+    fail "No AI CLI tool found. Install at least one of:"
+    info "  Claude Code: https://docs.anthropic.com/en/docs/claude-code"
+    info "  OpenCode:    https://opencode.ai or npm install -g opencode-ai"
+    info "  Codex:       https://github.com/openai/codex"
     ERRORS=$((ERRORS + 1))
+else
+    info "CLI tools available: $CLI_FOUND"
 fi
 
 # curl
@@ -122,10 +145,34 @@ fi
 ok "All prerequisites satisfied"
 
 # ============================================
-# Step 2: Build Docker images
+# Step 2: Copy agent/ to install directory
 # ============================================
 echo ""
-echo "Step 2: Building Docker images..."
+echo "Step 2: Installing agent to $INSTALL_DIR ..."
+echo ""
+
+if [ "$SOURCE_DIR" = "$INSTALL_DIR" ]; then
+    info "Source and install directories are the same — skipping copy"
+else
+    mkdir -p "$INSTALL_DIR"
+    # Copy agent contents (not the agent/ dir itself) to install dir
+    # Use rsync if available, otherwise cp
+    if command -v rsync >/dev/null 2>&1; then
+        rsync -a --delete "$SOURCE_DIR/" "$INSTALL_DIR/"
+    else
+        rm -rf "$INSTALL_DIR"/*
+        cp -a "$SOURCE_DIR"/. "$INSTALL_DIR/"
+    fi
+    ok "Agent files installed to $INSTALL_DIR"
+fi
+
+cd "$INSTALL_DIR"
+
+# ============================================
+# Step 3: Build Docker images
+# ============================================
+echo ""
+echo "Step 3: Building Docker images..."
 echo ""
 
 info "This may take several minutes on first run (downloading Kali base image ~2GB)"
@@ -169,10 +216,10 @@ if [ $ERRORS -gt 0 ]; then
 fi
 
 # ============================================
-# Step 3: Verify images
+# Step 4: Verify images
 # ============================================
 echo ""
-echo "Step 3: Verifying images..."
+echo "Step 4: Verifying images..."
 echo ""
 
 source scripts/lib/container.sh 2>/dev/null
@@ -184,13 +231,12 @@ else
 fi
 
 # ============================================
-# Step 4: Test container execution
+# Step 5: Quick smoke test
 # ============================================
 echo ""
-echo "Step 4: Quick smoke test..."
+echo "Step 5: Quick smoke test..."
 echo ""
 
-# Test run_tool
 mkdir -p /tmp/redteam-test
 export ENGAGEMENT_DIR="/tmp/redteam-test"
 if run_tool echo "Container execution works" >/dev/null 2>&1; then
@@ -200,44 +246,20 @@ else
     ERRORS=$((ERRORS + 1))
 fi
 
-# Test tool availability inside container
 TOOL_COUNT=$(run_tool sh -c 'for t in nmap ffuf sqlmap nikto whatweb hydra gobuster nuclei wfuzz; do command -v $t >/dev/null 2>&1 && echo ok; done' 2>/dev/null | wc -l | tr -d ' ')
 ok "Tools available in container: $TOOL_COUNT/9"
 
-# Cleanup
 rm -r /tmp/redteam-test 2>/dev/null
 
 # ============================================
-# Step 5: Set executable permissions
+# Step 6: Set permissions
 # ============================================
 echo ""
-echo "Step 5: Setting permissions..."
+echo "Step 6: Setting permissions..."
 echo ""
 
-chmod +x scripts/*.sh scripts/lib/*.sh 2>/dev/null
+chmod +x scripts/*.sh scripts/lib/*.sh scripts/hooks/*.sh 2>/dev/null
 ok "Script permissions set"
-
-# ============================================
-# Step 6: Check OpenCode config
-# ============================================
-echo ""
-echo "Step 6: Checking OpenCode configuration..."
-echo ""
-
-if [ -f ".opencode/opencode.json" ]; then
-    MODEL=$(jq -r '.model // empty' .opencode/opencode.json)
-    if [ -z "$MODEL" ]; then
-        warn "No model configured in .opencode/opencode.json"
-        info "Edit .opencode/opencode.json and set 'model' to your provider, e.g.:"
-        info '  "model": "anthropic/claude-sonnet-4-5"'
-        info '  "model": "openai/gpt-4o"'
-    else
-        ok "Model configured: $MODEL"
-    fi
-else
-    fail ".opencode/opencode.json not found"
-    ERRORS=$((ERRORS + 1))
-fi
 
 # ============================================
 # Done
@@ -250,15 +272,28 @@ if [ $ERRORS -gt 0 ]; then
 else
     echo -e "${GREEN}Installation complete!${NC}"
     echo ""
-    echo "  Next steps:"
+    echo "  Installed to: $INSTALL_DIR"
     echo ""
-    echo "  1. Configure your LLM model in .opencode/opencode.json:"
-    echo '     "model": "anthropic/claude-sonnet-4-5"'
+    echo "  Quick start — choose your CLI:"
     echo ""
-    echo "  2. Start the agent:"
-    echo "     opencode"
-    echo ""
-    echo "  3. Begin an engagement:"
-    echo "     /engage http://your-ctf-target:port"
+    if command -v claude >/dev/null 2>&1; then
+        echo "    Claude Code:"
+        echo "      cd $INSTALL_DIR && claude"
+        echo ""
+    fi
+    if command -v opencode >/dev/null 2>&1; then
+        echo "    OpenCode:"
+        echo "      cd $INSTALL_DIR && opencode"
+        echo "      Configure model in .opencode/opencode.json first:"
+        echo '        "model": "anthropic/claude-sonnet-4-5"'
+        echo ""
+    fi
+    if command -v codex >/dev/null 2>&1; then
+        echo "    Codex:"
+        echo "      cd $INSTALL_DIR && codex"
+        echo ""
+    fi
+    echo "  Then start an engagement:"
+    echo "    /engage http://your-ctf-target:port"
     echo ""
 fi
