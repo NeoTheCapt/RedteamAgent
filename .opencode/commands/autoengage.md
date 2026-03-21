@@ -38,7 +38,13 @@ Skip Docker/image checks — if they fail, the error will show in output.
 ## Step 3: Authentication
 
 - If `auth.json` exists from prior `/auth` or `/proxy` session → use it
-- Otherwise → skip. Do NOT ask user. Proceed with unauthenticated testing.
+- Otherwise → start unauthenticated, BUT:
+  1. During recon, if a registration endpoint is found (/register, /api/Users, /signup):
+     auto-register a test account and save credentials to auth.json
+  2. If hardcoded credentials are found in source code:
+     auto-login with them and save token to auth.json
+  3. After obtaining any auth → trigger POST-AUTH RE-COLLECTION automatically
+  Do NOT skip auth permanently. Actively seek ways to obtain it.
 
 ## Step 4: Execute ALL Phases Without Stopping
 
