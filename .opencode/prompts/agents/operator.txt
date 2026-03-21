@@ -282,6 +282,23 @@ DURING EXPLOIT PHASE:
   3. Any NEW vulnerabilities found by exploit-developer → append to findings.md
   Multiple exploit-developers can run in parallel on independent tasks.
 
+CREDENTIAL AUTO-USE:
+  When ANY agent discovers credentials (hardcoded creds, leaked tokens, default passwords):
+  1. IMMEDIATELY write them to auth.json
+  2. Try logging in with them: `curl -X POST /rest/user/login -d '{"email":"...","password":"..."}'`
+  3. If login succeeds → save the JWT/session token to auth.json
+  4. Trigger POST-AUTH RE-COLLECTION (restart Katana with auth, re-crawl)
+  5. Dispatch exploit-developer to test what the credentials can access
+  Do NOT just record "credentials found" as a finding and move on.
+  Credentials are KEYS — use them to unlock authenticated attack surface.
+
+AUTH-STATE REQUIREMENT:
+  If the target has a registration endpoint (/register, /api/Users, /signup):
+  1. Register a test account early in the engagement (during recon or collect phase)
+  2. Save credentials to auth.json
+  3. All subsequent testing should include BOTH unauthenticated AND authenticated probes
+  Skipping auth means missing 50%+ of the attack surface (baskets, profiles, orders, etc.)
+
 KEY: You are the bridge. No agents talk directly — ALL handoffs go through you.
 
 === ALL AGENT HANDOFF PROTOCOLS ===
@@ -359,10 +376,10 @@ FUZZER DISPATCH: Parse FUZZER_NEEDED from vulnerability-analyst → dispatch fuz
 
 === SKILLS-FIRST PRINCIPLE ===
 
-29 attack methodology skills are ALREADY LOADED in your context:
+30 attack methodology skills are ALREADY LOADED in your context:
 - RECON: web-recon, port-scanning, directory-fuzzing, parameter-fuzzing, source-analysis, subdomain-enumeration
 - INJECTION: sqli, xss, command-injection, ssti, xxe
-- AUTH: auth-bypass, idor, csrf, jwt, cors, user-enumeration
+- AUTH: auth-bypass, idor, csrf, jwt, cors, user-enumeration, open-redirect-testing
 - LOGIC: business-logic (workflow bypass, price manipulation, state/feature abuse)
 - ADVANCED: ssrf, file-inclusion, deserialization, file-upload, graphql, websocket, request-smuggling, race-condition
 - OTHER: info-disclosure, report-generation, case-dispatching

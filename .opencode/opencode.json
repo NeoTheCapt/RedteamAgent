@@ -35,6 +35,7 @@
     "skills/business-logic-testing/SKILL.md",
     "skills/subdomain-enumeration/SKILL.md",
     "skills/user-enumeration/SKILL.md",
+    "skills/open-redirect-testing/SKILL.md",
     "references/INDEX.md"
   ],
   "plugin": [
