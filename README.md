@@ -97,7 +97,8 @@ Phase 5: REPORT ── report-writer with coverage statistics
 
 | Command | Description |
 |---------|-------------|
-| `/engage <url>` | Start a new engagement |
+| `/engage <url>` | Start a new engagement (semi-autonomous) |
+| `/autoengage <url>` | **Fully autonomous** — zero interaction, max coverage |
 | `/resume` | Continue an interrupted engagement |
 | `/status` | Show progress dashboard with queue stats |
 | `/proxy start/stop` | Manage mitmproxy interception proxy |
@@ -243,7 +244,8 @@ Phases: [x] Recon  [x] Collect  [>] Consume & Test  [ ] Exploit  [ ] Report
 
 | 命令 | 说明 |
 |------|------|
-| `/engage <url>` | 开始新的渗透测试 |
+| `/engage <url>` | 开始新的渗透测试（半自主） |
+| `/autoengage <url>` | **全自动模式** — 零交互，最大覆盖 |
 | `/resume` | 从中断处继续 |
 | `/status` | 显示进度仪表盘 |
 | `/proxy start/stop` | 管理代理（浏览器抓包） |
