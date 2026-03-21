@@ -2,6 +2,7 @@
 # Claude Code / IDE (dev workspace)
 # ============================================
 /.claude/
+/CLAUDE.md
 docs/superpowers/
 
 # Track agent/.claude/ (runtime config) but ignore local overrides
