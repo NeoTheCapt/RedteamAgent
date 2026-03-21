@@ -1,25 +1,58 @@
 ---
 name: user-enumeration
-description: Discover endpoints that leak user existence — registration checks, login errors, password reset, API responses that differ for valid vs invalid users
+description: Discover any interface (HTTP, WebSocket, GraphQL, gRPC, or other) that distinguishes between existing and non-existing users through any observable difference
 origin: RedteamOpencode
 ---
 
 # User Enumeration
 
+## Core Principle
+
+User enumeration is NOT limited to HTTP APIs. ANY interface that accepts a user
+identifier (username, email, phone, ID) and produces ANY observable difference between
+existing and non-existing users is an enumeration vector. This includes:
+
+- HTTP REST APIs, HTML forms, AJAX endpoints
+- WebSocket messages (different response for valid vs invalid user)
+- GraphQL queries/mutations (different error object or null pattern)
+- gRPC services (different status code or error detail)
+- SMTP (VRFY, RCPT TO responses)
+- LDAP (bind response differences)
+- SSO/OAuth flows (redirect behavior differs)
+- Mobile API endpoints (often less protected than web)
+
+## Observable Differences (any of these = enumerable)
+
+- **Error message**: "user not found" vs "invalid password"
+- **HTTP status code**: 404 vs 401, 200 vs 409
+- **Response body size**: different byte count
+- **Response time**: valid user slower (password hash computed)
+- **Response structure**: different JSON keys, null vs object
+- **WebSocket frame**: different message type or content
+- **GraphQL errors array**: different error codes or messages
+- **gRPC status**: NOT_FOUND vs PERMISSION_DENIED
+- **Redirect target**: different URL for valid vs invalid
+- **Set-Cookie**: cookie set for valid user only
+- **Rate limit headers**: different limits for valid vs invalid
+
 ## When to Activate
 
-- Login form found (test error messages for valid vs invalid usernames)
-- Registration form found (test if "already registered" response differs)
-- Password reset / forgot password flow found
-- Any API accepting username, email, or phone as input
-- OTP / verification code endpoints
-- User profile / search APIs
+- ANY form or endpoint accepting username, email, phone, or user ID
+- Login, registration, password reset, OTP, verification flows
+- User profile, search, invite, or share-by-email features
+- GraphQL user queries or mutations
+- WebSocket authentication handshakes
+- Mobile app API endpoints (often found via source-analyzer)
+- SSO/OAuth authorization flows
+- SMTP servers (for email verification)
 
 ## Tools
 
-- `curl` — craft requests with known-valid vs known-invalid identifiers
-- `run_tool ffuf` — brute-force enumeration with wordlists
-- `run_tool hydra` — credential stuffing if valid usernames confirmed
+- `curl` — HTTP request crafting and timing measurement
+- `run_tool ffuf` — high-volume brute-force enumeration
+- `run_tool hydra` — credential stuffing after confirmed enumeration
+- Python/websocket scripts — for WebSocket enumeration
+- `grpcurl` — for gRPC service testing (if available)
 
 ## Methodology
 
@@ -194,11 +227,71 @@ curl -s -X POST "http://target/api/otp/send" \
 # Also check: does it rate-limit? Can we enumerate all phone numbers?
 ```
 
+### 9. WebSocket Enumeration
+
+```bash
+# If a WebSocket auth handshake was discovered:
+# Connect and send auth message with invalid user
+python3 -c "
+import websocket, json
+ws = websocket.create_connection('wss://target/ws')
+ws.send(json.dumps({'type':'auth','username':'nonexistent_xyz','password':'x'}))
+print('Invalid:', ws.recv())
+ws.close()
+ws = websocket.create_connection('wss://target/ws')
+ws.send(json.dumps({'type':'auth','username':'admin','password':'x'}))
+print('Valid:', ws.recv())
+ws.close()
+"
+# Compare: different message type, error code, or payload structure?
+```
+
+### 10. GraphQL Enumeration
+
+```bash
+# Query with non-existing user
+curl -s -X POST "http://target/graphql" \
+  -H "Content-Type: application/json" \
+  -d '{"query":"{ user(email: \"nonexistent@x.com\") { id } }"}' \
+  -o /tmp/gql_invalid.txt
+
+# Query with likely-existing user
+curl -s -X POST "http://target/graphql" \
+  -H "Content-Type: application/json" \
+  -d '{"query":"{ user(email: \"admin@target.com\") { id } }"}' \
+  -o /tmp/gql_valid.txt
+
+# Compare: null vs object in data? Different errors array?
+diff /tmp/gql_invalid.txt /tmp/gql_valid.txt
+```
+
+### 11. SSO / OAuth Flow Enumeration
+
+```bash
+# Some SSO flows redirect differently for valid vs invalid users
+curl -s -o /dev/null -w "%{redirect_url}" \
+  "http://target/auth/login?email=nonexistent@x.com"
+curl -s -o /dev/null -w "%{redirect_url}" \
+  "http://target/auth/login?email=admin@target.com"
+# Different redirect destination = enumerable
+```
+
+### 12. Generic Differential Analysis
+
+For ANY protocol or interface not covered above, the method is the same:
+1. Send request with **definitely-invalid** user identifier
+2. Send request with **likely-valid** user identifier (admin, test, root, common names)
+3. Compare ANY observable difference: content, size, timing, headers, status, behavior
+4. If different → enumerable. Document the exact difference.
+
+This applies to gRPC, SMTP VRFY/RCPT, LDAP bind, custom TCP protocols, or any
+other interface. The protocol doesn't matter — the differential response does.
+
 ## What to Record
 
-- **Enumerable endpoint**: exact URL, method, parameter
-- **Enumeration type**: error message, status code, response size, or timing
-- **Valid vs invalid response**: exact diff
+- **Enumerable interface**: protocol, endpoint/address, parameter
+- **Observable difference**: what exactly changes (message, code, size, timing, structure)
+- **Valid vs invalid response**: exact diff or description
 - **Confirmed valid users**: any usernames/emails/phones confirmed to exist
-- **Rate limiting**: whether the endpoint has brute-force protection
+- **Rate limiting**: whether the interface has brute-force protection
 - **Severity**: MEDIUM if enumerable + no rate limit, LOW if enumerable with rate limit
