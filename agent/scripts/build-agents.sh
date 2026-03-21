@@ -67,4 +67,15 @@ MDEOF
   echo "  Built: $agent"
 done
 
-echo "Done. Generated $count agents for Claude Code (.md) and Codex (.toml)."
+# --- Commands: copy from OpenCode to Claude Code ---
+OPENCODE_CMDS="$AGENT_DIR/.opencode/commands"
+CLAUDE_CMDS="$AGENT_DIR/.claude/commands"
+
+if [ -d "$OPENCODE_CMDS" ]; then
+  mkdir -p "$CLAUDE_CMDS"
+  cp "$OPENCODE_CMDS"/*.md "$CLAUDE_CMDS/" 2>/dev/null
+  cmd_count=$(ls "$CLAUDE_CMDS"/*.md 2>/dev/null | wc -l | tr -d ' ')
+  echo "  Copied $cmd_count commands to .claude/commands/"
+fi
+
+echo "Done. Generated $count agents + $cmd_count commands."
