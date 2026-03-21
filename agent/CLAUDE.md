@@ -374,9 +374,12 @@ INTEL.MD WRITE RULES:
 
 1. Parse target URL (hostname, port, protocol).
 2. Directory: `engagements/<YYYY-MM-DD>-<HHMMSS>-<hostname>`
-3. Create structure: scope.json, log.md, findings.md, intel.md, tools/, downloads/, scans/, pids/, cases.db
-4. Initialize cases.db: `sqlite3 "$DIR/cases.db" < scripts/schema.sql`
-5. Begin core loop.
+3. Create structure: `mkdir -p "$DIR"/{tools,downloads,scans,pids}`
+4. Create files: scope.json, log.md, findings.md, intel.md, auth.json
+5. Write scope.json: `{"target":"<URL>","hostname":"<host>","port":<port>,"protocol":"<proto>","mode":"single","confirm_mode":"auto","status":"in_progress","current_phase":"recon","phases_completed":[],"started_at":"<ISO8601>"}`
+6. Initialize cases.db: `sqlite3 "$DIR/cases.db" < scripts/schema.sql`
+7. Initialize log.md with engagement header, findings.md with `# Findings` header, intel.md with empty template.
+8. Begin core loop.
 
 ## Output Token Management
 

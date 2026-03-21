@@ -275,6 +275,17 @@ of the summary creation, not the timestamp of individual actions within the batc
 | `cases.db` | SQLite case queue for systematic testing |
 | `auth.json` | Authentication credentials (cookies, headers, tokens) |
 
+## Engagement Initialization (/engage handler)
+
+1. Parse target URL (hostname, port, protocol).
+2. Directory: `engagements/<YYYY-MM-DD>-<HHMMSS>-<hostname>`
+3. Create structure: `mkdir -p "$DIR"/{tools,downloads,scans,pids}`
+4. Create files: scope.json, log.md, findings.md, intel.md, auth.json
+5. Write scope.json: `{"target":"<URL>","hostname":"<host>","port":<port>,"protocol":"<proto>","mode":"single","confirm_mode":"auto","status":"in_progress","current_phase":"recon","phases_completed":[],"started_at":"<ISO8601>"}`
+6. Initialize cases.db: `sqlite3 "$DIR/cases.db" < scripts/schema.sql`
+7. Initialize log.md with engagement header, findings.md with `# Findings` header, intel.md with empty template.
+8. Begin core loop.
+
 ## Finding Format
 
 Agents use PREFIXED IDs to avoid collisions during parallel execution:
