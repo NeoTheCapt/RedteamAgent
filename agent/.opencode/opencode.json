@@ -243,7 +243,9 @@
     },
     "osint": {
       "description": "Run OSINT intelligence gathering on current engagement",
-      "agent": "osint-analyst"
+      "template": "{file:commands/osint.md}\n\n$ARGUMENTS",
+      "agent": "osint-analyst",
+      "subtask": true
     }
   },
   "permission": {
