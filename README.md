@@ -87,9 +87,10 @@ Phase 1: RECON ─── recon-specialist + source-analyzer (parallel)
 Phase 2: COLLECT ─ Import endpoints → SQLite queue, start Katana crawler
     │
 Phase 3: TEST ──── Consume queue → vulnerability-analyst + source-analyzer
-    │                               (continuous loop with progress display)
-Phase 4: EXPLOIT ── exploit-developer (parallel per finding)
-    │
+    │               exploit-developer runs in parallel for HIGH/MEDIUM findings
+    │               (continuous loop with progress display)
+Phase 4: EXPLOIT ── Full findings review: chain analysis across ALL severities,
+    │               concrete impact assessment, severity reassessment
 Phase 5: REPORT ── report-writer with coverage statistics
 ```
 
@@ -139,7 +140,9 @@ specialist     analyzer    │ analyst│              writer
                            ▼        ▼
                         fuzzer   exploit-
                         (fuzz)   developer
-                                 (exploit)
+                                 (exploit +
+                                  chain analysis +
+                                  impact assessment)
 ```
 
 ### Case Pipeline
@@ -233,7 +236,7 @@ cd ~/redteam-agent && opencode
 ## 工作流程
 
 ```
-/engage → 侦察(并行) → 收集用例 → 消费测试(循环) → 漏洞利用(并行) → 生成报告
+/engage → 侦察(并行) → 收集用例 → 消费测试+早期利用(循环) → 全量利用+链式分析+影响评估 → 报告
 
 进度显示：
 Phases: [x] Recon  [x] Collect  [>] Consume & Test  [ ] Exploit  [ ] Report
