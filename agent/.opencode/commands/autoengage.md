@@ -26,14 +26,84 @@ Extract target from user arguments at the end of this message.
 
 ## Step 2: Initialize
 
+Run these as SEPARATE bash commands. Do NOT chain heredocs with `&&`.
+
+**2a — Create directory:**
 ```bash
-DATE=$(date +%Y-%m-%d)
-TIME=$(date +%H%M%S)
-# Create engagement dir, scope.json, log.md, findings.md, cases.db, subdirs
-# Set confirm_mode=auto in scope.json
+TARGET="<url>" HOST="<hostname>" PORT=<port> PROTO="<scheme>" \
+DIR="engagements/$(date +%Y-%m-%d)-$(date +%H%M%S)-<hostname>" \
+ISO=$(date -u +%Y-%m-%dT%H:%M:%SZ) && \
+mkdir -p "$DIR"/{tools,downloads,scans,pids} && echo "$DIR"
+```
+
+**2b — scope.json:**
+```bash
+cat > "$DIR/scope.json" << EOF
+{"target":"$TARGET","hostname":"$HOST","port":$PORT,"protocol":"$PROTO","mode":"single","confirm_mode":"auto","status":"in_progress","current_phase":"recon","phases_completed":[],"started_at":"$ISO"}
+EOF
+```
+
+**2c — cases.db:**
+```bash
+sqlite3 "$DIR/cases.db" < scripts/schema.sql
+```
+
+**2d — log.md, findings.md, auth.json, intel.md:**
+```bash
+echo "# Engagement Log — $TARGET" > "$DIR/log.md"
+echo "# Findings — $TARGET" > "$DIR/findings.md"
+echo "{}" > "$DIR/auth.json"
+cat > "$DIR/intel.md" << 'INTELEOF'
+# Intelligence Collection
+
+## Technology Stack
+| Component | Version | Source | Confidence |
+|-----------|---------|--------|------------|
+
+## People & Organizations
+| Name | Role/Context | Source | Notes |
+|------|-------------|--------|-------|
+
+## Email Addresses
+| Email | Source | Notes |
+|-------|--------|-------|
+
+## Domains & Infrastructure
+| Item | Type | Source | Notes |
+|------|------|--------|-------|
+
+## Credentials & Secrets
+| Type | Value (truncated) | Source | Notes |
+|------|-------------------|--------|-------|
+
+## Raw OSINT
+
+### CVE & Known Vulnerabilities
+| CVE | Affected | CVSS | PoC Available | Source |
+|-----|----------|------|---------------|--------|
+
+### Breach & Leak Data
+| Email/Domain | Breach | Date | Data Types | Source |
+|-------------|--------|------|------------|--------|
+
+### DNS & Certificate History
+| Record | Value | First Seen | Last Seen | Source |
+|--------|-------|------------|-----------|--------|
+
+### Social & OSINT Profiles
+| Person/Org | Platform | URL/Handle | Notes |
+|-----------|----------|------------|-------|
+INTELEOF
+```
+
+**2e — Quick connectivity check:**
+```bash
+curl -s -o /dev/null -w "HTTP %{http_code} | %{size_download} bytes | %{time_total}s" "$TARGET"
 ```
 
 Skip Docker/image checks — if they fail, the error will show in output.
+
+**→ NEXT: Step 3**
 
 ## Step 3: Authentication
 
@@ -45,6 +115,8 @@ Skip Docker/image checks — if they fail, the error will show in output.
      auto-login with them and save token to auth.json
   3. After obtaining any auth → trigger POST-AUTH RE-COLLECTION automatically
   Do NOT skip auth permanently. Actively seek ways to obtain it.
+
+**→ NEXT: Step 4**
 
 ## Step 4: Execute ALL Phases Without Stopping
 
@@ -59,7 +131,8 @@ Run all 5 phases sequentially, no questions:
    - Process EVERY pending case. Show progress after each batch.
    - If FUZZER_NEEDED → dispatch fuzzer automatically
    - Do NOT stop after one batch. Loop until pending=0.
-4. **EXPLOIT** — for all confirmed HIGH/MEDIUM findings, dispatch exploit-developer in parallel.
+4. **EXPLOIT** — dispatch osint-analyst + exploit-developer in parallel.
+   After osint-analyst: read intel.md, high-value → findings.md + exploit-developer 2nd round.
 5. **REPORT** — dispatch report-writer. Update scope.json status=completed.
 
 ### Wildcard Mode:
