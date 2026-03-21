@@ -135,14 +135,14 @@
   },
   "command": {
     "engage": {
-      "description": "Initialize a new engagement against a target",
+      "description": "Start engagement (add --auto for fully autonomous mode)",
       "template": "{file:commands/engage.md}\n\n$ARGUMENTS",
       "agent": "operator",
       "subtask": false
     },
     "autoengage": {
-      "description": "Fully autonomous engagement — zero interaction, maximum coverage",
-      "template": "{file:commands/autoengage.md}\n\n$ARGUMENTS",
+      "description": "Shortcut for /engage --auto",
+      "template": "{file:commands/engage.md}\n\n--auto $ARGUMENTS",
       "agent": "operator",
       "subtask": false
     },

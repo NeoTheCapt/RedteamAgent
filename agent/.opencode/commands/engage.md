@@ -1,20 +1,25 @@
 # Command: Engage Target
 
-You are the operator. Execute these steps ONE AT A TIME. After each step, IMMEDIATELY proceed to the next.
+You are the operator. Execute steps ONE AT A TIME. After each step, IMMEDIATELY proceed to the next.
 
-Parse the target from user arguments below this template. If no target provided, ask for one.
+**Mode detection from arguments:**
+- `--auto` flag present → **AUTONOMOUS MODE**: zero interaction, auto-decide everything, never ask user, never stop. If something fails, log and move on.
+- No `--auto` flag → **INTERACTIVE MODE**: ask for auth setup, use numbered choices, auto-confirm phases by default.
+
+Parse the target from user arguments at the bottom of this template.
 
 ## Step 1: Parse Target
 
 Extract: URL, hostname, port (default 80/443), protocol (http/https).
+Also check for `--auto` and `--parallel N` flags.
 
-**Mode detection:**
-- IP address or specific subdomain (e.g., `http://127.0.0.1:8000`, `http://app.test.com`) → **SINGLE TARGET** → Step 2
-- Wildcard `*` or bare domain (e.g., `http://*.test.com`, `http://test.com`) → **WILDCARD** → see Appendix A at bottom
+**Target type:**
+- IP address or specific subdomain → **SINGLE TARGET** → Step 2
+- Wildcard `*` or bare domain → **WILDCARD** → see Appendix A at bottom
+
+**→ NEXT: Step 2**
 
 ## Step 2: Create Engagement Directory
-
-Run this bash command (replace placeholders with parsed values):
 
 ```bash
 TARGET="<url>" HOST="<hostname>" PORT=<port> PROTO="<scheme>" \
@@ -23,11 +28,11 @@ ISO=$(date -u +%Y-%m-%dT%H:%M:%SZ) && \
 mkdir -p "$DIR"/{tools,downloads,scans,pids} && echo "$DIR"
 ```
 
-Save the `$DIR` value — you need it for ALL subsequent steps.
+Save `$DIR` — needed for ALL subsequent steps.
 
 **→ NEXT: Step 3**
 
-## Step 3: Initialize Engagement Files
+## Step 3: Initialize Files
 
 Run FOUR separate bash commands. Do NOT combine them.
 
@@ -52,64 +57,36 @@ echo "{}" > "$DIR/auth.json"
 
 **3d — intel.md:**
 ```bash
-cat > "$DIR/intel.md" << 'INTELEOF'
-# Intelligence Collection
-
-## Technology Stack
-| Component | Version | Source | Confidence |
-|-----------|---------|--------|------------|
-
-## People & Organizations
-| Name | Role/Context | Source | Notes |
-|------|-------------|--------|-------|
-
-## Email Addresses
-| Email | Source | Notes |
-|-------|--------|-------|
-
-## Domains & Infrastructure
-| Item | Type | Source | Notes |
-|------|------|--------|-------|
-
-## Credentials & Secrets
-| Type | Value (truncated) | Source | Notes |
-|------|-------------------|--------|-------|
-
-## Raw OSINT
-
-### CVE & Known Vulnerabilities
-| CVE | Affected | CVSS | PoC Available | Source |
-|-----|----------|------|---------------|--------|
-
-### Breach & Leak Data
-| Email/Domain | Breach | Date | Data Types | Source |
-|-------------|--------|------|------------|--------|
-
-### DNS & Certificate History
-| Record | Value | First Seen | Last Seen | Source |
-|--------|-------|------------|-----------|--------|
-
-### Social & OSINT Profiles
-| Person/Org | Platform | URL/Handle | Notes |
-|-----------|----------|------------|-------|
-INTELEOF
+cp scripts/templates/intel.md "$DIR/intel.md"
 ```
+
+If template doesn't exist, create intel.md with empty Intelligence Collection tables.
 
 **→ NEXT: Step 4**
 
-## Step 4: Docker Check
+## Step 4: Connectivity + Docker Check
 
 ```bash
-source scripts/lib/container.sh && check_docker && check_images && echo "[OK] Docker ready"
+curl -s -o /dev/null -w "HTTP %{http_code} | %{size_download} bytes | %{time_total}s" "$TARGET"
 ```
 
-If images missing: tell user to run `cd docker && docker compose build`. If Docker not installed: STOP.
+If target unreachable: STOP.
+
+**AUTONOMOUS**: skip Docker validation — errors show naturally.
+**INTERACTIVE**: also run `source scripts/lib/container.sh && check_docker && check_images`.
 
 **→ NEXT: Step 5**
 
 ## Step 5: Configure Authentication
 
-Present to user:
+**AUTONOMOUS**:
+- If `auth.json` has a token from prior session → use it
+- Otherwise → start unauthenticated, but actively seek auth during engagement:
+  - Registration endpoint found → auto-register, save creds
+  - Hardcoded credentials found → auto-login, save token
+  - After obtaining auth → POST-AUTH RE-COLLECTION automatically
+
+**INTERACTIVE**:
 ```
 Authentication setup:
   1 — Proxy login (captures real session)
@@ -119,39 +96,30 @@ Authentication setup:
 Reply (1-4):
 ```
 
-Handle response. If skip (4): proceed — all phases still execute on unauthenticated surface.
-
 **→ NEXT: Step 6**
 
-## Step 6: Quick Connectivity Check
+## Step 6: Execute 5-Phase Engagement
 
-```bash
-curl -s -o /dev/null -w "HTTP %{http_code} | %{size_download} bytes | %{time_total}s" "$TARGET"
-```
+Follow operator Phase Flow rules. Both modes run the same phases:
 
-If target unreachable: STOP and report.
-
-**→ NEXT: Step 7**
-
-## Step 7: Begin 5-Phase Engagement
-
-Now enter the operator core loop. Dispatch agents per your operator prompt rules:
-
-**Phase 1: RECON** — Dispatch recon-specialist + source-analyzer in parallel.
-After both complete: record findings, append Intelligence to intel.md.
-
-**Phase 2: COLLECT** — Import endpoints: `./scripts/recon_ingest.sh "$DIR/cases.db" recon-specialist`
-Start Katana: `./scripts/katana_ingest.sh "$DIR" &`
-Show stats: `./scripts/dispatcher.sh "$DIR/cases.db" stats`
-
-**Phase 3: CONSUME & TEST** — Dispatcher loop per case-dispatching skill.
-
-**Phase 4: EXPLOIT** — Dispatch osint-analyst + exploit-developer in parallel.
-After osint-analyst: read intel.md, high-value → findings.md + exploit-developer 2nd round.
-
-**Phase 5: REPORT** — Dispatch report-writer.
+1. **RECON** — dispatch recon-specialist + source-analyzer in parallel
+2. **COLLECT** — `recon_ingest.sh`, start Katana, show stats
+3. **CONSUME & TEST** — dispatcher loop until pending=0
+4. **EXPLOIT** — dispatch osint-analyst + exploit-developer in parallel
+5. **REPORT** — dispatch report-writer, update scope.json status=completed
 
 After each phase: update scope.json `phases_completed` and `current_phase`.
+
+**AUTONOMOUS differences during execution:**
+- Never ask for approval at phase transitions
+- Always parallel dispatch
+- If FUZZER_NEEDED → dispatch fuzzer automatically
+- Errors → log and continue, never stop
+- Progress display after every batch:
+```
+Phases: [x] Recon  [x] Collect  [>] Test  [ ] Exploit  [ ] Report
+[queue] 120/495 done (24%) | findings: 5
+```
 
 ---
 
@@ -163,33 +131,25 @@ Only read this section if Step 1 detected wildcard mode.
 
 ```bash
 DOMAIN="<root domain>"
-DATE=$(date +%Y-%m-%d) && TIME=$(date +%H%M%S)
-PARENT_DIR="engagements/${DATE}-${TIME}-wildcard-${DOMAIN//\./-}"
+PARENT_DIR="engagements/$(date +%Y-%m-%d)-$(date +%H%M%S)-wildcard-${DOMAIN//\./-}"
 mkdir -p "$PARENT_DIR/scans"
-
-source scripts/lib/container.sh
-export ENGAGEMENT_DIR="$PARENT_DIR"
-
+source scripts/lib/container.sh && export ENGAGEMENT_DIR="$PARENT_DIR"
 run_tool subfinder -d "$DOMAIN" -all -silent -o /engagement/scans/subdomains_raw.txt
-echo "Raw subdomains: $(wc -l < $PARENT_DIR/scans/subdomains_raw.txt)"
 ```
 
 Then follow subdomain-enumeration skill for 3-stage filter (DNS → web port → fingerprint).
 
 ### Phase 0.5: Prioritize
 
-Follow SUBDOMAIN PRIORITIZATION in operator.txt. Present prioritized list, get approval.
+**INTERACTIVE**: Present prioritized list, get approval.
+**AUTONOMOUS**: Announce order, immediately start.
 
 ### Phase 0.9: Sliding Window
 
-Process max 3 subdomains in parallel. Each runs the full 5-phase flow.
+Process max N subdomains in parallel (default 3). Each runs full 5-phase flow.
 When one completes → start next. NEVER create all directories upfront.
 
-WAF gate check before each subdomain:
-```bash
-code=$(curl -sk -o /dev/null -w "%{http_code}" --connect-timeout 5 "https://$sub")
-# Skip if 403 + Cloudflare/CloudFront challenge
-```
+WAF gate check before each: skip if 403 + Cloudflare/CloudFront challenge.
 
 ### Phase FINAL: Consolidated Report
 
