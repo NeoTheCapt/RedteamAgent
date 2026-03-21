@@ -196,20 +196,20 @@ RedteamOpencode/                ← dev workspace (git root)
 └── agent/                      ← ALL runtime files (what gets installed)
     ├── CLAUDE.md               ← operator prompt (Claude Code)
     ├── AGENTS.md               ← operator prompt (Codex)
-    ├── .claude/                ← Claude Code config
-    │   ├── agents/             ← 8 subagent definitions (.md)
-    │   ├── commands/           ← 19 slash commands (.md)
-    │   └── settings.json       ← hooks (scope check + auto-logging)
-    ├── .codex/                 ← Codex config
-    │   └── agents/             ← 8 subagent definitions (.toml)
-    ├── .opencode/              ← OpenCode config
-    │   ├── opencode.json       ← agents, skills, commands, plugins
-    │   ├── prompts/agents/     ← 8 agent prompts (.txt)
-    │   ├── commands/           ← 19 slash commands (.md)
+    ├── .opencode/              ← OpenCode config + single source of truth
+    │   ├── opencode.json       ← agent metadata, skills, commands, plugins
+    │   ├── prompts/agents/     ← 8 agent prompts (.txt) — SINGLE SOURCE
+    │   ├── commands/           ← 19 slash commands (.md) — SINGLE SOURCE
     │   └── plugins/            ← engagement hooks (TypeScript)
+    ├── .claude/                ← Claude Code config (agents + commands generated)
+    │   └── settings.json       ← hooks (scope check + auto-logging)
+    ├── .codex/                 ← Codex config (agents generated)
+    ├── scripts/
+    │   ├── build-agents.sh     ← generates .claude/agents + .codex/agents + .claude/commands
+    │   ├── dispatcher.sh       ← case queue management
+    │   └── ...                 ← ingest, hooks, shared libraries
     ├── skills/                 ← 31 attack methodology skills
     ├── references/             ← 57 reference files (OWASP, tools, tactics, AD)
-    ├── scripts/                ← dispatcher, ingest, hooks, shared libraries
     ├── docker/                 ← Dockerfiles + docker-compose.yml
     └── engagements/            ← per-engagement output (created at runtime)
 ```
@@ -219,9 +219,10 @@ RedteamOpencode/                ← dev workspace (git root)
 | Feature | Claude Code | OpenCode | Codex |
 |---------|-------------|----------|-------|
 | Operator prompt | `CLAUDE.md` | `.opencode/prompts/agents/operator.txt` | `AGENTS.md` |
-| Subagents (8) | `.claude/agents/*.md` | `.opencode/opencode.json` agents | `.codex/agents/*.toml` |
-| Slash commands (19) | `.claude/commands/*.md` | `.opencode/commands/*.md` | Not supported — use natural language instead |
+| Subagents (8) | Generated `.claude/agents/*.md` | `.opencode/prompts/agents/*.txt` **(source)** | Generated `.codex/agents/*.toml` |
+| Slash commands (19) | Generated `.claude/commands/*.md` | `.opencode/commands/*.md` **(source)** | Not supported — use natural language instead |
 | Skills (31) | `skills/*/SKILL.md` (read on demand) | Loaded via instructions array | `skills/*/SKILL.md` (read on demand) |
+| Build | `scripts/build-agents.sh` generates agents + commands | N/A (source files) | `scripts/build-agents.sh` generates agents |
 | Auto-logging | `.claude/settings.json` hooks | `.opencode/plugins/engagement-hooks.ts` | N/A |
 | Scope enforcement | Hook blocks out-of-scope | Hook warns out-of-scope | N/A |
 | Agent attribution | `agent_type` in hook JSON | `chat.message` event tracking | N/A |
@@ -249,9 +250,22 @@ Edit `model` in `agent/.opencode/opencode.json`. Supports Anthropic, OpenAI, Goo
 This repo has two layers:
 
 - **Root** (`RedteamOpencode/`): dev workspace with install script and README. Run your CLI here for development tasks.
-- **Agent** (`agent/`): all runtime files that get installed to `~/redteam-agent`. The `agent/CLAUDE.md` is the operator prompt. Run your CLI inside `agent/` (or `~/redteam-agent/`) for engagements.
+- **Agent** (`agent/`): all runtime files that get installed to `~/redteam-agent`. Run your CLI inside `agent/` (or `~/redteam-agent/`) for engagements.
 
-After modifying agent files, all internal paths should be relative to `agent/` as the working directory.
+### Single-Source Architecture
+
+Agent prompts and commands are maintained **only** in OpenCode format (`.opencode/`). Claude Code and Codex versions are **generated** by `scripts/build-agents.sh`:
+
+```bash
+cd agent && bash scripts/build-agents.sh
+# Generates .claude/agents/*.md + .codex/agents/*.toml + .claude/commands/*.md
+```
+
+**To modify an agent:** edit `agent/.opencode/prompts/agents/<name>.txt`, then run `build-agents.sh`.
+
+**To add a new agent:** create the `.txt` file, add agent entry to `opencode.json`, run `build-agents.sh`.
+
+**Operator prompts** (`CLAUDE.md`, `AGENTS.md`, `operator.txt`) are maintained separately — they contain platform-specific content that can't be single-sourced.
 
 ## Troubleshooting
 
