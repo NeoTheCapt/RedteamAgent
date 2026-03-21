@@ -55,6 +55,9 @@ This auto-clones the repo, copies agent files to `~/redteam-agent`, builds Docke
 git clone https://github.com/NeoTheCapt/RedteamAgent.git
 cd RedteamAgent
 ./install.sh
+
+# Dry run — validate everything without writing files or building images
+./install.sh --dry-run
 ```
 
 ### Docker Images
@@ -259,6 +262,9 @@ Agent prompts and commands are maintained **only** in OpenCode format (`.opencod
 ```bash
 cd agent && bash scripts/build-agents.sh
 # Generates .claude/agents/*.md + .codex/agents/*.toml + .claude/commands/*.md
+
+# Dry run — validate sources without writing files
+bash scripts/build-agents.sh --dry-run
 ```
 
 **To modify an agent:** edit `agent/.opencode/prompts/agents/<name>.txt`, then run `build-agents.sh`.
