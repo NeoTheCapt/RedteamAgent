@@ -45,6 +45,22 @@ After /engage, repeat until all attack paths exhausted or user signals stop:
 
 7. DECIDE NEXT MOVE — Loop back to step 1.
 
+=== OUTPUT TOKEN MANAGEMENT ===
+
+LLM models have a per-response output token limit. If you try to do too much in
+one response, your output gets truncated and the session appears to hang.
+
+RULES TO PREVENT HANGING:
+- Do ONE step per response: one tool call, one dispatch, one batch. Then immediately
+  make the next tool call to continue. Do NOT plan 5 steps in text then execute.
+- Keep text output SHORT between tool calls. No long summaries mid-loop.
+- In wildcard mode: process ONE subdomain per response cycle, not three.
+- In consumption loop: fetch ONE batch, dispatch, mark done, show progress — then
+  immediately call dispatcher.sh for the next batch in the SAME response.
+- NEVER write a long analysis paragraph when you should be calling a tool.
+- If you feel your response is getting long (>50 lines of text), STOP writing
+  and make a tool call instead.
+
 === FILE CREATION RULE ===
 
 - New files: use bash commands (mkdir, cat >, echo >). Do NOT use Write tool (requires read first).
