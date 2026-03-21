@@ -338,6 +338,43 @@ ALL output goes to intel.md ONLY. osint-analyst does NOT write to findings.md.
 - Social/org intel → intel.md Social table
 ```
 
+### 5a. Tool Execution Model & API Key Handling
+
+**Host vs Docker:**
+- `curl`, `jq`, `dig`, `whois` — run on host (consistent with existing rule)
+- `searchsploit`, `h8mail`, `theHarvester`, `spiderfoot`, `amass`, `nuclei`, `waybackurls` — run via `run_tool` (Docker)
+
+**API Key Graceful Degradation:**
+
+osint-analyst checks each API key before use. If missing, skip that source and note it:
+
+| API Key Env Var | Service | Required? |
+|-----------------|---------|-----------|
+| (none) | NVD, crt.sh, GitHub (unauthenticated), Wayback | No — free/public |
+| `HIBP_API_KEY` | Have I Been Pwned | Optional — skip breach lookup if absent |
+| `SECURITYTRAILS_API_KEY` | SecurityTrails | Optional — skip DNS history if absent |
+| `HUNTER_API_KEY` | Hunter.io | Optional — skip email pattern discovery if absent |
+
+Agent rule: "If an API key env var is empty, log `[osint-analyst] Skipping <service> — API key not configured` and move to next source. Never error on missing keys."
+
+### 5b. intel.md Deduplication Keys
+
+When operator appends Intelligence output to intel.md, deduplicate by these keys:
+
+| Table | Dedup Key |
+|-------|-----------|
+| Technology Stack | Component |
+| People & Organizations | Name |
+| Email Addresses | Email |
+| Domains & Infrastructure | Item + Type |
+| Credentials & Secrets | Type + Source |
+| CVE & Known Vulnerabilities | CVE |
+| Breach & Leak Data | Email/Domain + Breach |
+| DNS & Certificate History | Record + Value |
+| Social & OSINT Profiles | Person/Org + Platform |
+
+If a duplicate is found with new information (e.g., higher Confidence, additional Notes), update the existing row rather than appending.
+
 ### 6. Operator Workflow Changes
 
 #### Phase Transition Update
@@ -441,16 +478,28 @@ report-writer input gains intel.md. Report adds "Intelligence Summary" section l
 
 #### opencode.json
 
-Add to agents:
+Add to agents (matching existing format):
 
 ```json
-{
-  "name": "osint-analyst",
+"osint-analyst": {
   "description": "OSINT intelligence gathering — CVE/breach/DNS/social research. Dispatched in EXPLOIT phase parallel with exploit-developer.",
-  "provider": "",
-  "model": "",
-  "systemPrompt": "./.opencode/prompts/agents/osint-analyst.txt",
-  "isSubagent": true
+  "mode": "subagent",
+  "prompt": "{file:prompts/agents/osint-analyst.txt}",
+  "read": true,
+  "write": false,
+  "edit": false,
+  "bash": true,
+  "glob": true,
+  "grep": true
+}
+```
+
+Add `/osint` command to commands (matching existing pattern):
+
+```json
+"osint": {
+  "description": "Run OSINT intelligence gathering on current engagement",
+  "agent": "osint-analyst"
 }
 ```
 
@@ -471,7 +520,7 @@ Add to instructions array:
 | `agent/.codex/agents/osint-analyst.toml` | Codex agent definition |
 | `agent/.opencode/prompts/agents/osint-analyst.txt` | OpenCode agent definition |
 
-### Modified Files (10)
+### Modified Files (17)
 
 | File | Change |
 |------|--------|
@@ -481,14 +530,20 @@ Add to instructions array:
 | `agent/.claude/agents/source-analyzer.md` | Add `#### Intelligence` (with Credentials) to OUTPUT FORMAT |
 | `agent/.codex/agents/source-analyzer.toml` | Same |
 | `agent/.opencode/prompts/agents/source-analyzer.txt` | Same |
-| `agent/CLAUDE.md` | Agent roster, EXPLOIT parallel rule, intel.md write rule, OSINT handoff, engagement init, report input |
+| `agent/.claude/agents/report-writer.md` | Add intel.md to DATA SOURCES, add Intelligence Summary to REPORT STRUCTURE |
+| `agent/.codex/agents/report-writer.toml` | Same |
+| `agent/.opencode/prompts/agents/report-writer.txt` | Same |
+| `agent/CLAUDE.md` | Agent roster (osint-analyst), EXPLOIT parallel rule, intel.md write rule, OSINT handoff, engagement init (intel.md), report input, skill count 30→31, Phase 4 description update |
 | `agent/AGENTS.md` | Same |
 | `agent/.opencode/prompts/agents/operator.txt` | Same |
-| `agent/.opencode/opencode.json` | Add osint-analyst agent, add osint-recon skill path |
+| `agent/.opencode/opencode.json` | Add osint-analyst agent, add /osint command, add osint-recon skill path |
+| `agent/.opencode/commands/engage.md` | Add intel.md template creation in Step 2 engagement init |
+| `agent/.claude/commands/engage.md` | Same (if exists, otherwise engagement init is in operator prompt) |
+| `agent/.codex/agents/operator.toml` | Engagement init rule includes intel.md creation |
+| `agent/.opencode/commands/osint.md` | New /osint command template |
 
 ### Unchanged Files
 
-- engage.md — intel.md creation driven by operator rules
 - dispatcher.sh / schema.sql — historical endpoints use existing requeue mechanism
 - Hook scripts / plugins — platform-specific, not touched
-- Other agents (vuln-analyst, exploit-developer, fuzzer, report-writer) — prompts unchanged, operator passes intel via dispatch instructions
+- Other agents (vuln-analyst, exploit-developer, fuzzer) — prompts unchanged, operator passes intel via dispatch instructions
