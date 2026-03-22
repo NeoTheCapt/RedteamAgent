@@ -94,15 +94,16 @@ After successfully configuring auth (cookie or header), if an active engagement 
 and Katana was previously running (check for scans/katana_output.jsonl):
 
 1. Announce: "[operator] Auth configured. Re-crawling with credentials to discover authenticated endpoints."
-2. Restart Katana with new cookies:
+2. Restart Katana with updated auth from `auth.json`:
    ```bash
    source scripts/lib/container.sh
    export ENGAGEMENT_DIR="<engagement_dir>"
    stop_katana
    start_katana "$(jq -r .target <engagement_dir>/scope.json)"
    ```
-3. New authenticated endpoints will flow into cases.db (dedup handles overlap with existing cases)
-4. Resume the consumption loop for any new pending cases
+3. `start_katana` reads both `cookies` and `headers` from `auth.json`, so authenticated re-collection applies to either auth style.
+4. New authenticated endpoints will flow into cases.db (dedup handles overlap with existing cases)
+5. Resume the consumption loop for any new pending cases
 
 ## User Arguments
 

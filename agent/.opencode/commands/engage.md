@@ -270,7 +270,7 @@ Then follow subdomain-enumeration skill for 3-stage filter (DNS → web port →
 
 ### Phase 0.9: Sliding Window
 
-Process max N subdomains in parallel (default 3). Each runs full 5-phase flow.
+Process max N subdomains in parallel (default 3). Each runs full 5-phase flow with engagement-scoped proxy/Katana containers.
 When one completes → start next. NEVER create all directories upfront.
 
 WAF gate check before each: skip if 403 + Cloudflare/CloudFront challenge.
