@@ -101,6 +101,8 @@ echo "{}" > "$DIR/auth.json"
 sqlite3 "$DIR/cases.db" < scripts/schema.sql
 
 cp scripts/templates/intel.md "$DIR/intel.md" 2>/dev/null || echo "# Intelligence Collection" > "$DIR/intel.md"
+cp scripts/templates/rtcurl.sh "$DIR/tools/rtcurl"
+chmod +x "$DIR/tools/rtcurl"
 
 echo "$DIR"
 ```

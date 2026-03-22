@@ -83,6 +83,10 @@ run_tool() {
     elif [ -f "$(pwd)/.env" ]; then
         docker_args+=(--env-file "$(pwd)/.env")
     fi
+    if [[ "$tool" == "curl" && -x "${ENGAGEMENT_DIR_ABS}/tools/rtcurl" ]]; then
+        docker run "${docker_args[@]}" "$REDTEAM_IMAGE" /engagement/tools/rtcurl "$@"
+        return
+    fi
     docker run "${docker_args[@]}" "$REDTEAM_IMAGE" "$tool" "$@"
 }
 

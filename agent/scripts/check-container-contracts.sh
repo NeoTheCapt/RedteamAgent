@@ -75,6 +75,23 @@ assert_contains "$KATANA_ARGS" "Cookie: session=abc123" "Katana should receive c
 assert_contains "$KATANA_ARGS" "Authorization: Bearer topsecret" "Katana should receive Authorization header from auth.json"
 assert_contains "$KATANA_ARGS" "X-Test: demo" "Katana should receive arbitrary custom headers from auth.json"
 
+mkdir -p "$ENG1/tools"
+cp "$ROOT_DIR/scripts/templates/rtcurl.sh" "$ENG1/tools/rtcurl"
+chmod +x "$ENG1/tools/rtcurl"
+
+: > "$FAKE_DOCKER_LOG"
+export ENGAGEMENT_DIR="$ENG1"
+run_tool curl -s https://app.example.com/account
+RUN_TOOL_ARGS="$(tr '\n' ' ' < "$FAKE_DOCKER_LOG")"
+assert_contains "$RUN_TOOL_ARGS" "/engagement/tools/rtcurl" "run_tool curl should invoke engagement-scoped rtcurl wrapper when present"
+assert_not_contains "$RUN_TOOL_ARGS" " kali-redteam:latest curl " "run_tool curl should not invoke raw curl directly when wrapper exists"
+
+rm -f "$ENG1/tools/rtcurl"
+: > "$FAKE_DOCKER_LOG"
+run_tool curl -s https://app.example.com/account
+RUN_TOOL_FALLBACK_ARGS="$(tr '\n' ' ' < "$FAKE_DOCKER_LOG")"
+assert_contains "$RUN_TOOL_FALLBACK_ARGS" " kali-redteam:latest curl -s https://app.example.com/account" "run_tool curl should fall back to raw curl when rtcurl wrapper is absent"
+
 : > "$FAKE_DOCKER_LOG"
 export ENGAGEMENT_DIR="$ENG2"
 start_proxy
