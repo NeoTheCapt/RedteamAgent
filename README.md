@@ -218,7 +218,7 @@ RedteamOpencode/                ← dev workspace (git root)
     │   └── settings.json       ← hooks (scope check + auto-logging)
     ├── .codex/                 ← Codex config (agents generated)
     ├── scripts/
-    │   ├── build-agents.sh     ← generates .claude/agents + .codex/agents + .claude/commands
+    │   ├── install-time generators ← install.sh builds .claude/agents + .codex/agents + .claude/commands
     │   ├── dispatcher.sh       ← case queue management
     │   └── ...                 ← ingest, hooks, shared libraries
     ├── skills/                 ← 31 attack methodology skills
@@ -235,7 +235,7 @@ RedteamOpencode/                ← dev workspace (git root)
 | Subagents (8) | Generated `.claude/agents/*.md` | `.opencode/prompts/agents/*.txt` **(source)** | Generated `.codex/agents/*.toml` |
 | Slash commands (19) | Generated `.claude/commands/*.md` | `.opencode/commands/*.md` **(source)** | Not supported — use natural language instead |
 | Skills (31) | `skills/*/SKILL.md` (read on demand) | Loaded via instructions array | `skills/*/SKILL.md` (read on demand) |
-| Build | `scripts/build-agents.sh` generates agents + commands | N/A (source files) | `scripts/build-agents.sh` generates agents |
+| Build | `install.sh claude` generates agents + commands at install time | N/A (source files) | `install.sh codex` generates agents at install time |
 | Auto-logging | `.claude/settings.json` hooks | `.opencode/plugins/engagement-hooks.ts` | N/A |
 | Scope enforcement | Hook blocks out-of-scope | Hook warns out-of-scope | N/A |
 | Agent attribution | `agent_type` in hook JSON | `chat.message` event tracking | N/A |
@@ -271,8 +271,8 @@ Agent prompts and commands are maintained **only** in OpenCode format (`.opencod
 
 ```bash
 # install.sh handles building for the target product:
-./install.sh claude ~/my-project   # generates .claude/agents/*.md + commands from .opencode/ sources
-./install.sh codex ~/my-project    # generates .codex/agents/*.toml from .opencode/ sources
+./install.sh claude ~/my-project   # generates .claude/agents/*.md + commands at install time
+./install.sh codex ~/my-project    # generates .codex/agents/*.toml at install time
 ./install.sh opencode ~/my-project # copies .opencode/ directly (no build needed)
 ```
 
