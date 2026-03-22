@@ -1,12 +1,14 @@
 # nuclei
 
 **Purpose:** Vulnerability scanning with community templates
+For live engagement targets, prefer `run_tool nuclei` so scans stay in the engagement
+container boundary and reuse the mounted workspace.
 
-**Basic scan:** `nuclei -u https://target`
-**Specific template:** `nuclei -u https://target -t cves/2021/CVE-2021-44228.yaml`
-**By severity:** `nuclei -u https://target -severity critical,high`
-**By tag:** `nuclei -u https://target -tags cve,rce`
-**Multiple targets:** `nuclei -l targets.txt`
-**Update templates:** `nuclei -update-templates`
+**Basic scan:** `run_tool nuclei -u https://target`
+**Specific template:** `run_tool nuclei -u https://target -t cves/2021/CVE-2021-44228.yaml`
+**By severity:** `run_tool nuclei -u https://target -severity critical,high`
+**By tag:** `run_tool nuclei -u https://target -tags cve,rce`
+**Multiple targets:** `run_tool nuclei -l /engagement/scans/targets.txt`
+**Update templates:** `run_tool nuclei -update-templates`
 **Output:** `-o results.txt`, `-jsonl` (JSON lines)
 **Rate limit:** `-rate-limit 100`

@@ -1,9 +1,10 @@
 # whatweb
 
 **Purpose:** Web technology fingerprinting
+For live engagement targets, run WhatWeb inside the engagement container with `run_tool whatweb`.
 
-**Basic:** `whatweb https://target`
-**Aggressive:** `whatweb -a 3 https://target`
-**Multiple targets:** `whatweb --input-file=targets.txt`
-**Verbose:** `whatweb -v https://target`
+**Basic:** `run_tool whatweb https://target`
+**Aggressive:** `run_tool whatweb -a 3 https://target`
+**Multiple targets:** `run_tool whatweb --input-file=/engagement/scans/targets.txt`
+**Verbose:** `run_tool whatweb -v https://target`
 **Output:** `--log-json=results.json`
