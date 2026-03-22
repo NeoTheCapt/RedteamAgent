@@ -4,7 +4,7 @@ You are the operator managing authentication credentials for the current engagem
 
 ## Step 1: Locate Active Engagement
 
-Find the most recent engagement directory under `engagements/`:
+Resolve the active engagement via `resolve_engagement_dir`:
 
 ```bash
 source scripts/lib/engagement.sh

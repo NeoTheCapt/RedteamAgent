@@ -4,12 +4,17 @@ You are the recon-specialist executing active port and service scanning. This is
 
 ## Step 1: Load Engagement State
 
-Locate the most recent engagement directory under `engagements/`. Read:
+Resolve the active engagement via `resolve_engagement_dir`. Read:
 - `scope.json` -- target, scope boundaries, current phase
 - `log.md` -- what has already been done
 - `findings.md` -- existing findings
 
-If no engagement exists, inform the user to run `/engage` first.
+```bash
+source scripts/lib/engagement.sh
+ENG_DIR=$(resolve_engagement_dir "$(pwd)")
+```
+
+If no active engagement exists, inform the user to run `/engage` first.
 
 ## Step 2: Follow port-scanning Methodology
 
