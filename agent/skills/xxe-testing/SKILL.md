@@ -14,7 +14,7 @@ origin: RedteamOpencode
 
 ## Tools
 
-- run_tool curl (send crafted XML)
+- `run_tool curl` (send crafted XML)
 - Burp Suite Repeater
 - XXEinjector
 - Out-of-band server (Burp Collaborator, interactsh)

@@ -14,7 +14,7 @@ origin: RedteamOpencode
 
 ## Tools
 
-- run_tool curl / wget (manual requests)
+- `run_tool curl` / `run_tool wget` (manual requests)
 - Burp Suite Repeater + Intruder
 - Commix (automated command injection)
 - Custom wordlists for injection payloads

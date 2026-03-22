@@ -12,7 +12,7 @@ origin: RedteamOpencode
 
 ## Tools
 
-`run_tool curl`, `whatweb`, `openssl`, `grep`/`sed`/`jq`
+`run_tool curl`, `run_tool whatweb`, `openssl`, `grep`/`sed`/`jq`
 
 ## Methodology
 
@@ -26,7 +26,7 @@ Note: Server, X-Powered-By, Set-Cookie flags, CSP, missing security headers.
 
 ### 2. Technology Fingerprinting
 ```bash
-whatweb -a 3 https://TARGET
+run_tool whatweb -a 3 https://TARGET
 run_tool curl -sL https://TARGET | grep -iE "generator|powered.by|built.with"
 run_tool curl -sL https://TARGET | grep -i '<meta' | head -20
 ```
