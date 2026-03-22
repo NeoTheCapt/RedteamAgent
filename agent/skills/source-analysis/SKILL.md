@@ -50,6 +50,17 @@ Extract `url()` refs, `@import` paths, source map refs.
 ### 5. API Schema Discovery
 Probe: /swagger.json, /openapi.json, /api-docs, /graphql (introspection), /application.wadl
 
+If an OpenAPI / Swagger spec is accessible, ingest it into the queue instead of leaving it as
+a passive note:
+
+```bash
+run_tool curl -sL "https://TARGET/openapi.json" -o /engagement/scans/openapi.json
+./scripts/spec_ingest.sh "$ENGAGEMENT_DIR/cases.db" "$ENGAGEMENT_DIR/scans/openapi.json"
+./scripts/dispatcher.sh "$ENGAGEMENT_DIR/cases.db" stats
+```
+
+This creates `api-spec` cases that should be routed to `vulnerability-analyst`.
+
 ### 6. Source Map Analysis
 Fetch .map → extract `sources` array → reconstruct original source for analysis.
 
