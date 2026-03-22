@@ -2,12 +2,13 @@
 # install.sh — RedTeam Agent installation script
 #
 # Usage:
-#   ./install.sh opencode             Install for OpenCode
-#   ./install.sh claude               Install for Claude Code
-#   ./install.sh codex                Install for Codex
-#   ./install.sh --dry-run opencode   Validate without writing
-#   bash <(curl -fsSL URL) opencode   Auto-clone and install
+#   ./install.sh opencode [target_dir]           Install for OpenCode
+#   ./install.sh claude [target_dir]             Install for Claude Code
+#   ./install.sh codex [target_dir]              Install for Codex
+#   ./install.sh --dry-run opencode              Validate without writing
+#   bash <(curl -fsSL URL) opencode ~/my-agent   Auto-clone and install
 #
+# target_dir defaults to ~/redteam-agent if not specified.
 # Each product gets ONLY its own files — no cross-product contamination.
 set -e
 
@@ -16,25 +17,29 @@ set -e
 # ============================================
 DRY_RUN=false
 PRODUCT=""
+TARGET_DIR=""
 
 for arg in "$@"; do
   case "$arg" in
     --dry-run) DRY_RUN=true ;;
     opencode|claude|codex) PRODUCT="$arg" ;;
+    *) [ -z "$TARGET_DIR" ] && TARGET_DIR="$arg" ;;
   esac
 done
 
 if [ -z "$PRODUCT" ]; then
-  echo "Usage: $0 [--dry-run] <opencode|claude|codex>"
+  echo "Usage: $0 [--dry-run] <opencode|claude|codex> [target_dir]"
   echo ""
   echo "  opencode  — Install for OpenCode (source files, no build needed)"
   echo "  claude    — Install for Claude Code (generates .claude/agents + commands)"
   echo "  codex     — Install for Codex (generates .codex/agents)"
+  echo ""
+  echo "  target_dir defaults to ~/redteam-agent"
   exit 1
 fi
 
 REPO_URL="https://github.com/NeoTheCapt/RedteamAgent.git"
-INSTALL_DIR="${REDTEAM_DIR:-$HOME/redteam-agent}"
+INSTALL_DIR="${TARGET_DIR:-${REDTEAM_DIR:-$HOME/redteam-agent}}"
 
 echo ""
 if $DRY_RUN; then
