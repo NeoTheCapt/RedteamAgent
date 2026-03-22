@@ -4,7 +4,6 @@
   "small_model": "",
   "default_agent": "operator",
   "instructions": [
-    "AGENTS.md",
     ".opencode/instructions/INSTRUCTIONS.md",
     "skills/web-recon/SKILL.md",
     "skills/port-scanning/SKILL.md",
