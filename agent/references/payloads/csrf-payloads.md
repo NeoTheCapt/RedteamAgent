@@ -158,17 +158,19 @@ If the app checks that a cookie value matches a form parameter:
 ## Useful Curl for Testing
 
 ```bash
+# For live testing, current-engagement auth should normally come from auth.json/rtcurl.
+# Keep explicit Cookie overrides only when replaying a victim session on purpose.
 # Check if endpoint accepts requests without CSRF token
-curl -s -X POST http://target.com/api/action \
+run_tool curl -s -X POST http://target.com/api/action \
   -H "Cookie: session=VICTIM_SESSION" \
   -d "email=test@test.com"
 
 # Check if endpoint accepts GET instead of POST
-curl -s "http://target.com/api/action?email=test@test.com" \
+run_tool curl -s "http://target.com/api/action?email=test@test.com" \
   -H "Cookie: session=VICTIM_SESSION"
 
 # Check Referer validation
-curl -s -X POST http://target.com/api/action \
+run_tool curl -s -X POST http://target.com/api/action \
   -H "Cookie: session=VICTIM_SESSION" \
   -H "Referer: https://evil.com/" \
   -d "email=test@test.com"
