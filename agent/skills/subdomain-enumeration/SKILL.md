@@ -17,7 +17,7 @@ origin: RedteamOpencode
 
 - `subfinder` — passive subdomain enumeration (multiple sources, API keys optional)
 - `run_tool ffuf` — DNS brute-force via vhost fuzzing
-- `curl` / `run_tool nmap` — verify discovered subdomains are live
+- `run_tool curl` / `run_tool nmap` — verify discovered subdomains are live
 
 ## Methodology
 
@@ -95,7 +95,7 @@ echo "Resolved: $(wc -l < $ENGAGEMENT_DIR/scans/subdomains_resolved.txt) / $(wc 
 while IFS= read -r sub; do
   live=""
   for proto_port in "http://$sub" "https://$sub" "http://$sub:8080" "https://$sub:8443"; do
-    code=$(/usr/bin/curl -s -o /dev/null -w "%{http_code}" --connect-timeout 3 -k "$proto_port" 2>/dev/null)
+    code=$(run_tool curl -s -o /dev/null -w "%{http_code}" --connect-timeout 3 -k "$proto_port" 2>/dev/null)
     if [ "$code" != "000" ] && [ -n "$code" ]; then
       echo "$sub $proto_port $code" >> "$ENGAGEMENT_DIR/scans/subdomains_live.txt"
       live="yes"
@@ -108,15 +108,17 @@ echo "Live web: $(wc -l < $ENGAGEMENT_DIR/scans/subdomains_live.txt)"
 
 # Stage 3: Fingerprint live subdomains for prioritization
 echo "subdomain|url|status|server|title|size|notes" > "$ENGAGEMENT_DIR/scans/subdomains_fingerprint.csv"
+TMPDIR_FINGERPRINT=$(mktemp -d)
+trap 'rm -rf "$TMPDIR_FINGERPRINT"' EXIT
 while IFS=' ' read -r sub url code; do
-  resp=$(/usr/bin/curl -s -o /tmp/sub_resp.html -w "%{size_download}" \
-    -D /tmp/sub_headers.txt --connect-timeout 5 -k "$url" 2>/dev/null)
+  resp=$(run_tool curl -s -o "$TMPDIR_FINGERPRINT/sub_resp.html" -w "%{size_download}" \
+    -D "$TMPDIR_FINGERPRINT/sub_headers.txt" --connect-timeout 5 -k "$url" 2>/dev/null)
   size="$resp"
-  server=$(grep -i "^server:" /tmp/sub_headers.txt 2>/dev/null | head -1 | cut -d: -f2- | tr -d '\r')
-  title=$(grep -oE '<title>[^<]+</title>' /tmp/sub_resp.html 2>/dev/null | head -1 | sed 's/<[^>]*>//g')
+  server=$(grep -i "^server:" "$TMPDIR_FINGERPRINT/sub_headers.txt" 2>/dev/null | head -1 | cut -d: -f2- | tr -d '\r')
+  title=$(grep -oE '<title>[^<]+</title>' "$TMPDIR_FINGERPRINT/sub_resp.html" 2>/dev/null | head -1 | sed 's/<[^>]*>//g')
   notes=""
-  grep -qi "debug\|x-debug\|x-powered-by\|x-aspnet" /tmp/sub_headers.txt 2>/dev/null && notes="${notes}debug_headers "
-  grep -qi "error\|exception\|traceback\|stack.trace" /tmp/sub_resp.html 2>/dev/null && notes="${notes}verbose_errors "
+  grep -qi "debug\|x-debug\|x-powered-by\|x-aspnet" "$TMPDIR_FINGERPRINT/sub_headers.txt" 2>/dev/null && notes="${notes}debug_headers "
+  grep -qi "error\|exception\|traceback\|stack.trace" "$TMPDIR_FINGERPRINT/sub_resp.html" 2>/dev/null && notes="${notes}verbose_errors "
   [ "$code" = "401" ] || [ "$code" = "403" ] && notes="${notes}auth_protected "
   echo "$sub|$url|$code|$server|$title|$size|$notes" >> "$ENGAGEMENT_DIR/scans/subdomains_fingerprint.csv"
   echo "  $sub → $code ($server) [$title] ${notes}"

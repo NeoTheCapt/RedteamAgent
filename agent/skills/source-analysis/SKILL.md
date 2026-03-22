@@ -15,7 +15,7 @@ origin: RedteamOpencode
 
 ## Tools
 
-`curl`, `grep`/`sed`/`awk`, `jq`
+`run_tool curl`, `grep`/`sed`/`awk`, `jq`
 
 ## Division of Labor
 
@@ -37,7 +37,7 @@ HTML comments, meta tags (canonical, CSRF, API base), inline config (`window.__C
 
 ### 3. JavaScript Analysis
 ```bash
-curl -sL <js-url> | grep -oE '["'"'"'](/[a-zA-Z0-9_/\-\.]+)["'"'"']' | sort -u
+run_tool curl -sL <js-url> | grep -oE '["'"'"'](/[a-zA-Z0-9_/\-\.]+)["'"'"']' | sort -u
 ```
 - API calls: fetch(), axios, XHR, $.ajax patterns
 - SPA routes: React `path="/..."`, Vue `{ path: }`, Angular `{ path: }`

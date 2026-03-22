@@ -14,13 +14,13 @@ origin: RedteamOpencode
 
 ## Tools
 
-`ffuf` (primary), `curl` (verification), `Arjun` (dedicated param discovery, if available)
+`ffuf` (primary), `run_tool curl` (verification), `Arjun` (dedicated param discovery, if available)
 
 ## Methodology
 
 ### 1. Establish Baseline
 ```bash
-curl -s -o /dev/null -w "Code: %{http_code}, Size: %{size_download}" https://TARGET/endpoint
+run_tool curl -s -o /dev/null -w "Code: %{http_code}, Size: %{size_download}" https://TARGET/endpoint
 ```
 Record baseline response size for `-fs` filter.
 
@@ -58,7 +58,7 @@ ffuf -u "https://TARGET/endpoint" -H "FUZZ: test" \
 # Common bypass headers:
 for header in "X-Forwarded-For: 127.0.0.1" "X-Real-IP: 127.0.0.1" "X-Original-URL: /admin" \
   "X-Debug: true" "X-Debug-Mode: 1" "X-Forwarded-Host: localhost"; do
-  curl -s -o /dev/null -w "%{http_code} %{size_download}" -H "$header" "https://TARGET/endpoint"
+  run_tool curl -s -o /dev/null -w "%{http_code} %{size_download}" -H "$header" "https://TARGET/endpoint"
 done
 ```
 
@@ -82,6 +82,6 @@ arjun -u "https://TARGET/endpoint" -w custom_params.txt
 
 ### 9. Verification
 ```bash
-curl -sv "https://TARGET/endpoint?discovered_param=test" 2>&1
-diff <(curl -s "https://TARGET/endpoint") <(curl -s "https://TARGET/endpoint?param=value")
+run_tool curl -sv "https://TARGET/endpoint?discovered_param=test" 2>&1
+diff <(run_tool curl -s "https://TARGET/endpoint") <(run_tool curl -s "https://TARGET/endpoint?param=value")
 ```

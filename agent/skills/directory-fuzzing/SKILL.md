@@ -14,13 +14,13 @@ origin: RedteamOpencode
 
 ## Tools
 
-`ffuf` (primary), `gobuster` (fallback), `curl` (verification)
+`ffuf` (primary), `gobuster` (fallback), `run_tool curl` (verification)
 
 ## Methodology
 
 ### 1. Baseline Response
 ```bash
-curl -s -o /dev/null -w "Code: %{http_code}, Size: %{size_download}" https://TARGET/nonexistent12345
+run_tool curl -s -o /dev/null -w "Code: %{http_code}, Size: %{size_download}" https://TARGET/nonexistent12345
 ```
 
 ### 2. Common Path Discovery
@@ -65,11 +65,11 @@ ffuf -u https://TARGET/admin/FUZZ -w /usr/share/wordlists/dirb/common.txt -ac
 ffuf -u https://TARGET/FUZZ -w /usr/share/seclists/Discovery/Web-Content/common.txt \
   -e .bak,.old,.orig,.save,.swp,.tmp,~,.copy
 for f in .env .git/config .htaccess web.config wp-config.php .DS_Store; do
-  code=$(curl -s -o /dev/null -w "%{http_code}" "https://TARGET/$f")
+  code=$(run_tool curl -s -o /dev/null -w "%{http_code}" "https://TARGET/$f")
   [ "$code" != "404" ] && echo "$f -> $code"
 done
-curl -s https://TARGET/.git/HEAD
-curl -s https://TARGET/.svn/entries | head -5
+run_tool curl -s https://TARGET/.git/HEAD
+run_tool curl -s https://TARGET/.svn/entries | head -5
 ```
 
 ### 8. Virtual Host / Subdomain
@@ -81,5 +81,5 @@ ffuf -u https://TARGET -w /usr/share/seclists/Discovery/DNS/subdomains-top1milli
 ### 9. Output
 ```bash
 ffuf -u https://TARGET/FUZZ -w wordlist.txt -ac -o results.json -of json
-curl -sI https://TARGET/discovered_path  # Verify
+run_tool curl -sI https://TARGET/discovered_path  # Verify
 ```

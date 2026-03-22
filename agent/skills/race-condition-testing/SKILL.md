@@ -17,7 +17,7 @@ origin: RedteamOpencode
 ## Tools
 
 - Burp Suite Turbo Intruder
-- curl `--parallel` (HTTP/2 multiplexing)
+- `run_tool curl --parallel` (HTTP/2 multiplexing)
 - Custom Python scripts (asyncio + aiohttp)
 - Burp Repeater (send group in parallel)
 - GNU parallel
@@ -40,7 +40,7 @@ origin: RedteamOpencode
 - [ ] Prepare N identical requests
 - [ ] Send all in a single TCP packet using HTTP/2 multiplexing:
       ```bash
-      curl --parallel --parallel-max 50 \
+      run_tool curl --parallel --parallel-max 50 \
         -X POST https://target/redeem-coupon \
         -d "code=DISCOUNT50" \
         -H "Cookie: session=xxx" \
@@ -107,7 +107,7 @@ origin: RedteamOpencode
 - Endpoint and action with race condition
 - Number of parallel requests sent
 - Number of successful duplicate executions
-- Technique used (single-packet, Turbo Intruder, curl parallel)
+- Technique used (single-packet, Turbo Intruder, run_tool curl --parallel)
 - Business impact (financial loss, integrity violation, privilege escalation)
 - Timing window observed
 - Severity: High (financial) to Medium (logic bypass)

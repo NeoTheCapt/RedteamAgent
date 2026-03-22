@@ -14,7 +14,7 @@ origin: RedteamOpencode
 
 ## Tools
 
-- curl (manual request replay)
+- run_tool curl (manual request replay)
 - Burp Suite (generate CSRF PoC)
 - Browser DevTools (inspect cookies, headers)
 - Custom HTML PoC pages

@@ -15,7 +15,7 @@ origin: RedteamOpencode
 
 ## Tools
 
-- curl (send crafted Origin headers)
+- run_tool curl (send crafted Origin headers)
 - Burp Suite Repeater
 - Browser DevTools (Console for fetch tests)
 - CORScanner (automated testing)

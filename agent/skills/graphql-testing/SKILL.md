@@ -14,7 +14,7 @@ origin: RedteamOpencode
 
 ## Tools
 
-- curl / Burp Suite Repeater
+- run_tool curl / Burp Suite Repeater
 - Altair GraphQL Client
 - InQL (Burp extension for GraphQL)
 - graphql-voyager (schema visualization)

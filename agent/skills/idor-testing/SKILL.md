@@ -14,7 +14,7 @@ origin: RedteamOpencode
 
 ## Tools
 
-- curl with multiple auth tokens
+- run_tool curl with multiple auth tokens
 - Burp Suite Repeater + Autorize extension
 - Two or more test accounts (different privilege levels)
 - Burp Comparer for response diffing
