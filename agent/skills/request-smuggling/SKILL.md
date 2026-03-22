@@ -14,7 +14,7 @@ origin: RedteamOpencode
 
 ## Tools
 
-- run_tool curl (raw request crafting)
+- `run_tool curl` (raw request crafting)
 - Burp Suite Repeater (disable auto content-length update)
 - smuggler.py (automated detection)
 - HTTP Request Smuggler (Burp extension)
