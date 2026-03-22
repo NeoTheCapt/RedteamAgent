@@ -22,6 +22,11 @@ origin: RedteamOpencode
 - Burp Repeater (send group in parallel)
 - GNU parallel
 
+For current-engagement target requests, use plain `run_tool curl` by default and let
+`rtcurl` load `auth.json` automatically. Only add explicit `Cookie:` or
+`Authorization:` headers when intentionally testing alternate-user races or session
+override behavior.
+
 ## Methodology
 
 ### 1. Identify Race Condition Targets
@@ -43,7 +48,7 @@ origin: RedteamOpencode
       run_tool curl --parallel --parallel-max 50 \
         -X POST https://target/redeem-coupon \
         -d "code=DISCOUNT50" \
-        -H "Cookie: session=xxx" \
+        # Add explicit Cookie/Auth only when testing a second session or override path
         --url "https://target/redeem-coupon" \
         --url "https://target/redeem-coupon" \
         [repeat N times]

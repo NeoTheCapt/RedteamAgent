@@ -54,6 +54,11 @@ existing and non-existing users is an enumeration vector. This includes:
 - Python/websocket scripts — for WebSocket enumeration
 - `grpcurl` — for gRPC service testing (if available)
 
+For live engagement target requests, use plain `run_tool curl` by default and let the
+current engagement's `auth.json` flow through `rtcurl` automatically. Only add
+explicit cookies or authorization headers when intentionally testing a second account,
+session confusion, or auth override behavior.
+
 ## Methodology
 
 ### 1. Identify Enumeration Surfaces

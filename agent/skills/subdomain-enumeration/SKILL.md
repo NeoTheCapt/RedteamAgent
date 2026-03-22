@@ -151,10 +151,10 @@ run_tool subfinder -dL /engagement/scans/subdomains.txt -all -silent \
 Import discovered subdomains as cases for testing:
 
 ```bash
-# Convert subdomains to recon_ingest format
-while IFS= read -r sub; do
+# Only import verified live web entries. subdomains_live.txt is: "<subdomain> <url> <status>"
+awk '{print $1}' "$ENGAGEMENT_DIR/scans/subdomains_live.txt" | sort -u | while IFS= read -r sub; do
   echo "GET https://$sub"
-done < "$ENGAGEMENT_DIR/scans/subdomains.txt" | \
+done | \
   ./scripts/recon_ingest.sh "$ENGAGEMENT_DIR/cases.db" subdomain-enum
 ```
 
