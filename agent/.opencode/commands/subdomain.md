@@ -17,7 +17,8 @@ But look carefully first — the domain IS in this message somewhere.
 ## Step 2: Run subfinder
 
 ```bash
-ENG_DIR=$(ls -1d engagements/*/ 2>/dev/null | sort -r | head -1 | sed 's|/$||')
+source scripts/lib/engagement.sh
+ENG_DIR=$(resolve_engagement_dir "$(pwd)")
 if [ -z "$ENG_DIR" ]; then ENG_DIR="$(pwd)"; fi
 mkdir -p "$ENG_DIR/scans"
 export ENGAGEMENT_DIR="$ENG_DIR"

@@ -9,6 +9,9 @@
 # No set -e: grep returning no matches (exit 1) is expected, not an error.
 
 INPUT=$(cat)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=/dev/null
+source "$SCRIPT_DIR/../lib/engagement.sh"
 
 # Only check Bash tool calls
 TOOL_NAME=$(echo "$INPUT" | jq -r '.tool_name // empty' 2>/dev/null || true)
@@ -33,7 +36,7 @@ case "$COMMAND" in
 esac
 
 # Find active engagement directory
-ENG_DIR=$(ls -td engagements/*/ 2>/dev/null | head -1 | sed 's|/$||' || true)
+ENG_DIR=$(resolve_engagement_dir "$(pwd)" || true)
 [ -z "$ENG_DIR" ] && exit 0
 [ ! -f "$ENG_DIR/scope.json" ] && exit 0
 

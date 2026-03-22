@@ -23,6 +23,7 @@ docs/
 # ============================================
 agent/engagements/*/
 !agent/engagements/.gitkeep
+agent/engagements/.active
 
 # ============================================
 # Pentest tool output & artifacts

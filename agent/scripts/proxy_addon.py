@@ -459,8 +459,9 @@ class CaseCollector:
         req_headers_dict = dict(req.headers)
         req_headers_json = json.dumps(req_headers_dict)
 
-        # Content type and body
-        content_type = req.headers.get("content-type", "") or ""
+        # Prefer response content type for classification/storage. Request content
+        # type is often empty for GETs and would misclassify normal pages as unknown.
+        content_type = resp.headers.get("content-type", "") or req.headers.get("content-type", "") or ""
         raw_req_body = req.get_content(raise_if_missing=False) or b""
         content_length = len(raw_req_body)
 

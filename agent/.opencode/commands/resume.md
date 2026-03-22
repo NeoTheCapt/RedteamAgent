@@ -5,14 +5,15 @@ You are the operator resuming a previously interrupted engagement. The engagemen
 ## Step 1: Find Active Engagement
 
 ```bash
-ENG_DIR=$(ls -td engagements/*/ 2>/dev/null | head -1 | sed 's|/$||')
+source scripts/lib/engagement.sh
+ENG_DIR=$(resolve_engagement_dir "$(pwd)")
 echo "Found: $ENG_DIR"
 cat "$ENG_DIR/scope.json" 2>/dev/null
 ```
 
 If no engagement found or status is "completed", inform user there's nothing to resume.
 
-If the user provided a specific engagement directory in their arguments, use that instead.
+If the user provided a specific engagement directory in their arguments, use that instead. After choosing the engagement, update `engagements/.active` so hooks and helper commands target the same run.
 
 ## Step 2: Read Full State
 

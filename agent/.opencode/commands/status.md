@@ -10,7 +10,8 @@ Locate the most recent engagement directory under `engagements/`. Read:
 
 Also read queue stats if cases.db exists:
 ```bash
-ENG_DIR=$(ls -1d engagements/*/ 2>/dev/null | sort -r | head -1 | sed 's|/$||')
+source scripts/lib/engagement.sh
+ENG_DIR=$(resolve_engagement_dir "$(pwd)")
 PHASES=$(jq -r '.phases_completed // [] | join(", ")' "$ENG_DIR/scope.json" 2>/dev/null)
 CURRENT=$(jq -r '.current_phase // "unknown"' "$ENG_DIR/scope.json" 2>/dev/null)
 FINDINGS=$(grep -c '^\#\# \[FINDING-' "$ENG_DIR/findings.md" 2>/dev/null || echo 0)

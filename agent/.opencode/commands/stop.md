@@ -5,7 +5,8 @@ You are the operator shutting down all background processes for the current enga
 ## Step 1: Locate Active Engagement
 
 ```bash
-ENG_DIR=$(ls -td engagements/*/ 2>/dev/null | head -1 | sed 's|/$||')
+source scripts/lib/engagement.sh
+ENG_DIR=$(resolve_engagement_dir "$(pwd)")
 echo "Engagement: $ENG_DIR"
 ```
 

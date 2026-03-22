@@ -7,7 +7,8 @@ You are the operator managing the mitmproxy interception proxy for the current e
 Find the most recent engagement directory under `engagements/`:
 
 ```bash
-ENG_DIR=$(ls -td engagements/*/ 2>/dev/null | head -1 | sed 's|/$||')
+source scripts/lib/engagement.sh
+ENG_DIR=$(resolve_engagement_dir "$(pwd)")
 echo "Engagement: $ENG_DIR"
 ```
 

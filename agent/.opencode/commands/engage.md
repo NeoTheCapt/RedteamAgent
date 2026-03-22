@@ -58,6 +58,7 @@ START_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
 DIR="engagements/${DATE}-${TIME}-${HOSTNAME_CLEAN}"
 mkdir -p "$DIR/tools" "$DIR/downloads" "$DIR/scans" "$DIR/pids"
+printf '%s\n' "$DIR" > engagements/.active
 
 # NOTE: Use unquoted heredoc (no quotes around EOF) so variables expand
 cat > "$DIR/scope.json" << EOF

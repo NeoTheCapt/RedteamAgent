@@ -5,7 +5,8 @@ You are the operator managing runtime parameters for the current engagement.
 ## Step 1: Locate Active Engagement
 
 ```bash
-ENG_DIR=$(ls -1d engagements/*/ 2>/dev/null | sort -r | head -1 | sed 's|/$||')
+source scripts/lib/engagement.sh
+ENG_DIR=$(resolve_engagement_dir "$(pwd)")
 echo "Engagement: $ENG_DIR"
 ```
 

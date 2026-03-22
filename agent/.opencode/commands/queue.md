@@ -7,7 +7,8 @@ You are the operator checking the case queue status for the current engagement.
 Find the most recent engagement directory under `engagements/`:
 
 ```bash
-ls -td engagements/*/ 2>/dev/null | head -1
+source scripts/lib/engagement.sh
+resolve_engagement_dir "$(pwd)"
 ```
 
 If no engagement directory exists, inform the user to run `/engage` first and stop.

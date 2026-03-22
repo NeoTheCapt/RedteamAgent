@@ -12,6 +12,9 @@
 # No set -e: jq/grep returning empty is expected, not an error.
 
 INPUT=$(cat)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=/dev/null
+source "$SCRIPT_DIR/../lib/engagement.sh"
 
 # Parse fields
 TOOL_NAME=$(echo "$INPUT" | jq -r '.tool_name // empty' 2>/dev/null || true)
@@ -20,7 +23,7 @@ TOOL_NAME=$(echo "$INPUT" | jq -r '.tool_name // empty' 2>/dev/null || true)
 AGENT_TYPE=$(echo "$INPUT" | jq -r '.agent_type // "operator"' 2>/dev/null || echo "operator")
 
 # Find active engagement directory
-ENG_DIR=$(ls -td engagements/*/ 2>/dev/null | head -1 | sed 's|/$||' || true)
+ENG_DIR=$(resolve_engagement_dir "$(pwd)" || true)
 [ -z "$ENG_DIR" ] && exit 0
 [ ! -f "$ENG_DIR/log.md" ] && exit 0
 
