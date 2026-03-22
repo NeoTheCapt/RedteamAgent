@@ -2,9 +2,18 @@
 # Claude Code / IDE (dev workspace)
 # ============================================
 /.claude/
+/.codex/
+/.worktrees/
 /CLAUDE.md
+/AGENTS.md
 /opencode.json
+/tools/
+/tests/
 docs/
+/tmp/
+/tmp-*/
+/scratch/
+/scratch-*/
 
 # Track agent/.claude/ (runtime config) but ignore local overrides
 !agent/.claude/

@@ -8,6 +8,10 @@
 #   ./install.sh --dry-run opencode              Validate without writing
 #   bash <(curl -fsSL URL) opencode ~/my-agent   Auto-clone and install
 #
+# Supported platforms: macOS and Linux only.
+# Windows is intentionally unsupported because the runtime depends on Unix-first
+# tooling and Docker workflows that are not maintained for native PowerShell.
+#
 # target_dir defaults to ~/redteam-agent if not specified.
 # Each product gets ONLY its own files — no cross-product contamination.
 set -e
@@ -33,6 +37,9 @@ if [ -z "$PRODUCT" ]; then
   echo "  opencode  — Install for OpenCode (source files, no build needed)"
   echo "  claude    — Install for Claude Code (generates .claude/agents + commands)"
   echo "  codex     — Install for Codex (generates .codex/agents)"
+  echo ""
+  echo "  Supported platforms: macOS, Linux"
+  echo "  Windows / PowerShell: not supported"
   echo ""
   echo "  target_dir defaults to ~/redteam-agent"
   exit 1
