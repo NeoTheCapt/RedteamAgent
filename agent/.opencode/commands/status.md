@@ -4,7 +4,7 @@ You are the operator providing a status summary of the current engagement.
 
 ## Step 1: Load Engagement State
 
-Locate the most recent engagement directory under `engagements/`. Read:
+Locate the active engagement via `resolve_engagement_dir`. Read:
 - `scope.json` -- target, scope, mode, status, phases completed, current phase
 - `findings.md` -- count findings by severity
 
@@ -79,7 +79,15 @@ sqlite3 "$ENG_DIR/cases.db" ".timeout 5000" "
 ## Step 3: Container Status
 
 ```bash
-docker ps --format "{{.Names}} ({{.Status}})" --filter "name=redteam" 2>/dev/null
+source scripts/lib/container.sh
+export ENGAGEMENT_DIR="$ENG_DIR"
+PROXY_NAME=$(_proxy_container_name 2>/dev/null || true)
+KATANA_NAME=$(_katana_container_name 2>/dev/null || true)
+
+for name in "$PROXY_NAME" "$KATANA_NAME"; do
+  [ -n "$name" ] || continue
+  docker ps --format "{{.Names}} ({{.Status}})" --filter "name=^${name}$" 2>/dev/null
+done
 ```
 
 ## User Arguments

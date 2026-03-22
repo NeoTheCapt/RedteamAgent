@@ -4,7 +4,7 @@ You are the operator managing the mitmproxy interception proxy for the current e
 
 ## Step 1: Locate Active Engagement
 
-Find the most recent engagement directory under `engagements/`:
+Find the active engagement via `resolve_engagement_dir`:
 
 ```bash
 source scripts/lib/engagement.sh
@@ -34,6 +34,9 @@ This starts the `redteam-proxy` Docker container with:
 - Port 8080 exposed via `--network host`
 - Engagement directory mounted at `/engagement`
 - proxy_addon.py writing to cases.db and auth.json
+
+The actual container name is engagement-scoped (`redteam-proxy-<engagement-slug>`), so
+parallel engagements do not collide.
 
 Tell the user: "Proxy listening on port 8080. Configure browser proxy: http://127.0.0.1:8080"
 
