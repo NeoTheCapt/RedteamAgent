@@ -70,6 +70,7 @@ Use `@agent-name` when dispatching subagents:
 - New files: use bash commands (mkdir, cat >, echo >). Existing files: use Edit tool.
 EOF
   } > "$CLAUDE_OUT"
+  perl -0pi -e 's/\n+\z/\n/' "$CLAUDE_OUT"
 }
 
 render_agents() {
@@ -116,6 +117,7 @@ After an engagement, review generated tools in `engagements/<...>/tools/`:
 2. Add path to instructions array in `.opencode/opencode.json`
 EOF
   } > "$AGENTS_OUT"
+  perl -0pi -e 's/\n+\z/\n/' "$AGENTS_OUT"
 }
 
 render_claude_wrapper() {

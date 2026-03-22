@@ -115,8 +115,11 @@ export ENGAGEMENT_DIR="$DIR"
 run_tool nmap -sV -sC target
 ```
 
-Host-allowed: curl, jq, sqlite3, dig, whois, python3, grep/rg, sed, awk, base64, openssl.
-Everything else → `run_tool`. If Docker fails, log error, fallback to host with note in log.md.
+Target HTTP requests must use `run_tool curl`, not raw host `curl`. The engagement-scoped
+`rtcurl` wrapper automatically applies in-scope auth and the fixed engagement User-Agent.
+Only use host `curl` for external OSINT or non-target internet resources. Host-allowed:
+jq, sqlite3, dig, whois, python3, grep/rg, sed, awk, base64, openssl. Everything else
+target-facing → `run_tool`. If Docker fails, log error, fallback to host with note in log.md.
 
 ## Finding Format
 
