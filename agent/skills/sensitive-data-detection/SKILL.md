@@ -27,7 +27,8 @@ Run against any text corpus (API response, source file, database dump, downloade
 
 ```bash
 # Save target content to a temp file first, then scan all patterns in one pass
-TARGET_FILE="/tmp/pii_scan_input.txt"
+TARGET_FILE=$(mktemp)
+trap 'rm -f "$TARGET_FILE"' EXIT
 
 # === IDENTITY DOCUMENTS ===
 
@@ -179,10 +180,10 @@ echo "$RESPONSE" | jq -r '[paths(scalars)] | .[] | join(".")' | \
 
 ```bash
 # Check response headers for leaked info
-curl -sI "$TARGET_URL" | rg -i '(x-user|x-customer|x-employee|x-account|x-session|x-token|x-debug|x-internal|x-forwarded-for|x-real-ip)'
+run_tool curl -sI "$TARGET_URL" | rg -i '(x-user|x-customer|x-employee|x-account|x-session|x-token|x-debug|x-internal|x-forwarded-for|x-real-ip)'
 
 # Decode and inspect cookies
-curl -s -c - "$TARGET_URL" | while read -r line; do
+run_tool curl -s -c - "$TARGET_URL" | while read -r line; do
   cookie_val=$(echo "$line" | awk '{print $NF}')
   # Try base64 decode
   decoded=$(echo "$cookie_val" | base64 -d 2>/dev/null)

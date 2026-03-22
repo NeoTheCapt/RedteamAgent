@@ -4,10 +4,11 @@ You are the operator checking the case queue status for the current engagement.
 
 ## Step 1: Locate Active Engagement
 
-Find the most recent engagement directory under `engagements/`:
+Resolve the active engagement via `resolve_engagement_dir`:
 
 ```bash
-ls -td engagements/*/ 2>/dev/null | head -1
+source scripts/lib/engagement.sh
+resolve_engagement_dir "$(pwd)"
 ```
 
 If no engagement directory exists, inform the user to run `/engage` first and stop.
@@ -34,7 +35,7 @@ Run the dispatcher stats command:
 
 Display the stats output in a clear, readable format. Highlight:
 - Total number of cases
-- Breakdown by status (pending, in_progress, done, error)
+- Breakdown by status (`pending`, `processing`, `done`, `error`)
 - Breakdown by type if available
 - Any stale cases that may need attention
 

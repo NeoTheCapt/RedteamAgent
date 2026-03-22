@@ -1,0 +1,6 @@
+node_modules
+
+# Plugin compiled output (keep .ts source, ignore .js artifacts)
+plugins/*.js
+plugins/*.d.ts
+plugins/*.js.map

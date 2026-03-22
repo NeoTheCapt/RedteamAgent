@@ -14,7 +14,8 @@ If no argument provided, show current mode status.
 
 1. Update scope.json — set `confirm_mode` to `"auto"`:
    ```bash
-   ENG_DIR=$(ls -1d engagements/*/ 2>/dev/null | sort -r | head -1 | sed 's|/$||')
+   source scripts/lib/engagement.sh
+   ENG_DIR=$(resolve_engagement_dir "$(pwd)")
    if [ -n "$ENG_DIR" ] && [ -f "$ENG_DIR/scope.json" ]; then
        jq '.confirm_mode = "auto"' "$ENG_DIR/scope.json" > "$ENG_DIR/scope_tmp.json" && mv "$ENG_DIR/scope_tmp.json" "$ENG_DIR/scope.json"
    fi
@@ -32,7 +33,8 @@ If no argument provided, show current mode status.
 
 1. Update scope.json — set `confirm_mode` to `"manual"`:
    ```bash
-   ENG_DIR=$(ls -1d engagements/*/ 2>/dev/null | sort -r | head -1 | sed 's|/$||')
+   source scripts/lib/engagement.sh
+   ENG_DIR=$(resolve_engagement_dir "$(pwd)")
    if [ -n "$ENG_DIR" ] && [ -f "$ENG_DIR/scope.json" ]; then
        jq '.confirm_mode = "manual"' "$ENG_DIR/scope.json" > "$ENG_DIR/scope_tmp.json" && mv "$ENG_DIR/scope_tmp.json" "$ENG_DIR/scope.json"
    fi
@@ -50,7 +52,8 @@ If no argument provided, show current mode status.
 
 Read current mode from scope.json:
 ```bash
-ENG_DIR=$(ls -1d engagements/*/ 2>/dev/null | sort -r | head -1 | sed 's|/$||')
+source scripts/lib/engagement.sh
+ENG_DIR=$(resolve_engagement_dir "$(pwd)")
 MODE=$(jq -r '.confirm_mode // "auto"' "$ENG_DIR/scope.json" 2>/dev/null || echo "auto")
 echo "Current mode: $MODE"
 ```

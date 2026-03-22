@@ -22,6 +22,53 @@ _resolve_engagement_dir() {
     fi
 }
 
+_engagement_slug() {
+    _resolve_engagement_dir || return 1
+    basename "$ENGAGEMENT_DIR_ABS" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9._-' '-'
+}
+
+_proxy_container_name() {
+    local slug
+    slug="$(_engagement_slug)" || return 1
+    echo "redteam-proxy-${slug}"
+}
+
+_katana_container_name() {
+    local slug
+    slug="$(_engagement_slug)" || return 1
+    echo "redteam-katana-${slug}"
+}
+
+_auth_header_args() {
+    _resolve_engagement_dir || return 1
+    local auth_file="${ENGAGEMENT_DIR_ABS}/auth.json"
+    if [ ! -f "$auth_file" ]; then
+        return 0
+    fi
+
+    jq -r '
+      [
+        (if (.cookies | type) == "object" and ((.cookies | keys | length) > 0)
+         then "Cookie: " + (.cookies | to_entries | map(.key + "=" + .value) | join("; "))
+         else empty end),
+        (if (.headers | type) == "object"
+         then (.headers | to_entries[] | .key + ": " + .value)
+         else empty end)
+      ] | .[]
+    ' "$auth_file" 2>/dev/null | while IFS= read -r header; do
+        [ -n "$header" ] || continue
+        printf '%s\0%s\0' "-H" "$header"
+    done
+}
+
+_auth_header_array() {
+    local args=()
+    while IFS= read -r -d '' item; do
+        args+=("$item")
+    done < <(_auth_header_args)
+    printf '%s\n' "${args[@]}"
+}
+
 # Run a one-shot tool in the kali-redteam container
 # Usage: run_tool <tool> [args...]
 # Requires: ENGAGEMENT_DIR env var set
@@ -36,6 +83,10 @@ run_tool() {
     elif [ -f "$(pwd)/.env" ]; then
         docker_args+=(--env-file "$(pwd)/.env")
     fi
+    if [[ "$tool" == "curl" && -x "${ENGAGEMENT_DIR_ABS}/tools/rtcurl" ]]; then
+        docker run "${docker_args[@]}" "$REDTEAM_IMAGE" /engagement/tools/rtcurl "$@"
+        return
+    fi
     docker run "${docker_args[@]}" "$REDTEAM_IMAGE" "$tool" "$@"
 }
 
@@ -43,11 +94,16 @@ run_tool() {
 # Usage: start_proxy [extra_mitmdump_args...]
 start_proxy() {
     _resolve_engagement_dir || return 1
-    if docker ps --format '{{.Names}}' | grep -q '^redteam-proxy$'; then
+    local container_name
+    container_name="$(_proxy_container_name)" || return 1
+    if docker ps --format '{{.Names}}' | grep -q "^${container_name}\$"; then
         echo "[proxy] Already running"
         return 0
     fi
-    docker run -d --name redteam-proxy \
+    if docker ps -a --format '{{.Names}}' | grep -q "^${container_name}\$"; then
+        docker rm -f "$container_name" >/dev/null 2>&1 || true
+    fi
+    docker run -d --name "$container_name" \
         --network host \
         -v "${ENGAGEMENT_DIR_ABS}:/engagement" \
         "$PROXY_IMAGE" \
@@ -58,8 +114,10 @@ start_proxy() {
 
 # Stop the mitmproxy container (also removes exited containers to avoid name conflicts)
 stop_proxy() {
-    docker stop redteam-proxy 2>/dev/null
-    docker rm -f redteam-proxy 2>/dev/null
+    local container_name
+    container_name="$(_proxy_container_name)" || return 0
+    docker stop "$container_name" 2>/dev/null
+    docker rm -f "$container_name" 2>/dev/null
     echo "[proxy] Stopped and removed"
 }
 
@@ -68,53 +126,47 @@ stop_proxy() {
 start_katana() {
     local target="$1"; shift
     _resolve_engagement_dir || return 1
+    local container_name
+    container_name="$(_katana_container_name)" || return 1
     if [ -z "$target" ]; then
         echo "ERROR: target URL required" >&2
         return 1
     fi
-    if docker ps --format '{{.Names}}' | grep -q '^redteam-katana$'; then
+
+    if docker ps --format '{{.Names}}' | grep -q "^${container_name}\$"; then
         echo "[katana] Already running"
         return 0
     fi
 
-    # Build cookie args from auth.json if available
-    local cookie_flag=""
-    local cookie_val=""
-    if [ -f "${ENGAGEMENT_DIR_ABS}/auth.json" ]; then
-        local cookies
-        cookies=$(jq -r 'if .cookies | type == "object" then .cookies | to_entries | map(.key + "=" + .value) | join("; ") elif .cookies | type == "string" then .cookies else "" end' "${ENGAGEMENT_DIR_ABS}/auth.json" 2>/dev/null)
-        if [ -n "$cookies" ] && [ "$cookies" != "null" ] && [ "$cookies" != "" ]; then
-            cookie_flag="-H"
-            cookie_val="Cookie: $cookies"
-        fi
+    # Remove stale stopped container to avoid name conflicts on restart.
+    if docker ps -a --format '{{.Names}}' | grep -q "^${container_name}\$"; then
+        docker rm -f "$container_name" >/dev/null 2>&1 || true
     fi
+
+    local auth_args=()
+    while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        auth_args+=("$line")
+    done < <(_auth_header_array)
 
     mkdir -p "${ENGAGEMENT_DIR_ABS}/scans"
 
-    # Note: avoid empty array expansion under set -u by using individual variables
-    if [ -n "$cookie_flag" ]; then
-        docker run -d --name redteam-katana \
-            --network host \
-            -v "${ENGAGEMENT_DIR_ABS}:/engagement" \
-            "$KATANA_IMAGE" \
-            -u "$target" -jc -d 3 -jsonl -silent \
-            "$cookie_flag" "$cookie_val" \
-            -o /engagement/scans/katana_output.jsonl
-    else
-        docker run -d --name redteam-katana \
-            --network host \
-            -v "${ENGAGEMENT_DIR_ABS}:/engagement" \
-            "$KATANA_IMAGE" \
-            -u "$target" -jc -d 3 -jsonl -silent \
-            -o /engagement/scans/katana_output.jsonl
-    fi
+    docker run -d --name "$container_name" \
+        --network host \
+        -v "${ENGAGEMENT_DIR_ABS}:/engagement" \
+        "$KATANA_IMAGE" \
+        -u "$target" -jc -d 3 -jsonl -silent \
+        "${auth_args[@]}" \
+        -o /engagement/scans/katana_output.jsonl
     echo "[katana] Started crawling $target"
 }
 
 # Stop Katana container (also removes exited containers to avoid name conflicts)
 stop_katana() {
-    docker stop redteam-katana 2>/dev/null
-    docker rm -f redteam-katana 2>/dev/null
+    local container_name
+    container_name="$(_katana_container_name)" || return 0
+    docker stop "$container_name" 2>/dev/null
+    docker rm -f "$container_name" 2>/dev/null
     echo "[katana] Stopped and removed"
 }
 
@@ -122,8 +174,7 @@ stop_katana() {
 stop_all_containers() {
     stop_proxy
     stop_katana
-    docker ps -q --filter "ancestor=$REDTEAM_IMAGE" | xargs docker stop 2>/dev/null || true
-    echo "[containers] All engagement containers stopped"
+    echo "[containers] Current engagement containers stopped"
 }
 
 # Check if required Docker images are built

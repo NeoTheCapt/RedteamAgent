@@ -13,6 +13,8 @@
  */
 
 import type { PluginInput } from "@opencode-ai/plugin"
+import { appendFile, readFile, readdir, stat } from "node:fs/promises"
+import path from "node:path"
 
 interface ScopeJson {
   target: string
@@ -49,26 +51,47 @@ export const EngagementHooksPlugin = async ({
   /** Localhost / loopback addresses — always allowed regardless of scope. */
   const LOCALHOST = new Set(["localhost", "127.0.0.1", "0.0.0.0", "::1"])
 
-  /**
-   * Find the most recent engagement directory with the given status.
-   * Returns the directory path or null.
-   */
-  const findActiveEngagement = async (): Promise<string | null> => {
-    try {
-      const result = await $`ls -1dt ${root}/engagements/*/scope.json 2>/dev/null`.text()
-      const scopeFiles = result.trim().split("\n").filter(Boolean)
+  const scopeEntries = (scope: ScopeJson | null): string[] => {
+    if (!scope) return []
+    return [...new Set([scope.hostname, ...(scope.scope || [])].filter(Boolean))]
+  }
 
-      for (const scopeFile of scopeFiles) {
-        try {
-          const content = await $`cat ${scopeFile}`.text()
-          const scope: ScopeJson = JSON.parse(content)
-          if (scope.status === "in_progress") {
-            return scopeFile.replace(/\/scope\.json$/, "")
-          }
-        } catch {
-          // Malformed scope.json, skip
-        }
-      }
+  const validEngagementDir = async (candidate: string | null | undefined): Promise<string | null> => {
+    if (!candidate) return null
+    try {
+      const info = await stat(candidate)
+      return info.isDirectory() ? candidate : null
+    } catch {
+      return null
+    }
+  }
+
+  /**
+   * Resolve engagement directory using the same precedence as shell helpers:
+   * ENGAGEMENT_DIR env -> engagements/.active -> most recent engagements/* directory.
+   */
+  const resolveEngagementDir = async (): Promise<string | null> => {
+    const envDir = await validEngagementDir(process.env.ENGAGEMENT_DIR)
+    if (envDir) return envDir
+
+    const engagementsDir = path.join(root, "engagements")
+    try {
+      const activePath = path.join(engagementsDir, ".active")
+      const active = (await readFile(activePath, "utf8")).trim()
+      const activeDir = await validEngagementDir(active)
+      if (activeDir) return activeDir
+    } catch {
+      // no active engagement marker
+    }
+
+    try {
+      const entries = await readdir(engagementsDir, { withFileTypes: true })
+      const engagementDirs = entries
+        .filter((entry) => entry.isDirectory())
+        .map((entry) => path.join(engagementsDir, entry.name))
+        .sort()
+        .reverse()
+      return engagementDirs[0] || null
     } catch {
       // No engagement directories found
     }
@@ -80,7 +103,7 @@ export const EngagementHooksPlugin = async ({
    */
   const readScope = async (engagementDir: string): Promise<ScopeJson | null> => {
     try {
-      const content = await $`cat ${engagementDir}/scope.json`.text()
+      const content = await readFile(path.join(engagementDir, "scope.json"), "utf8")
       return JSON.parse(content)
     } catch {
       return null
@@ -150,24 +173,24 @@ export const EngagementHooksPlugin = async ({
     "session.created": async () => {
       log("info", "[Engagement] Plugin loaded")
 
-      const engagementDir = await findActiveEngagement()
+      const engagementDir = await resolveEngagementDir()
       if (!engagementDir) {
         log("info", "[Engagement] No active engagement found")
         return
       }
 
       const scope = await readScope(engagementDir)
-      if (!scope) return
+      if (!scope || scope.status !== "in_progress") return
 
       let logContent = ""
       let findingsContent = ""
       try {
-        logContent = await $`cat ${engagementDir}/log.md`.text()
+        logContent = await readFile(path.join(engagementDir, "log.md"), "utf8")
       } catch {
         // log.md may not exist yet
       }
       try {
-        findingsContent = await $`cat ${engagementDir}/findings.md`.text()
+        findingsContent = await readFile(path.join(engagementDir, "findings.md"), "utf8")
       } catch {
         // findings.md may not exist yet
       }
@@ -177,7 +200,7 @@ export const EngagementHooksPlugin = async ({
 
       let queueInfo = ""
       try {
-        const statsOutput = await $`./scripts/dispatcher.sh ${engagementDir}/cases.db stats 2>/dev/null`.text()
+        const statsOutput = await $`./scripts/dispatcher.sh ${path.join(engagementDir, "cases.db")} stats`.text()
         queueInfo = statsOutput.trim()
       } catch {
         queueInfo = "no queue"
@@ -232,18 +255,19 @@ export const EngagementHooksPlugin = async ({
       const hostnames = extractHostnames(command)
       if (hostnames.length === 0) return
 
-      const engagementDir = await findActiveEngagement()
+      const engagementDir = await resolveEngagementDir()
       if (!engagementDir) return
 
       const scope = await readScope(engagementDir)
-      if (!scope || !scope.scope || scope.scope.length === 0) return
+      const allowedEntries = scopeEntries(scope)
+      if (!scope || allowedEntries.length === 0) return
 
       for (const hostname of hostnames) {
-        if (!isInScope(hostname, scope.scope)) {
+        if (!isInScope(hostname, allowedEntries)) {
           log(
             "warn",
             `[Engagement] OUT OF SCOPE: "${hostname}" does not match any scope entry ` +
-              `[${scope.scope.join(", ")}]. Agent: ${currentAgent}. Verify this is intentional.`
+              `[${allowedEntries.join(", ")}]. Agent: ${currentAgent}. Verify this is intentional.`
           )
         }
       }
@@ -283,14 +307,14 @@ export const EngagementHooksPlugin = async ({
       if (engMatch) {
         const candidateDir = `${root}/${engMatch[0]}`
         try {
-          await $`test -f ${candidateDir}/log.md`
+          await readFile(path.join(candidateDir, "log.md"), "utf8")
           engagementDir = candidateDir
         } catch {
           // Not a valid engagement dir, fall back
         }
       }
       if (!engagementDir) {
-        engagementDir = await findActiveEngagement()
+        engagementDir = await resolveEngagementDir()
       }
       if (!engagementDir) return
 
@@ -313,7 +337,7 @@ export const EngagementHooksPlugin = async ({
       ].join("\n")
 
       try {
-        await $`printf '%s' ${entry} >> ${engagementDir}/log.md`
+        await appendFile(path.join(engagementDir, "log.md"), entry)
         log("debug", `[Engagement] Logged command to ${engagementDir}/log.md`)
       } catch (err) {
         log("warn", `[Engagement] Failed to append to log.md: ${err}`)

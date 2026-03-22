@@ -11,14 +11,14 @@
     <img src="https://img.shields.io/badge/platform-macOS%20|%20Linux-blue" alt="Platform">
     <img src="https://img.shields.io/badge/tools-Docker%20containerized-blue" alt="Docker">
     <img src="https://img.shields.io/badge/agents-8%20specialized-orange" alt="Agents">
-    <img src="https://img.shields.io/badge/skills-31%20attack%20methodologies-red" alt="Skills">
-    <img src="https://img.shields.io/badge/references-57%20files-green" alt="References">
+    <img src="https://img.shields.io/badge/skills-32%20attack%20methodologies-red" alt="Skills">
+    <img src="https://img.shields.io/badge/references-78%20files-green" alt="References">
   </p>
 </p>
 
 ---
 
-An autonomous red team simulation agent that works with **Claude Code**, **OpenCode**, and **Codex**. It transforms any workspace into a full penetration testing environment for CTF/lab targets — featuring **8 AI agents**, **containerized Kali tools**, a **streaming case collection pipeline**, and **57 security reference files**.
+An autonomous red team simulation agent that works with **Claude Code**, **OpenCode**, and **Codex**. It transforms any workspace into a full penetration testing environment for CTF/lab targets — featuring **8 AI agents**, **containerized Kali tools**, a **streaming case collection pipeline**, and **78 security reference files**.
 
 **Key Features:**
 - **Multi-CLI support** — works with Claude Code, OpenCode, and Codex out of the box
@@ -27,7 +27,7 @@ An autonomous red team simulation agent that works with **Claude Code**, **OpenC
 - **8 specialized agents** — operator, recon-specialist, source-analyzer, vulnerability-analyst, exploit-developer, fuzzer, osint-analyst, report-writer
 - **Containerized tools** — all pentest tools run in Docker (Kali toolbox, mitmproxy, Katana), zero local installation
 - **Case collection pipeline** — SQLite-backed queue with 4 producers, automatic type classification, zero-token dispatcher
-- **57 reference files** — OWASP Top 10:2025, API Security 2023, offensive tactics, AD/Kerberos attacks
+- **78 reference files** — OWASP Top 10:2025, API Security 2023, offensive tactics, AD/Kerberos attacks
 - **Resume support** — interrupt and continue any engagement without losing progress
 
 ## Installation
@@ -39,10 +39,12 @@ An autonomous red team simulation agent that works with **Claude Code**, **OpenC
   - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (recommended)
   - [OpenCode](https://opencode.ai) (`npm install -g opencode-ai`)
   - [Codex](https://github.com/openai/codex)
-- Local tools: `curl`, `jq`, `sqlite3` (pre-installed on macOS/Linux)
+- Local tools: `curl`, `jq`, `sqlite3`
+- Native Windows/PowerShell is not supported
 
 ### One-Line Install
 
+**macOS / Linux:**
 ```bash
 # Choose your CLI — each installs ONLY that product's files
 bash <(curl -fsSL https://raw.githubusercontent.com/NeoTheCapt/RedteamAgent/dev/install.sh) opencode
@@ -54,21 +56,19 @@ This auto-clones the repo, installs product-specific files to `~/redteam-agent`,
 
 ### Manual Setup
 
+**macOS / Linux:**
 ```bash
 git clone https://github.com/NeoTheCapt/RedteamAgent.git
 cd RedteamAgent
 
-# Install for your CLI (choose one)
-./install.sh opencode
-./install.sh claude
-./install.sh codex
-
-# Custom install directory
-./install.sh opencode ~/my-project
-
-# Dry run — validate without writing
-./install.sh --dry-run opencode
+./install.sh opencode                  # Install for OpenCode
+./install.sh claude                    # Install for Claude Code
+./install.sh codex                     # Install for Codex
+./install.sh opencode ~/my-project     # Custom directory
+./install.sh --dry-run opencode        # Validate without writing
 ```
+
+Windows is intentionally unsupported. Use a macOS/Linux environment for installation and runtime.
 
 ### Docker Images
 
@@ -218,11 +218,11 @@ RedteamOpencode/                ← dev workspace (git root)
     │   └── settings.json       ← hooks (scope check + auto-logging)
     ├── .codex/                 ← Codex config (agents generated)
     ├── scripts/
-    │   ├── build-agents.sh     ← generates .claude/agents + .codex/agents + .claude/commands
+    │   ├── install-time generators ← install.sh builds .claude/agents + .codex/agents + .claude/commands
     │   ├── dispatcher.sh       ← case queue management
     │   └── ...                 ← ingest, hooks, shared libraries
-    ├── skills/                 ← 31 attack methodology skills
-    ├── references/             ← 57 reference files (OWASP, tools, tactics, AD)
+    ├── skills/                 ← 32 attack methodology skills
+    ├── references/             ← 78 reference files (OWASP, tools, tactics, AD)
     ├── docker/                 ← Dockerfiles + docker-compose.yml
     └── engagements/            ← per-engagement output (created at runtime)
 ```
@@ -235,10 +235,14 @@ RedteamOpencode/                ← dev workspace (git root)
 | Subagents (8) | Generated `.claude/agents/*.md` | `.opencode/prompts/agents/*.txt` **(source)** | Generated `.codex/agents/*.toml` |
 | Slash commands (19) | Generated `.claude/commands/*.md` | `.opencode/commands/*.md` **(source)** | Not supported — use natural language instead |
 | Skills (31) | `skills/*/SKILL.md` (read on demand) | Loaded via instructions array | `skills/*/SKILL.md` (read on demand) |
-| Build | `scripts/build-agents.sh` generates agents + commands | N/A (source files) | `scripts/build-agents.sh` generates agents |
+| Build | `install.sh claude` generates agents + commands at install time | N/A (source files) | `install.sh codex` generates agents at install time |
 | Auto-logging | `.claude/settings.json` hooks | `.opencode/plugins/engagement-hooks.ts` | N/A |
 | Scope enforcement | Hook blocks out-of-scope | Hook warns out-of-scope | N/A |
 | Agent attribution | `agent_type` in hook JSON | `chat.message` event tracking | N/A |
+
+**Development-only wrappers**
+- `agent/.claude/agents/operator.md` and `agent/.codex/agents/operator.toml` exist only for working inside the source repo.
+- Installed Claude/Codex workspaces keep `CLAUDE.md` or `AGENTS.md` as the operator entrypoint and install only generated subagents.
 
 ## Customization
 
@@ -271,8 +275,8 @@ Agent prompts and commands are maintained **only** in OpenCode format (`.opencod
 
 ```bash
 # install.sh handles building for the target product:
-./install.sh claude ~/my-project   # generates .claude/agents/*.md + commands from .opencode/ sources
-./install.sh codex ~/my-project    # generates .codex/agents/*.toml from .opencode/ sources
+./install.sh claude ~/my-project   # generates .claude/agents/*.md + commands at install time
+./install.sh codex ~/my-project    # generates .codex/agents/*.toml at install time
 ./install.sh opencode ~/my-project # copies .opencode/ directly (no build needed)
 ```
 
@@ -280,7 +284,11 @@ Agent prompts and commands are maintained **only** in OpenCode format (`.opencod
 
 **To add a new agent:** create the `.txt` file, add agent entry to `opencode.json`, re-run `install.sh`.
 
-**Operator prompts** (`CLAUDE.md`, `AGENTS.md`, `operator.txt`) are maintained separately — they contain platform-specific content that can't be single-sourced.
+**Operator prompts** use a mixed model:
+- `agent/.opencode/prompts/agents/operator.txt` stays as the OpenCode source prompt
+- `agent/operator-core.md` is the shared Claude/Codex methodology body
+- `agent/scripts/render-operator-prompts.sh` renders `CLAUDE.md`, `AGENTS.md`, and the thin local operator wrappers
+- `bash tests/agent-contracts/check-operator-prompts.sh` verifies the generated files are still in sync
 
 ## Troubleshooting
 
@@ -316,15 +324,17 @@ RedTeam Agent 是一个自主红队模拟 Agent，支持 **Claude Code**、**Ope
 
 ## 快速开始
 
+**macOS / Linux:**
 ```bash
 # 一键安装（选择你的 CLI 工具）
 bash <(curl -fsSL https://raw.githubusercontent.com/NeoTheCapt/RedteamAgent/dev/install.sh) opencode
 bash <(curl -fsSL https://raw.githubusercontent.com/NeoTheCapt/RedteamAgent/dev/install.sh) claude
 bash <(curl -fsSL https://raw.githubusercontent.com/NeoTheCapt/RedteamAgent/dev/install.sh) codex
+```
 
-# 自定义安装目录
-bash <(curl -fsSL ...) opencode ~/my-project
+不支持原生 Windows / PowerShell。请使用 macOS 或 Linux 环境。
 
+```bash
 # 启动
 cd ~/redteam-agent && opencode   # 或 claude / codex
 
@@ -370,7 +380,8 @@ Phases: [x] Recon  [x] Collect  [>] Consume & Test  [ ] Exploit  [ ] Report
 
 - Docker（含 Docker Compose）
 - AI CLI 工具（至少一个）：Claude Code、OpenCode 或 Codex
-- 本地工具：`curl`、`jq`、`sqlite3`（macOS/Linux 预装）
+- 本地工具：`curl`、`jq`、`sqlite3`
+- 不支持原生 Windows / PowerShell
 
 ## 许可
 

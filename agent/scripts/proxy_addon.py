@@ -45,6 +45,7 @@ BINARY_PREFIXES = ("image/", "video/", "audio/", "font/")
 LOGIN_URL_RE = re.compile(r"(login|auth|signin|session|token)", re.IGNORECASE)
 
 TOKEN_KEYS_RE = re.compile(r"(token|access_token|jwt)", re.IGNORECASE)
+BEARER_TOKEN_KEYS_RE = re.compile(r"(access_token|id_token|jwt|token)", re.IGNORECASE)
 
 # Maps file extensions / content-type fragments to a classification label.
 # Order matters — first match wins (highest priority first).
@@ -240,9 +241,12 @@ class CaseCollector:
                     pass
 
         # path params — dynamic segments
-        path_params = [
-            seg for seg in parsed.path.split("/") if seg and _DYNAMIC_RE.match(seg)
-        ]
+        path_parts = [seg for seg in parsed.path.split("/") if seg]
+        path_params = {
+            f"seg_{idx}": seg
+            for idx, seg in enumerate(path_parts, start=1)
+            if _DYNAMIC_RE.match(seg)
+        }
 
         # cookie params
         cookie_params = {}
@@ -279,8 +283,7 @@ class CaseCollector:
                     keys.extend(b.keys())
             except json.JSONDecodeError:
                 pass
-        keys.sort()
-        return hashlib.md5(",".join(keys).encode()).hexdigest()
+        return hashlib.md5(",".join(sorted(set(keys))).encode()).hexdigest()
 
     # -- body save policy ---------------------------------------------------
 
@@ -350,7 +353,21 @@ class CaseCollector:
                 if isinstance(body_json, dict):
                     for key in list(body_json.keys()):
                         if TOKEN_KEYS_RE.search(key):
-                            auth_data.setdefault("tokens", {})[key] = body_json[key]
+                            token_value = body_json[key]
+                            auth_data.setdefault("tokens", {})[key] = token_value
+                            if (
+                                isinstance(token_value, str)
+                                and token_value
+                                and BEARER_TOKEN_KEYS_RE.search(key)
+                            ):
+                                auth_data.setdefault("headers", {})
+                                if "Authorization" not in auth_data["headers"]:
+                                    bearer_value = (
+                                        token_value
+                                        if token_value.lower().startswith("bearer ")
+                                        else f"Bearer {token_value}"
+                                    )
+                                    auth_data["headers"]["Authorization"] = bearer_value
                             updated = True
             except (json.JSONDecodeError, UnicodeDecodeError):
                 pass
@@ -459,8 +476,9 @@ class CaseCollector:
         req_headers_dict = dict(req.headers)
         req_headers_json = json.dumps(req_headers_dict)
 
-        # Content type and body
-        content_type = req.headers.get("content-type", "") or ""
+        # Prefer response content type for classification/storage. Request content
+        # type is often empty for GETs and would misclassify normal pages as unknown.
+        content_type = resp.headers.get("content-type", "") or req.headers.get("content-type", "") or ""
         raw_req_body = req.get_content(raise_if_missing=False) or b""
         content_length = len(raw_req_body)
 

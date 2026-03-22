@@ -5,14 +5,15 @@ You are the operator resuming a previously interrupted engagement. The engagemen
 ## Step 1: Find Active Engagement
 
 ```bash
-ENG_DIR=$(ls -td engagements/*/ 2>/dev/null | head -1 | sed 's|/$||')
+source scripts/lib/engagement.sh
+ENG_DIR=$(resolve_engagement_dir "$(pwd)")
 echo "Found: $ENG_DIR"
 cat "$ENG_DIR/scope.json" 2>/dev/null
 ```
 
 If no engagement found or status is "completed", inform user there's nothing to resume.
 
-If the user provided a specific engagement directory in their arguments, use that instead.
+If the user provided a specific engagement directory in their arguments, use that instead. After choosing the engagement, update `engagements/.active` so hooks and helper commands target the same run.
 
 ## Step 2: Read Full State
 
@@ -37,14 +38,18 @@ tail -30 "$ENG_DIR/log.md"
 echo "=== Auth ==="
 if [ -f "$ENG_DIR/auth.json" ]; then
     echo "Configured"
-    jq -r '.source // "unknown"' "$ENG_DIR/auth.json"
+    jq '{cookies: ((.cookies // {}) | keys), headers: ((.headers // {}) | keys), tokens: ((.tokens // {}) | keys)}' "$ENG_DIR/auth.json"
 else
     echo "Not configured"
 fi
 
 # Container state
 echo "=== Containers ==="
-docker ps --format "{{.Names}} ({{.Status}})" --filter "name=redteam" 2>/dev/null || echo "None running"
+source scripts/lib/container.sh
+export ENGAGEMENT_DIR="$ENG_DIR"
+PROXY_NAME="$(_proxy_container_name)"
+KATANA_NAME="$(_katana_container_name)"
+docker ps --format "{{.Names}} ({{.Status}})" --filter "name=^${PROXY_NAME}$" --filter "name=^${KATANA_NAME}$" 2>/dev/null || echo "None running"
 ```
 
 ## Step 3: Reset Stale Cases

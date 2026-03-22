@@ -1,11 +1,12 @@
 # Command: Stop Engagement Processes
 
-You are the operator shutting down all background processes for the current engagement.
+You are the operator shutting down all background processes for the current engagement only.
 
 ## Step 1: Locate Active Engagement
 
 ```bash
-ENG_DIR=$(ls -td engagements/*/ 2>/dev/null | head -1 | sed 's|/$||')
+source scripts/lib/engagement.sh
+ENG_DIR=$(resolve_engagement_dir "$(pwd)")
 echo "Engagement: $ENG_DIR"
 ```
 
@@ -18,7 +19,8 @@ source scripts/lib/container.sh
 stop_all_containers
 ```
 
-This stops the mitmproxy and Katana Docker containers if running.
+This stops the mitmproxy and Katana Docker containers for the active engagement if running.
+It must not stop containers belonging to another engagement.
 
 ## Step 3: Show Final Queue Stats
 

@@ -15,6 +15,10 @@ classify_type() {
 
   # Strip query string from url_path for extension checks
   local path_no_query="${url_path%%\?*}"
+  local is_write_method=0
+  if [[ "$method_upper" =~ ^(POST|PUT|PATCH|DELETE)$ ]]; then
+    is_write_method=1
+  fi
 
   # 1. graphql
   if printf '%s' "$url_path" | grep -qiE '/graphql'; then
@@ -42,10 +46,10 @@ classify_type() {
   fi
 
   # 3. api
-  if printf '%s' "$ct_lower" | grep -qiE 'application/json|application/xml'; then
+  if printf '%s' "$url_path" | grep -qiE '/api/|/v[0-9]/'; then
     echo "api"; return
   fi
-  if printf '%s' "$url_path" | grep -qiE '/api/|/v[0-9]/'; then
+  if (( is_write_method )) && printf '%s' "$ct_lower" | grep -qiE 'application/json'; then
     echo "api"; return
   fi
 
@@ -78,12 +82,18 @@ classify_type() {
   fi
 
   # 8. page
+  if printf '%s' "$path_no_query" | grep -qiE '\.(html?|xhtml|php|aspx?|jsp)$'; then
+    echo "page"; return
+  fi
   if printf '%s' "$ct_lower" | grep -qiE 'text/html|application/xhtml|image/svg\+xml'; then
     echo "page"; return
   fi
 
   # 9. data
-  if printf '%s' "$ct_lower" | grep -qiE 'text/csv|text/xml|application/pdf|text/plain|application/ld\+json|text/markdown'; then
+  if printf '%s' "$path_no_query" | grep -qiE '\.(json|xml|csv|ya?ml)$'; then
+    echo "data"; return
+  fi
+  if printf '%s' "$ct_lower" | grep -qiE 'application/json|application/xml|text/csv|text/xml|application/pdf|text/plain|application/ld\+json|text/markdown'; then
     echo "data"; return
   fi
 
