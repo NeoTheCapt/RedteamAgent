@@ -289,36 +289,43 @@ echo ""
 echo "Step 3: Building Docker images..."
 echo ""
 
-cd "$INSTALL_DIR"
+$DRY_RUN || cd "$INSTALL_DIR"
 
 if $DRY_RUN; then
-    info "[DRY RUN] Would build 3 Docker images — skipping"
-    for df in docker/kali-redteam/Dockerfile docker/mitmproxy/Dockerfile docker/docker-compose.yml; do
-        [ -f "$df" ] && ok "Found: $df" || { fail "Missing: $df"; ERRORS=$((ERRORS + 1)); }
-    done
+    info "[DRY RUN] Would build Docker images if missing — skipping"
 else
-    info "This may take several minutes on first run"
-    echo ""
-
-    info "Pulling projectdiscovery/katana:latest..."
-    if docker pull projectdiscovery/katana:latest >/dev/null 2>&1; then
-        ok "Katana image"
+    # Only build/pull images that don't already exist
+    if docker image inspect projectdiscovery/katana:latest >/dev/null 2>&1; then
+        ok "Katana image (already exists)"
     else
-        fail "Failed to pull Katana"; ERRORS=$((ERRORS + 1))
+        info "Pulling projectdiscovery/katana:latest..."
+        if docker pull projectdiscovery/katana:latest >/dev/null 2>&1; then
+            ok "Katana image"
+        else
+            fail "Failed to pull Katana"; ERRORS=$((ERRORS + 1))
+        fi
     fi
 
-    info "Building kali-redteam..."
-    if cd docker && docker compose build kali-redteam 2>&1 | tail -3; then
-        cd ..; ok "kali-redteam"
+    if docker image inspect kali-redteam:latest >/dev/null 2>&1; then
+        ok "kali-redteam (already exists)"
     else
-        cd ..; fail "Failed to build kali-redteam"; ERRORS=$((ERRORS + 1))
+        info "Building kali-redteam (this may take several minutes)..."
+        if cd docker && docker compose build kali-redteam 2>&1 | tail -3; then
+            cd ..; ok "kali-redteam"
+        else
+            cd ..; fail "Failed to build kali-redteam"; ERRORS=$((ERRORS + 1))
+        fi
     fi
 
-    info "Building redteam-proxy..."
-    if cd docker && docker compose build mitmproxy 2>&1 | tail -3; then
-        cd ..; ok "redteam-proxy"
+    if docker image inspect redteam-proxy:latest >/dev/null 2>&1; then
+        ok "redteam-proxy (already exists)"
     else
-        cd ..; fail "Failed to build redteam-proxy"; ERRORS=$((ERRORS + 1))
+        info "Building redteam-proxy..."
+        if cd docker && docker compose build mitmproxy 2>&1 | tail -3; then
+            cd ..; ok "redteam-proxy"
+        else
+            cd ..; fail "Failed to build redteam-proxy"; ERRORS=$((ERRORS + 1))
+        fi
     fi
 fi
 
