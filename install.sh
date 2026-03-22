@@ -254,9 +254,17 @@ else
       [ -d "$SOURCE_DIR/$dir" ] && cp -a "$SOURCE_DIR/$dir" "$INSTALL_DIR/"
     done
     mkdir -p "$INSTALL_DIR/engagements"
-    # Copy .env.example if exists
-    [ -f "$SOURCE_DIR/.env.example" ] && cp "$SOURCE_DIR/.env.example" "$INSTALL_DIR/"
     ok "Shared files (skills, references, scripts, docker)"
+
+    # Seed .env from the tracked agent template on first install.
+    if [ -f "$SOURCE_DIR/.env.example" ]; then
+        if [ -f "$INSTALL_DIR/.env" ]; then
+            ok ".env preserved"
+        else
+            cp "$SOURCE_DIR/.env.example" "$INSTALL_DIR/.env"
+            warn "Created $INSTALL_DIR/.env from template — update API keys before using passive recon tools"
+        fi
+    fi
 
     # --- Product-specific files ---
     case "$PRODUCT" in
@@ -402,6 +410,11 @@ echo ""
 echo "  Installed to: $INSTALL_DIR"
 echo "  Product: $PRODUCT"
 echo ""
+if [ -f "$INSTALL_DIR/.env" ]; then
+    echo "  Config:"
+    echo "    Edit $INSTALL_DIR/.env and add any API keys you want to use"
+    echo ""
+fi
 
 case "$PRODUCT" in
   opencode)
