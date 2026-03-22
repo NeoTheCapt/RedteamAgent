@@ -2,6 +2,11 @@
 
 **Purpose:** HTTP request crafting and testing
 
+For live target requests during an engagement, prefer `run_tool curl` instead of raw host `curl`.
+`run_tool curl` routes through the engagement-scoped `rtcurl` wrapper, which automatically applies
+in-scope auth and the fixed engagement User-Agent. Use raw host `curl` only for external OSINT or
+non-target internet resources.
+
 **Basic GET:** `curl -v https://target/`
 **Headers only:** `curl -I https://target/`
 **POST with data:** `curl -X POST -d "param=value" https://target/api`
