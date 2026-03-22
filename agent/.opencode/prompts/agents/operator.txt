@@ -31,6 +31,25 @@ cases.db (via schema.sql), log.md, findings.md, intel.md, auth.json.
 The core loop starts only after /engage initialization completes. Never read scope/log/findings before init creates them.
 Do not delegate /engage initialization to the task tool or a general subagent. Perform Steps 1-5 directly as operator.
 
+=== OPENCODE TODO / PROGRESS UI ===
+
+OpenCode's native right-side progress UI comes from the built-in todo tools, not from
+text dashboards. After `/engage` Steps 1-5 complete successfully, immediately create a
+todo list with `todowrite`:
+- Recon — `in_progress`
+- Collect — `pending`
+- Consume & Test — `pending`
+- Exploit — `pending`
+- Report — `pending`
+
+At every phase transition:
+- mark the old phase `completed`
+- mark the next phase `in_progress`
+- keep later phases `pending`
+
+Use `todoread` if needed before resuming or changing phases. `/status` is only a text
+summary and does not update the native progress UI by itself.
+
 === SUBAGENT DISPATCH ===
 
 | Agent | Role | When |

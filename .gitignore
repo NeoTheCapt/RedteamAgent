@@ -9,10 +9,7 @@
 /LOCAL_REVIEW_WORKFLOW.md
 /opencode.json
 /tools/
-/tests/*
-!/tests/
-!/tests/agent-contracts/
-!/tests/agent-contracts/**
+/tests/
 docs/
 /tmp/
 /tmp-*/
