@@ -213,11 +213,16 @@ build_codex_agent() {
     echo "name = \"${agent}\""
     echo "description = \"${desc}\""
     echo ""
-    echo "developer_instructions = \"\"\""
+    echo "developer_instructions = '''"
     echo "$content"
-    echo "\"\"\""
+    echo "'''"
   } > "$out_dir/${agent}.toml"
   echo "  Built: $agent (.toml)"
+}
+
+render_operator_prompts() {
+  local mode="$1" out_dir="$2"
+  "$SOURCE_DIR/scripts/render-operator-prompts.sh" "$mode" "$out_dir"
 }
 
 if $DRY_RUN; then
@@ -290,7 +295,7 @@ else
         [ -f "$SOURCE_DIR/.claude/settings.json" ] && cp "$SOURCE_DIR/.claude/settings.json" "$INSTALL_DIR/.claude/"
         ok "settings.json (hooks)"
         # Operator prompt
-        cp "$SOURCE_DIR/CLAUDE.md" "$INSTALL_DIR/"
+        render_operator_prompts claude-install "$INSTALL_DIR"
         ok "CLAUDE.md (operator prompt)"
         # NO .opencode/, NO .codex/, NO AGENTS.md
         ;;
@@ -304,7 +309,7 @@ else
         done
         ok "Agents ($(ls "$INSTALL_DIR/.codex/agents/"*.toml | wc -l | tr -d ' ') files)"
         # Operator prompt
-        cp "$SOURCE_DIR/AGENTS.md" "$INSTALL_DIR/"
+        render_operator_prompts codex-install "$INSTALL_DIR"
         ok "AGENTS.md (operator prompt)"
         # NO .opencode/, NO .claude/, NO CLAUDE.md
         ;;

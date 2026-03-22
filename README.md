@@ -280,7 +280,10 @@ Agent prompts and commands are maintained **only** in OpenCode format (`.opencod
 
 **To add a new agent:** create the `.txt` file, add agent entry to `opencode.json`, re-run `install.sh`.
 
-**Operator prompts** (`CLAUDE.md`, `AGENTS.md`, `operator.txt`) are maintained separately — they contain platform-specific content that can't be single-sourced.
+**Operator prompts** use a mixed model:
+- `agent/.opencode/prompts/agents/operator.txt` stays as the OpenCode source prompt
+- `agent/operator-core.md` is the shared Claude/Codex methodology body
+- `agent/scripts/render-operator-prompts.sh` renders `CLAUDE.md`, `AGENTS.md`, and the thin local operator wrappers
 
 ## Troubleshooting
 
