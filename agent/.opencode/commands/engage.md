@@ -197,20 +197,10 @@ Start the pipeline regardless of auth choice (skip or configured):
 
 The engagement loop starts only after Steps 1-5 finish successfully. Do not enter the operator core loop early.
 
-Before Phase 1 begins, initialize OpenCode's native progress UI with `todowrite`:
-- Recon — `in_progress`
-- Collect — `pending`
-- Consume & Test — `pending`
-- Exploit — `pending`
-- Report — `pending`
-
-At each later phase transition, update the same todo list:
-- completed phases → `completed`
-- current phase → `in_progress`
-- future phases → `pending`
-
-Do not rely on `/status` alone for progress UI. `/status` is textual; the right-side TUI
-progress panel is driven by the todo list.
+Before Phase 1 begins, initialize OpenCode's native progress UI with `todowrite` following
+the operator progress rules in `prompts/agents/operator.txt`. At each later phase transition,
+update the same todo list there. Do not rely on `/status` alone for progress UI; the right-side
+TUI progress panel is driven by the todo list.
 
 ### Phase 1: RECON
 
