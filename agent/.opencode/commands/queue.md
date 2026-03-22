@@ -34,7 +34,7 @@ Run the dispatcher stats command:
 
 Display the stats output in a clear, readable format. Highlight:
 - Total number of cases
-- Breakdown by status (pending, in_progress, done, error)
+- Breakdown by status (`pending`, `processing`, `done`, `error`)
 - Breakdown by type if available
 - Any stale cases that may need attention
 

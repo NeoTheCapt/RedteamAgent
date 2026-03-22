@@ -37,7 +37,7 @@ tail -30 "$ENG_DIR/log.md"
 echo "=== Auth ==="
 if [ -f "$ENG_DIR/auth.json" ]; then
     echo "Configured"
-    jq -r '.source // "unknown"' "$ENG_DIR/auth.json"
+    jq '{cookies: ((.cookies // {}) | keys), headers: ((.headers // {}) | keys)}' "$ENG_DIR/auth.json"
 else
     echo "Not configured"
 fi

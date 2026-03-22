@@ -170,8 +170,7 @@ stop_katana() {
 stop_all_containers() {
     stop_proxy
     stop_katana
-    docker ps -q --filter "ancestor=$REDTEAM_IMAGE" | xargs docker stop 2>/dev/null || true
-    echo "[containers] All engagement containers stopped"
+    echo "[containers] Current engagement containers stopped"
 }
 
 # Check if required Docker images are built

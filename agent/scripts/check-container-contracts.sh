@@ -83,4 +83,15 @@ PROXY_ARGS="$(tr '\n' ' ' < "$FAKE_DOCKER_LOG")"
 assert_not_contains "$PROXY_ARGS" "--name redteam-proxy " "Proxy container name should not be global"
 assert_contains "$PROXY_ARGS" "--name redteam-proxy-2026-03-23-120500-admin-example-com" "Proxy container name should include engagement slug"
 
+: > "$FAKE_DOCKER_LOG"
+export ENGAGEMENT_DIR="$ENG1"
+stop_all_containers
+STOP_ARGS="$(tr '\n' ' ' < "$FAKE_DOCKER_LOG")"
+
+assert_contains "$STOP_ARGS" "stop redteam-proxy-2026-03-23-120000-example-com" "stop_all_containers should stop only the current engagement proxy"
+assert_contains "$STOP_ARGS" "stop redteam-katana-2026-03-23-120000-example-com" "stop_all_containers should stop only the current engagement katana"
+assert_not_contains "$STOP_ARGS" "ancestor=kali-redteam:latest" "stop_all_containers must not stop all redteam containers globally"
+assert_not_contains "$STOP_ARGS" "redteam-proxy-2026-03-23-120500-admin-example-com" "stop_all_containers must not stop another engagement proxy"
+assert_not_contains "$STOP_ARGS" "redteam-katana-2026-03-23-120500-admin-example-com" "stop_all_containers must not stop another engagement katana"
+
 echo "[OK] Container naming and auth contracts hold"
