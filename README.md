@@ -8,7 +8,7 @@
   </p>
   <p align="center">
     <img src="https://img.shields.io/badge/CLI-Claude%20Code%20|%20OpenCode%20|%20Codex-blue" alt="CLI">
-    <img src="https://img.shields.io/badge/platform-macOS%20|%20Linux-blue" alt="Platform">
+    <img src="https://img.shields.io/badge/platform-macOS%20|%20Linux%20|%20Windows-blue" alt="Platform">
     <img src="https://img.shields.io/badge/tools-Docker%20containerized-blue" alt="Docker">
     <img src="https://img.shields.io/badge/agents-8%20specialized-orange" alt="Agents">
     <img src="https://img.shields.io/badge/skills-31%20attack%20methodologies-red" alt="Skills">
@@ -43,6 +43,7 @@ An autonomous red team simulation agent that works with **Claude Code**, **OpenC
 
 ### One-Line Install
 
+**macOS / Linux:**
 ```bash
 # Choose your CLI — each installs ONLY that product's files
 bash <(curl -fsSL https://raw.githubusercontent.com/NeoTheCapt/RedteamAgent/dev/install.sh) opencode
@@ -50,24 +51,39 @@ bash <(curl -fsSL https://raw.githubusercontent.com/NeoTheCapt/RedteamAgent/dev/
 bash <(curl -fsSL https://raw.githubusercontent.com/NeoTheCapt/RedteamAgent/dev/install.sh) codex
 ```
 
+**Windows (PowerShell):**
+```powershell
+irm https://raw.githubusercontent.com/NeoTheCapt/RedteamAgent/dev/install.ps1 -OutFile install.ps1; .\install.ps1 opencode
+irm https://raw.githubusercontent.com/NeoTheCapt/RedteamAgent/dev/install.ps1 -OutFile install.ps1; .\install.ps1 claude
+irm https://raw.githubusercontent.com/NeoTheCapt/RedteamAgent/dev/install.ps1 -OutFile install.ps1; .\install.ps1 codex
+```
+
 This auto-clones the repo, installs product-specific files to `~/redteam-agent`, builds Docker images (if not already built), and runs verification.
 
 ### Manual Setup
 
+**macOS / Linux:**
 ```bash
 git clone https://github.com/NeoTheCapt/RedteamAgent.git
 cd RedteamAgent
 
-# Install for your CLI (choose one)
-./install.sh opencode
-./install.sh claude
-./install.sh codex
+./install.sh opencode                  # Install for OpenCode
+./install.sh claude                    # Install for Claude Code
+./install.sh codex                     # Install for Codex
+./install.sh opencode ~/my-project     # Custom directory
+./install.sh --dry-run opencode        # Validate without writing
+```
 
-# Custom install directory
-./install.sh opencode ~/my-project
+**Windows (PowerShell):**
+```powershell
+git clone https://github.com/NeoTheCapt/RedteamAgent.git
+cd RedteamAgent
 
-# Dry run — validate without writing
-./install.sh --dry-run opencode
+.\install.ps1 opencode                 # Install for OpenCode
+.\install.ps1 claude                   # Install for Claude Code
+.\install.ps1 codex                    # Install for Codex
+.\install.ps1 opencode C:\my-project   # Custom directory
+.\install.ps1 -DryRun opencode         # Validate without writing
 ```
 
 ### Docker Images
@@ -316,15 +332,19 @@ RedTeam Agent 是一个自主红队模拟 Agent，支持 **Claude Code**、**Ope
 
 ## 快速开始
 
+**macOS / Linux:**
 ```bash
 # 一键安装（选择你的 CLI 工具）
 bash <(curl -fsSL https://raw.githubusercontent.com/NeoTheCapt/RedteamAgent/dev/install.sh) opencode
 bash <(curl -fsSL https://raw.githubusercontent.com/NeoTheCapt/RedteamAgent/dev/install.sh) claude
-bash <(curl -fsSL https://raw.githubusercontent.com/NeoTheCapt/RedteamAgent/dev/install.sh) codex
+```
 
-# 自定义安装目录
-bash <(curl -fsSL ...) opencode ~/my-project
+**Windows (PowerShell):**
+```powershell
+irm https://raw.githubusercontent.com/NeoTheCapt/RedteamAgent/dev/install.ps1 -OutFile install.ps1; .\install.ps1 opencode
+```
 
+```bash
 # 启动
 cd ~/redteam-agent && opencode   # 或 claude / codex
 
