@@ -9,6 +9,25 @@ source "$SCRIPT_DIR/lib/params.sh"
 source "$SCRIPT_DIR/lib/classify.sh"
 source "$SCRIPT_DIR/lib/db.sh"
 
+download_spec() {
+    local spec_url="$1"
+    local output_file="$2"
+    local db_dir rtcurl_path
+
+    db_dir="$(dirname "$DB_PATH")"
+    rtcurl_path="$db_dir/tools/rtcurl"
+
+    if [[ -x "$rtcurl_path" ]]; then
+        RTCURL_AUTH_FILE="$db_dir/auth.json" \
+        RTCURL_SCOPE_FILE="$db_dir/scope.json" \
+        RTCURL_USER_AGENT_FILE="$db_dir/user-agent.txt" \
+        "$rtcurl_path" -sS "$spec_url" -o "$output_file"
+        return
+    fi
+
+    curl -sS "$spec_url" -o "$output_file"
+}
+
 # --- Validate arguments ---
 if [[ $# -lt 2 ]]; then
     echo "Usage: $0 <db_path> <spec_file_or_url>" >&2
@@ -32,7 +51,7 @@ if [[ "$SPEC_INPUT" == http* ]]; then
     DB_DIR=$(dirname "$DB_PATH")
     mkdir -p "$DB_DIR/scans"
     SPEC_FILE="$DB_DIR/scans/spec_download.json"
-    curl -sL "$SPEC_INPUT" -o "$SPEC_FILE"
+    download_spec "$SPEC_INPUT" "$SPEC_FILE"
 fi
 
 if [[ ! -f "$SPEC_FILE" ]]; then

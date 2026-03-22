@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
@@ -8,7 +9,7 @@ mkdir -p "$TMP_DIR/engagements/2026-03-23-120000-one" "$TMP_DIR/engagements/2026
 printf '%s\n' "$TMP_DIR/engagements/2026-03-23-120000-one" > "$TMP_DIR/engagements/.active"
 
 # shellcheck source=/dev/null
-source "$PWD/agent/scripts/lib/engagement.sh"
+source "$REPO_ROOT/agent/scripts/lib/engagement.sh"
 
 resolved="$(resolve_engagement_dir "$TMP_DIR")"
 if [[ "$resolved" != "$TMP_DIR/engagements/2026-03-23-120000-one" ]]; then

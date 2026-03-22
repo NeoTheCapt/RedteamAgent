@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+AGENT_DIR="$REPO_ROOT/agent"
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
@@ -63,7 +64,7 @@ export PATH="$FAKE_BIN:$PATH"
 export FAKE_DOCKER_LOG="$TMP_DIR/docker.log"
 
 # shellcheck source=/dev/null
-source "$ROOT_DIR/scripts/lib/container.sh"
+source "$AGENT_DIR/scripts/lib/container.sh"
 
 export ENGAGEMENT_DIR="$ENG1"
 start_katana "https://target.local"
@@ -76,7 +77,7 @@ assert_contains "$KATANA_ARGS" "Authorization: Bearer topsecret" "Katana should 
 assert_contains "$KATANA_ARGS" "X-Test: demo" "Katana should receive arbitrary custom headers from auth.json"
 
 mkdir -p "$ENG1/tools"
-cp "$ROOT_DIR/scripts/templates/rtcurl.sh" "$ENG1/tools/rtcurl"
+cp "$AGENT_DIR/scripts/templates/rtcurl.sh" "$ENG1/tools/rtcurl"
 chmod +x "$ENG1/tools/rtcurl"
 
 : > "$FAKE_DOCKER_LOG"

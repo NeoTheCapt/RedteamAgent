@@ -8,7 +8,10 @@
 /AGENTS.md
 /opencode.json
 /tools/
-/tests/
+/tests/*
+!/tests/
+!/tests/agent-contracts/
+!/tests/agent-contracts/**
 docs/
 /tmp/
 /tmp-*/

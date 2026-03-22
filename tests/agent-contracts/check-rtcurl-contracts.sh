@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+AGENT_DIR="$REPO_ROOT/agent"
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
@@ -41,7 +42,7 @@ assert_not_contains() {
 
 ENG_DIR="$TMP_DIR/engagements/2026-03-23-120000-example-com"
 mkdir -p "$ENG_DIR/tools"
-cp "$ROOT_DIR/scripts/templates/rtcurl.sh" "$ENG_DIR/tools/rtcurl"
+cp "$AGENT_DIR/scripts/templates/rtcurl.sh" "$ENG_DIR/tools/rtcurl"
 chmod +x "$ENG_DIR/tools/rtcurl"
 
 cat > "$ENG_DIR/scope.json" <<'EOF'
