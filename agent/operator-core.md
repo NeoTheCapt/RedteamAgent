@@ -154,7 +154,7 @@ Phases: [x] Recon  [x] Collect  [>] Test  [ ] Exploit  [ ] Report
 
 ## Wildcard Mode
 
-See engage.md Appendix A for subdomain enumeration, prioritization, and sliding window rules.
+See references/wildcard-mode.md for subdomain enumeration, prioritization, and sliding window rules.
 Only relevant when target contains `*` or is a bare domain.
 
 ## Handoff Reference

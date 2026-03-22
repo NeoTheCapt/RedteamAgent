@@ -11,14 +11,14 @@
     <img src="https://img.shields.io/badge/platform-macOS%20|%20Linux-blue" alt="Platform">
     <img src="https://img.shields.io/badge/tools-Docker%20containerized-blue" alt="Docker">
     <img src="https://img.shields.io/badge/agents-8%20specialized-orange" alt="Agents">
-    <img src="https://img.shields.io/badge/skills-31%20attack%20methodologies-red" alt="Skills">
-    <img src="https://img.shields.io/badge/references-57%20files-green" alt="References">
+    <img src="https://img.shields.io/badge/skills-32%20attack%20methodologies-red" alt="Skills">
+    <img src="https://img.shields.io/badge/references-78%20files-green" alt="References">
   </p>
 </p>
 
 ---
 
-An autonomous red team simulation agent that works with **Claude Code**, **OpenCode**, and **Codex**. It transforms any workspace into a full penetration testing environment for CTF/lab targets — featuring **8 AI agents**, **containerized Kali tools**, a **streaming case collection pipeline**, and **57 security reference files**.
+An autonomous red team simulation agent that works with **Claude Code**, **OpenCode**, and **Codex**. It transforms any workspace into a full penetration testing environment for CTF/lab targets — featuring **8 AI agents**, **containerized Kali tools**, a **streaming case collection pipeline**, and **78 security reference files**.
 
 **Key Features:**
 - **Multi-CLI support** — works with Claude Code, OpenCode, and Codex out of the box
@@ -27,7 +27,7 @@ An autonomous red team simulation agent that works with **Claude Code**, **OpenC
 - **8 specialized agents** — operator, recon-specialist, source-analyzer, vulnerability-analyst, exploit-developer, fuzzer, osint-analyst, report-writer
 - **Containerized tools** — all pentest tools run in Docker (Kali toolbox, mitmproxy, Katana), zero local installation
 - **Case collection pipeline** — SQLite-backed queue with 4 producers, automatic type classification, zero-token dispatcher
-- **57 reference files** — OWASP Top 10:2025, API Security 2023, offensive tactics, AD/Kerberos attacks
+- **78 reference files** — OWASP Top 10:2025, API Security 2023, offensive tactics, AD/Kerberos attacks
 - **Resume support** — interrupt and continue any engagement without losing progress
 
 ## Installation
@@ -221,8 +221,8 @@ RedteamOpencode/                ← dev workspace (git root)
     │   ├── install-time generators ← install.sh builds .claude/agents + .codex/agents + .claude/commands
     │   ├── dispatcher.sh       ← case queue management
     │   └── ...                 ← ingest, hooks, shared libraries
-    ├── skills/                 ← 31 attack methodology skills
-    ├── references/             ← 57 reference files (OWASP, tools, tactics, AD)
+    ├── skills/                 ← 32 attack methodology skills
+    ├── references/             ← 78 reference files (OWASP, tools, tactics, AD)
     ├── docker/                 ← Dockerfiles + docker-compose.yml
     └── engagements/            ← per-engagement output (created at runtime)
 ```
