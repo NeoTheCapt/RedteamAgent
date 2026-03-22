@@ -3,7 +3,7 @@
 You are the operator initiating a new red team engagement. The user has provided a target URL/IP as arguments below this template. Follow these steps exactly:
 
 **Mode detection from arguments:**
-- `--auto` flag present → **AUTONOMOUS MODE**: zero interaction, auto-decide everything, never ask user, never stop. If something fails, log and move on.
+- `--auto` flag present → **AUTONOMOUS MODE**: zero interaction, never ask user, never stop. If something fails, log and move on.
 - No `--auto` flag → **INTERACTIVE MODE**: ask for auth setup, use numbered choices, auto-confirm phases by default.
 
 ## Step 1: Parse Target
@@ -22,9 +22,19 @@ If no target is provided in the arguments, ask the user for one before proceedin
 
 ## Step 2: Create Engagement Directory and Files
 
-**IMPORTANT: Use a SINGLE bash command block to create ALL engagement files. Do NOT split into multiple tool calls — this prevents hanging between calls.**
+**IMPORTANT: Use bash commands to create all engagement files. Do NOT use the Write tool — it will fail on new files.**
 
-**CRITICAL: Do NOT use single-quoted heredoc delimiters (like `<< 'SCOPE'`). Use unquoted delimiters (like `<< EOF`) so that `$VARIABLE` expands.**
+Determine the directory name:
+- Format: `engagements/<YYYY-MM-DD>-<HHMMSS>-<hostname>/`
+- Use today's date in `YYYY-MM-DD` format and current time in `HHMMSS` format.
+- Sanitize the hostname (replace dots with dashes, remove special characters).
+- The timestamp ensures uniqueness — no collision even for multiple engagements against the same target on the same day.
+
+Use a single bash command block to create everything.
+
+**CRITICAL: Do NOT use single-quoted heredoc delimiters (like `<< 'SCOPE'`) for content that
+contains shell variables or command substitutions. Use unquoted delimiters (like `<< SCOPE`)
+so that `$VARIABLE` and `$(command)` are properly expanded.**
 
 Compute all values FIRST as shell variables, then write files using those variables:
 
@@ -32,106 +42,79 @@ Compute all values FIRST as shell variables, then write files using those variab
 # Compute values first
 DATE=$(date +%Y-%m-%d)
 TIME=$(date +%H%M%S)
-HOSTNAME_CLEAN="<hostname with special chars replaced>"
+HOSTNAME_CLEAN="<hostname with dots replaced by dashes>"
 TARGET="<full target URL>"
 HOSTNAME_RAW="<original hostname>"
 PORT=<port number>
-PROTO="<http or https>"
 START_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
 DIR="engagements/${DATE}-${TIME}-${HOSTNAME_CLEAN}"
 mkdir -p "$DIR/tools" "$DIR/downloads" "$DIR/scans" "$DIR/pids"
 
+# NOTE: Use unquoted heredoc (no quotes around EOF) so variables expand
 cat > "$DIR/scope.json" << EOF
 {
   "target": "${TARGET}",
   "hostname": "${HOSTNAME_RAW}",
   "port": ${PORT},
-  "protocol": "${PROTO}",
-  "mode": "single",
-  "confirm_mode": "auto",
+  "scope": ["${HOSTNAME_RAW}", "*.${HOSTNAME_RAW}"],
+  "mode": "ctf",
   "status": "in_progress",
-  "current_phase": "recon",
+  "start_time": "${START_TIME}",
   "phases_completed": [],
-  "started_at": "${START_TIME}"
+  "current_phase": "recon"
 }
 EOF
 
-sqlite3 "$DIR/cases.db" < scripts/schema.sql
-
 cat > "$DIR/log.md" << EOF
-# Engagement Log — ${TARGET}
-## ${START_TIME} — Engagement initialized
-- Target: ${TARGET}
-- Mode: single target
+# Engagement Log
+
+- **Target**: ${TARGET}
+- **Date**: ${DATE}
+- **Mode**: CTF
+- **Status**: In Progress
+
+---
 EOF
 
 cat > "$DIR/findings.md" << EOF
-# Findings — ${TARGET}
+# Findings
+
+- **Target**: ${TARGET}
+- **Engagement Date**: ${DATE}
+- **Finding Count**: 0
+
+---
 EOF
 
 echo "{}" > "$DIR/auth.json"
 
-cp scripts/templates/intel.md "$DIR/intel.md" 2>/dev/null || cat > "$DIR/intel.md" << 'INTELEOF'
-# Intelligence Collection
+sqlite3 "$DIR/cases.db" < scripts/schema.sql
 
-## Technology Stack
-| Component | Version | Source | Confidence |
-|-----------|---------|--------|------------|
-
-## People & Organizations
-| Name | Role/Context | Source | Notes |
-|------|-------------|--------|-------|
-
-## Email Addresses
-| Email | Source | Notes |
-|-------|--------|-------|
-
-## Domains & Infrastructure
-| Item | Type | Source | Notes |
-|------|------|--------|-------|
-
-## Credentials & Secrets
-| Type | Value (truncated) | Source | Notes |
-|------|-------------------|--------|-------|
-
-## Raw OSINT
-
-### CVE & Known Vulnerabilities
-| CVE | Affected | CVSS | PoC Available | Source |
-|-----|----------|------|---------------|--------|
-
-### Breach & Leak Data
-| Email/Domain | Breach | Date | Data Types | Source |
-|-------------|--------|------|------------|--------|
-
-### DNS & Certificate History
-| Record | Value | First Seen | Last Seen | Source |
-|--------|-------|------------|-----------|--------|
-
-### Social & OSINT Profiles
-| Person/Org | Platform | URL/Handle | Notes |
-|-----------|----------|------------|-------|
-INTELEOF
+cp scripts/templates/intel.md "$DIR/intel.md" 2>/dev/null || echo "# Intelligence Collection" > "$DIR/intel.md"
 
 echo "$DIR"
 ```
 
 Replace all `<placeholder>` comments above with actual parsed values from Step 1.
+The key point: `$DATE`, `$START_TIME` etc. MUST be shell variables that expand at write time.
 
-## Step 3: Docker Environment Check
+## Step 3: Environment Check (Docker)
 
 All pentest tools run in Docker containers. Check prerequisites:
 
 ```bash
 source scripts/lib/container.sh
 
+echo ""
 echo "=== Docker Check ==="
 check_docker
 
+echo ""
 echo "=== Image Check ==="
 check_images
 
+echo ""
 echo "=== Local Tools ==="
 for tool in curl jq sqlite3 docker; do
   if which "$tool" >/dev/null 2>&1; then
@@ -144,25 +127,22 @@ done
 
 If images are missing, tell the user:
 "Docker images not built yet. Run: `cd docker && docker compose build`"
+Wait for user to confirm images are built before proceeding.
 
-If Docker is not installed, the engagement CANNOT proceed.
-
-**AUTONOMOUS**: skip this check — errors show naturally in later steps.
+If Docker is not installed, the engagement CANNOT proceed. Tell the user to install Docker first.
 
 ## Step 4: Configure Authentication
 
-**AUTONOMOUS**:
-- If `auth.json` has a token → use it
-- Otherwise → start unauthenticated. Operator Credential Auto-Use rules apply during engagement.
+**AUTONOMOUS MODE**: skip auth setup. If `auth.json` has a token, use it. Otherwise start unauthenticated — operator Credential Auto-Use rules apply during engagement.
 
-**INTERACTIVE**:
-Present to user:
+**INTERACTIVE MODE**: Present to user:
 ```
 Authentication setup:
   1 — Proxy login (recommended: captures real session)
-  2 — Paste cookie
-  3 — Paste auth header
-  4 — Skip (unauthenticated only)
+  2 — Paste cookie manually
+  3 — Paste auth header manually
+  4 — Skip (test unauthenticated only)
+
 Reply (1-4):
 ```
 
@@ -173,14 +153,81 @@ Wait for user response. Handle:
 - `4` → skip auth, proceed immediately
 
 **If user chooses 4 (skip):** Authentication is skipped but ALL subsequent steps still
-execute normally. The user can configure auth later at any time with `/auth`.
+execute normally. Katana crawls without cookies, vulnerability tests run without auth
+headers. Collect and Consume phases still happen — they just test unauthenticated attack
+surface. The user can configure auth later at any time with `/auth`.
 
-## Step 5: Begin Operator Core Loop
+## Step 5: Start Producers
 
-Initialization complete. Now follow the **operator prompt** Phase Flow (RECON → COLLECT → TEST → EXPLOIT → REPORT) and Core Loop rules.
+Start the pipeline regardless of auth choice (skip or configured):
 
-**AUTONOMOUS**: never ask approval, always parallel, errors → log and continue.
-**INTERACTIVE**: auto-confirm by default, ask for first phase approval.
+1. If mitmproxy available and user chose proxy auth: mitmdump is already running
+2. Start Katana crawler (if installed): `./scripts/katana_ingest.sh "$DIR" &`
+   (Katana crawls without auth if skipped — still discovers unauthenticated endpoints)
+3. ALL subsequent phases (Recon → Collect → Consume & Test → Exploit → Report) proceed normally
+
+## Step 6: Begin Engagement Loop
+
+### Phase 1: RECON
+
+1. Log the engagement start in `log.md`.
+2. Present recon plan — MUST dispatch BOTH agents in parallel:
+   - **recon-specialist**: HTTP fingerprinting, directory fuzzing, port scanning
+   - **source-analyzer**: HTML/JS/CSS analysis for hidden routes, API endpoints, secrets
+3. Wait for user approval before sending traffic.
+4. After recon completes, record ALL findings to `findings.md`.
+
+### Phase 2: COLLECT (start immediately after recon)
+
+This is NOT optional.
+
+**In auto-confirm mode (default):** Announce and proceed immediately:
+```
+[operator] Recon complete. Starting collection:
+  - Importing N endpoints into case queue
+  - Starting Katana crawler
+  - Queue: [show dispatcher.sh stats]
+```
+
+**In manual mode:** Present numbered choice:
+```
+  1 — Start collection + consumption
+  2 — Skip to exploit phase
+Reply (1-2):
+```
+
+After approval:
+1. Import recon/source-analyzer endpoints: `echo "endpoints" | ./scripts/recon_ingest.sh "$DIR/cases.db" recon-specialist`
+2. Start Katana container + ingest pipeline:
+   ```bash
+   source scripts/lib/container.sh
+   export ENGAGEMENT_DIR="$DIR"
+   start_katana "TARGET_URL"
+   # Start ingest in background — monitors katana output and feeds cases.db
+   ./scripts/katana_ingest.sh "$DIR" > "$DIR/scans/katana_ingest.log" 2>&1 &
+   echo "[katana] Crawler + ingest running in background"
+   ```
+3. Show queue stats: `./scripts/dispatcher.sh "$DIR/cases.db" stats`
+
+### Phase 3: CONSUME & TEST (main testing loop)
+
+Follow the case-dispatching skill methodology. For each cycle:
+1. `./scripts/dispatcher.sh "$DIR/cases.db" reset-stale 10`
+2. `./scripts/dispatcher.sh "$DIR/cases.db" stats`
+3. Fetch batch by type → dispatch to appropriate agent → mark done → requeue new endpoints
+4. Continue until queue empty + producers stopped
+
+### Phase 4: EXPLOIT
+
+Dispatch osint-analyst + exploit-developer in parallel.
+After osint-analyst: read intel.md, high-value → findings.md + exploit-developer 2nd round.
+
+### Phase 5: REPORT
+
+Dispatch report-writer with engagement directory.
+
+**INTERACTIVE**: Request user approval at each phase transition.
+**AUTONOMOUS**: Never ask approval, always parallel, errors → log and continue.
 
 ---
 
