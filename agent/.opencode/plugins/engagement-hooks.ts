@@ -13,6 +13,8 @@
  */
 
 import type { PluginInput } from "@opencode-ai/plugin"
+import { appendFile, readFile, readdir } from "node:fs/promises"
+import path from "node:path"
 
 interface ScopeJson {
   target: string
@@ -55,15 +57,21 @@ export const EngagementHooksPlugin = async ({
    */
   const findActiveEngagement = async (): Promise<string | null> => {
     try {
-      const result = await $`ls -1dt ${root}/engagements/*/scope.json 2>/dev/null`.text()
-      const scopeFiles = result.trim().split("\n").filter(Boolean)
+      const engagementsDir = path.join(root, "engagements")
+      const entries = await readdir(engagementsDir, { withFileTypes: true })
+      const engagementDirs = entries
+        .filter((entry) => entry.isDirectory())
+        .map((entry) => path.join(engagementsDir, entry.name))
+        .sort()
+        .reverse()
 
-      for (const scopeFile of scopeFiles) {
+      for (const engagementDir of engagementDirs) {
         try {
-          const content = await $`cat ${scopeFile}`.text()
+          const scopeFile = path.join(engagementDir, "scope.json")
+          const content = await readFile(scopeFile, "utf8")
           const scope: ScopeJson = JSON.parse(content)
           if (scope.status === "in_progress") {
-            return scopeFile.replace(/\/scope\.json$/, "")
+            return engagementDir
           }
         } catch {
           // Malformed scope.json, skip
@@ -80,7 +88,7 @@ export const EngagementHooksPlugin = async ({
    */
   const readScope = async (engagementDir: string): Promise<ScopeJson | null> => {
     try {
-      const content = await $`cat ${engagementDir}/scope.json`.text()
+      const content = await readFile(path.join(engagementDir, "scope.json"), "utf8")
       return JSON.parse(content)
     } catch {
       return null
@@ -162,12 +170,12 @@ export const EngagementHooksPlugin = async ({
       let logContent = ""
       let findingsContent = ""
       try {
-        logContent = await $`cat ${engagementDir}/log.md`.text()
+        logContent = await readFile(path.join(engagementDir, "log.md"), "utf8")
       } catch {
         // log.md may not exist yet
       }
       try {
-        findingsContent = await $`cat ${engagementDir}/findings.md`.text()
+        findingsContent = await readFile(path.join(engagementDir, "findings.md"), "utf8")
       } catch {
         // findings.md may not exist yet
       }
@@ -177,7 +185,7 @@ export const EngagementHooksPlugin = async ({
 
       let queueInfo = ""
       try {
-        const statsOutput = await $`./scripts/dispatcher.sh ${engagementDir}/cases.db stats 2>/dev/null`.text()
+        const statsOutput = await $`./scripts/dispatcher.sh ${path.join(engagementDir, "cases.db")} stats`.text()
         queueInfo = statsOutput.trim()
       } catch {
         queueInfo = "no queue"
@@ -283,7 +291,7 @@ export const EngagementHooksPlugin = async ({
       if (engMatch) {
         const candidateDir = `${root}/${engMatch[0]}`
         try {
-          await $`test -f ${candidateDir}/log.md`
+          await readFile(path.join(candidateDir, "log.md"), "utf8")
           engagementDir = candidateDir
         } catch {
           // Not a valid engagement dir, fall back
@@ -313,7 +321,7 @@ export const EngagementHooksPlugin = async ({
       ].join("\n")
 
       try {
-        await $`printf '%s' ${entry} >> ${engagementDir}/log.md`
+        await appendFile(path.join(engagementDir, "log.md"), entry)
         log("debug", `[Engagement] Logged command to ${engagementDir}/log.md`)
       } catch (err) {
         log("warn", `[Engagement] Failed to append to log.md: ${err}`)

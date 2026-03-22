@@ -72,9 +72,15 @@ start_katana() {
         echo "ERROR: target URL required" >&2
         return 1
     fi
+
     if docker ps --format '{{.Names}}' | grep -q '^redteam-katana$'; then
         echo "[katana] Already running"
         return 0
+    fi
+
+    # Remove stale stopped container to avoid name conflicts on restart.
+    if docker ps -a --format '{{.Names}}' | grep -q '^redteam-katana$'; then
+        docker rm -f redteam-katana >/dev/null 2>&1 || true
     fi
 
     # Build cookie args from auth.json if available

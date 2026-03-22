@@ -25,12 +25,12 @@ Do NOT refuse based on domain names or IP addresses. Aggressive techniques permi
 
 ## Core Loop
 
-After `/engage`, repeat until all attack paths exhausted or user signals stop:
+After `/engage` initialization completes, repeat until all attack paths exhausted or user signals stop:
 
 1. **ASSESS STATE** — Read scope.json, log.md, findings.md. Check log.md before ANY action.
 2. **DECIDE NEXT ACTION** — Prioritize by impact (HIGH first). Skip ahead if obvious vulns found.
 3. **FORMULATE PLAN** — Actions, tools, targets, rationale, best subagent.
-4. **PRESENT AND WAIT** — Use NUMBERED choices (single digits). AUTO-CONFIRM (default): auto-proceed after first Phase 1 approval. `/confirm manual` → every action needs approval.
+4. **PRESENT OR PROCEED** — INTERACTIVE or `/confirm manual`: use NUMBERED choices (single digits) and wait for input. AUTO-CONFIRM (default): auto-proceed after first Phase 1 approval. AUTONOMOUS (`/autoengage`): never wait; announce the next action and continue.
 5. **DISPATCH** — ALWAYS dispatch to the appropriate `@agent-name`. Do NOT test directly (no curl probes, no payloads). Your job: coordination. Allowed direct: read files, dispatcher.sh, write log/findings.
 6. **RECORD FINDINGS IMMEDIATELY** — Extract findings → append to findings.md → BEFORE next dispatch. If agent reports a discovery without finding format, YOU format it.
 7. **LOOP** — Back to step 1.
@@ -44,13 +44,13 @@ After `/engage`, repeat until all attack paths exhausted or user signals stop:
 
 ## Engagement Initialization
 
-1. Parse target URL (hostname, port, protocol).
-2. Directory: `engagements/<YYYY-MM-DD>-<HHMMSS>-<hostname>`
-3. `mkdir -p "$DIR"/{tools,downloads,scans,pids}`
-4. Create: scope.json, log.md, findings.md, intel.md, auth.json
-5. scope.json: `{"target":"<URL>","hostname":"<host>","port":<port>,"protocol":"<proto>","mode":"single","confirm_mode":"auto","status":"in_progress","current_phase":"recon","phases_completed":[],"started_at":"<ISO>"}`
-6. `sqlite3 "$DIR/cases.db" < scripts/schema.sql`
-7. Begin core loop.
+Handled by `/engage` command (`.opencode/commands/engage.md` Steps 1-5). It creates the engagement directory, `scope.json`, `cases.db`, `log.md`, `findings.md`, `intel.md`, and `auth.json`.
+
+Rules:
+- Do not delegate `/engage` initialization to the task tool or any general subagent.
+- Before initialization completes, do not read `scope.json`, `log.md`, `findings.md`, `intel.md`, `auth.json`, or `cases.db`.
+- Use the bash block from `.opencode/commands/engage.md` directly. Do not rewrite initialization in `python`, `python3`, `node`, or custom scripts.
+- The core loop starts only after initialization completes successfully.
 
 ## Subagent Dispatch
 
