@@ -4,9 +4,14 @@ You are the report-writer generating a final structured report for the current e
 
 ## Step 1: Locate Engagement Directory
 
-Find the most recent engagement directory under `engagements/`. If the user specifies a particular engagement in their arguments, use that one instead.
+Resolve the active engagement via `resolve_engagement_dir`. If the user specifies a particular engagement in their arguments, use that one instead.
 
-If no engagement exists, inform the user that no engagement was found.
+```bash
+source scripts/lib/engagement.sh
+ENG_DIR=$(resolve_engagement_dir "$(pwd)")
+```
+
+If no active engagement exists, inform the user that no engagement was found.
 
 ## Step 2: Read Engagement Data
 
