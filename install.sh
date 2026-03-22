@@ -236,10 +236,8 @@ else
       opencode)
         info "Installing OpenCode files..."
         cp -a "$SOURCE_DIR/.opencode" "$INSTALL_DIR/"
-        cp "$SOURCE_DIR/AGENTS.md" "$INSTALL_DIR/"
         ok "OpenCode config (.opencode/)"
-        ok "AGENTS.md (loaded as instruction)"
-        # NO .claude/, NO .codex/, NO CLAUDE.md
+        # NO .claude/, NO .codex/, NO CLAUDE.md, NO AGENTS.md
         ;;
 
       claude)
