@@ -6,6 +6,7 @@
 /.worktrees/
 /CLAUDE.md
 /AGENTS.md
+/LOCAL_REVIEW_WORKFLOW.md
 /opencode.json
 /tools/
 /tests/*
