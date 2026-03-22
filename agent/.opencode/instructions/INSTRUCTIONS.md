@@ -80,6 +80,20 @@ run_tool ffuf -u http://target/FUZZ -w /wordlists/dirb/common.txt -o /engagement
 Use raw host `curl` only for external OSINT or non-target internet resources. All other
 pentest tools MUST use `run_tool`.
 
+## OpenCode Progress Tracking
+
+OpenCode's right-side task/progress UI is driven by the built-in todo tools, not by
+ASCII status dashboards printed in chat. For OpenCode sessions:
+- Initialize a todo list immediately after `/engage` setup completes with the 5 phases:
+  `Recon`, `Collect`, `Consume & Test`, `Exploit`, `Report`
+- Keep exactly one phase `in_progress`
+- Mark completed phases `completed` as soon as `scope.json.phases_completed` is updated
+- Keep future phases `pending`
+- Use `todoread` before major transitions if you need to confirm current task state
+
+The `/status` command is still useful for textual queue stats, but it does NOT drive the
+native TUI progress display by itself.
+
 ## Tool Availability
 
 All tools are pre-installed in the `kali-redteam` Docker image. No need to check
