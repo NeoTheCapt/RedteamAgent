@@ -4,12 +4,17 @@ You are the recon-specialist executing a full reconnaissance cycle. This is a ma
 
 ## Step 1: Load Engagement State
 
-Locate the most recent engagement directory under `engagements/`. Read:
+Resolve the active engagement via `resolve_engagement_dir`. Read:
 - `scope.json` -- target, scope boundaries, current phase
 - `log.md` -- what has already been done (avoid duplication)
 - `findings.md` -- existing findings to build upon
 
-If no engagement exists, inform the user to run `/engage` first.
+```bash
+source scripts/lib/engagement.sh
+ENG_DIR=$(resolve_engagement_dir "$(pwd)")
+```
+
+If no active engagement exists, inform the user to run `/engage` first.
 
 ## Step 2: Follow web-recon Methodology
 

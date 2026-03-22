@@ -6,7 +6,8 @@ You are the operator initiating OSINT intelligence gathering on the current enga
 
 1. Find the active engagement directory:
    ```bash
-   ENG_DIR=$(ls -td engagements/*/ 2>/dev/null | head -1 | sed 's|/$||')
+   source scripts/lib/engagement.sh
+   ENG_DIR=$(resolve_engagement_dir "$(pwd)")
    ```
 
 2. Verify intel.md exists in the engagement directory. If not, create it with the empty template.

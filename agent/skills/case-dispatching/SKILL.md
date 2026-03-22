@@ -25,7 +25,7 @@ Each iteration:
 2. Check stats: ./scripts/dispatcher.sh $DB stats
 3. Fetch and route by type (vulnerability-analyst and source-analyzer can run IN PARALLEL):
 
-   vulnerability-analyst: api, form, upload, graphql, websocket
+   vulnerability-analyst: api, api-spec, form, upload, graphql, websocket
    source-analyzer: page, javascript, stylesheet, data
 
    ./scripts/dispatcher.sh $DB fetch <type> 10 <agent_name>
@@ -44,6 +44,7 @@ Each iteration:
 | Type | Agent | Type | Agent |
 |------|-------|------|-------|
 | api | vulnerability-analyst | page | source-analyzer |
+| api-spec | vulnerability-analyst | page | source-analyzer |
 | form | vulnerability-analyst | javascript | source-analyzer |
 | upload | vulnerability-analyst | stylesheet | source-analyzer |
 | graphql | vulnerability-analyst | data | source-analyzer |
@@ -53,7 +54,7 @@ Each iteration:
 ## Batch Strategy
 
 - Up to 10 same-type cases per cycle, dispatch immediately
-- Priority: api > form > graphql > page > javascript > others
+- Priority: api-spec > api > form > graphql > page > javascript > others
 
 ## Progress Display (after EVERY batch)
 

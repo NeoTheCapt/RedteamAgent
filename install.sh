@@ -8,6 +8,10 @@
 #   ./install.sh --dry-run opencode              Validate without writing
 #   bash <(curl -fsSL URL) opencode ~/my-agent   Auto-clone and install
 #
+# Supported platforms: macOS and Linux only.
+# Windows is intentionally unsupported because the runtime depends on Unix-first
+# tooling and Docker workflows that are not maintained for native PowerShell.
+#
 # target_dir defaults to ~/redteam-agent if not specified.
 # Each product gets ONLY its own files — no cross-product contamination.
 set -e
@@ -33,6 +37,9 @@ if [ -z "$PRODUCT" ]; then
   echo "  opencode  — Install for OpenCode (source files, no build needed)"
   echo "  claude    — Install for Claude Code (generates .claude/agents + commands)"
   echo "  codex     — Install for Codex (generates .codex/agents)"
+  echo ""
+  echo "  Supported platforms: macOS, Linux"
+  echo "  Windows / PowerShell: not supported"
   echo ""
   echo "  target_dir defaults to ~/redteam-agent"
   exit 1
@@ -206,11 +213,16 @@ build_codex_agent() {
     echo "name = \"${agent}\""
     echo "description = \"${desc}\""
     echo ""
-    echo "developer_instructions = \"\"\""
+    echo "developer_instructions = '''"
     echo "$content"
-    echo "\"\"\""
+    echo "'''"
   } > "$out_dir/${agent}.toml"
   echo "  Built: $agent (.toml)"
+}
+
+render_operator_prompts() {
+  local mode="$1" out_dir="$2"
+  "$SOURCE_DIR/scripts/render-operator-prompts.sh" "$mode" "$out_dir"
 }
 
 if $DRY_RUN; then
@@ -247,9 +259,17 @@ else
       [ -d "$SOURCE_DIR/$dir" ] && cp -a "$SOURCE_DIR/$dir" "$INSTALL_DIR/"
     done
     mkdir -p "$INSTALL_DIR/engagements"
-    # Copy .env.example if exists
-    [ -f "$SOURCE_DIR/.env.example" ] && cp "$SOURCE_DIR/.env.example" "$INSTALL_DIR/"
     ok "Shared files (skills, references, scripts, docker)"
+
+    # Seed .env from the tracked agent template on first install.
+    if [ -f "$SOURCE_DIR/.env.example" ]; then
+        if [ -f "$INSTALL_DIR/.env" ]; then
+            ok ".env preserved"
+        else
+            cp "$SOURCE_DIR/.env.example" "$INSTALL_DIR/.env"
+            warn "Created $INSTALL_DIR/.env from template — update API keys before using passive recon tools"
+        fi
+    fi
 
     # --- Product-specific files ---
     case "$PRODUCT" in
@@ -275,7 +295,7 @@ else
         [ -f "$SOURCE_DIR/.claude/settings.json" ] && cp "$SOURCE_DIR/.claude/settings.json" "$INSTALL_DIR/.claude/"
         ok "settings.json (hooks)"
         # Operator prompt
-        cp "$SOURCE_DIR/CLAUDE.md" "$INSTALL_DIR/"
+        render_operator_prompts claude-install "$INSTALL_DIR"
         ok "CLAUDE.md (operator prompt)"
         # NO .opencode/, NO .codex/, NO AGENTS.md
         ;;
@@ -289,7 +309,7 @@ else
         done
         ok "Agents ($(ls "$INSTALL_DIR/.codex/agents/"*.toml | wc -l | tr -d ' ') files)"
         # Operator prompt
-        cp "$SOURCE_DIR/AGENTS.md" "$INSTALL_DIR/"
+        render_operator_prompts codex-install "$INSTALL_DIR"
         ok "AGENTS.md (operator prompt)"
         # NO .opencode/, NO .claude/, NO CLAUDE.md
         ;;
@@ -395,6 +415,11 @@ echo ""
 echo "  Installed to: $INSTALL_DIR"
 echo "  Product: $PRODUCT"
 echo ""
+if [ -f "$INSTALL_DIR/.env" ]; then
+    echo "  Config:"
+    echo "    Edit $INSTALL_DIR/.env and add any API keys you want to use"
+    echo ""
+fi
 
 case "$PRODUCT" in
   opencode)

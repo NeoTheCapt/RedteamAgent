@@ -14,7 +14,7 @@ origin: RedteamOpencode
 
 ## Tools
 
-- curl (multipart upload)
+- `run_tool curl` (multipart upload)
 - Burp Suite Repeater (modify upload requests)
 - ExifTool (embed payloads in metadata)
 - Custom polyglot file generators

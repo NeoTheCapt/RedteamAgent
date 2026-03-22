@@ -235,7 +235,7 @@ GET /api/?trace=true
 
 ```bash
 # Check response headers for info disclosure
-curl -s -I http://target.com/ | grep -iE "server|x-powered|x-aspnet|x-debug|x-runtime|x-version|x-generator"
+run_tool curl -s -I http://target.com/ | grep -iE "server|x-powered|x-aspnet|x-debug|x-runtime|x-version|x-generator"
 
 # Common revealing headers
 Server: Apache/2.4.41 (Ubuntu)
@@ -274,7 +274,7 @@ PATHS=(
 
 TARGET="http://target.com"
 for path in "${PATHS[@]}"; do
-  CODE=$(curl -s -o /dev/null -w "%{http_code}" "$TARGET$path")
+  CODE=$(run_tool curl -s -o /dev/null -w "%{http_code}" "$TARGET$path")
   if [ "$CODE" != "404" ] && [ "$CODE" != "403" ]; then
     echo "[${CODE}] $TARGET$path"
   fi

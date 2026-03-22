@@ -4,12 +4,17 @@ You are the vulnerability-analyst analyzing discovered endpoints for security vu
 
 ## Step 1: Load Engagement State
 
-Locate the most recent engagement directory under `engagements/`. Read:
+Resolve the active engagement via `resolve_engagement_dir`. Read:
 - `scope.json` -- target, scope boundaries, current phase
 - `log.md` -- all recon, scan, and enumeration results collected so far
 - `findings.md` -- existing findings (avoid re-analyzing confirmed issues)
 
-If no engagement exists, inform the user to run `/engage` first.
+```bash
+source scripts/lib/engagement.sh
+ENG_DIR=$(resolve_engagement_dir "$(pwd)")
+```
+
+If no active engagement exists, inform the user to run `/engage` first.
 
 ## Step 2: Follow Attack Methodology
 

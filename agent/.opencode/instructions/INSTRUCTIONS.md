@@ -75,7 +75,9 @@ run_tool ffuf -u http://target/FUZZ -w /wordlists/dirb/common.txt -o /engagement
 - `/wordlists` → `/usr/share/wordlists` (Kali wordlists package)
 - `/seclists` → `/usr/share/seclists` (SecLists package)
 
-**curl is the only tool that runs locally** (for simple HTTP requests). All other
+**For target HTTP requests, use `run_tool curl`**, not raw host `curl`. The engagement-scoped
+`rtcurl` wrapper automatically applies in-scope auth and the fixed engagement User-Agent.
+Use raw host `curl` only for external OSINT or non-target internet resources. All other
 pentest tools MUST use `run_tool`.
 
 ## Tool Availability

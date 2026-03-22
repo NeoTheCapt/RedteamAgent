@@ -17,7 +17,8 @@ But look carefully first — the domain IS in this message somewhere.
 ## Step 2: Run subfinder
 
 ```bash
-ENG_DIR=$(ls -1d engagements/*/ 2>/dev/null | sort -r | head -1 | sed 's|/$||')
+source scripts/lib/engagement.sh
+ENG_DIR=$(resolve_engagement_dir "$(pwd)")
 if [ -z "$ENG_DIR" ]; then ENG_DIR="$(pwd)"; fi
 mkdir -p "$ENG_DIR/scans"
 export ENGAGEMENT_DIR="$ENG_DIR"
@@ -34,7 +35,7 @@ Replace DOMAIN with the actual extracted domain.
 ```bash
 > "$ENG_DIR/scans/subdomains_live.txt"
 while IFS= read -r sub; do
-  code=$(/usr/bin/curl -s -o /dev/null -w "%{http_code}" --connect-timeout 3 "http://$sub" 2>/dev/null)
+  code=$(run_tool curl -s -o /dev/null -w "%{http_code}" --connect-timeout 3 "http://$sub" 2>/dev/null)
   [ "$code" != "000" ] && [ -n "$code" ] && echo "$sub $code" >> "$ENG_DIR/scans/subdomains_live.txt"
 done < "$ENG_DIR/scans/subdomains_raw.txt"
 echo "Live: $(wc -l < $ENG_DIR/scans/subdomains_live.txt)"
@@ -43,7 +44,7 @@ echo "Live: $(wc -l < $ENG_DIR/scans/subdomains_live.txt)"
 ## Step 4: Deep Mode (only if --deep)
 
 ```bash
-TARGET_IP=$(/usr/bin/curl -s -o /dev/null -w "%{remote_ip}" "http://DOMAIN" 2>/dev/null)
+TARGET_IP=$(run_tool curl -s -o /dev/null -w "%{remote_ip}" "http://DOMAIN" 2>/dev/null)
 BASELINE=$(run_tool curl -s -o /dev/null -w "%{size_download}" -H "Host: nonexistent-xyz.DOMAIN" "http://$TARGET_IP")
 run_tool ffuf -u "http://$TARGET_IP" -H "Host: FUZZ.DOMAIN" \
   -w /seclists/Discovery/DNS/subdomains-top1million-5000.txt \

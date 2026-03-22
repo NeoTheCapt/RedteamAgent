@@ -14,7 +14,7 @@ origin: RedteamOpencode
 
 ## Tools
 
-- curl / Burp Suite Repeater
+- run_tool curl / Burp Suite Repeater
 - tplmap (automated SSTI exploitation)
 - SSTImap
 - Custom polyglot payloads

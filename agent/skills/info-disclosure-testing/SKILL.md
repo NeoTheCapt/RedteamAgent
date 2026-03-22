@@ -15,9 +15,9 @@ origin: RedteamOpencode
 
 ## Tools
 
-- curl (header inspection, file probing)
+- `run_tool curl` (header inspection, file probing)
 - Burp Suite (passive scanning, response analysis)
-- Gobuster / ffuf (file and directory brute-force)
+- `run_tool gobuster` / `run_tool ffuf` (file and directory brute-force)
 - GitTools (extract .git repositories)
 - trufflehog / gitleaks (secret scanning)
 

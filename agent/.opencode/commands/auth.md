@@ -4,10 +4,11 @@ You are the operator managing authentication credentials for the current engagem
 
 ## Step 1: Locate Active Engagement
 
-Find the most recent engagement directory under `engagements/`:
+Resolve the active engagement via `resolve_engagement_dir`:
 
 ```bash
-ls -td engagements/*/ 2>/dev/null | head -1
+source scripts/lib/engagement.sh
+resolve_engagement_dir "$(pwd)"
 ```
 
 If no engagement directory exists, inform the user to run `/engage` first and stop.
@@ -45,6 +46,7 @@ If no arguments are provided, default to `show`.
    ```
 
 4. Confirm what was saved. Display the updated auth.json contents.
+5. Remind the user/operator: in-scope `run_tool curl` requests automatically read `auth.json` via `rtcurl`. Do not manually duplicate the same cookie in every request unless testing override behavior.
 
 ## Action: header
 
@@ -55,20 +57,18 @@ If no arguments are provided, default to `show`.
 
 2. Parse the header string from the user's arguments. The value is the quoted string after `header`. Split on the first `:` to get header name and value.
 
-3. Merge the new header into the existing auth.json. Use bash `cat >` to write:
+3. Merge the new header into the existing auth.json without overwriting unrelated cookies or headers:
    ```bash
-   cat > "<engagement_dir>/auth.json" << 'AUTH'
-   {
-     "cookies": "<preserve existing cookies if any>",
-     "headers": {
-       "<Header-Name>": "<header value>",
-       <preserve other existing headers>
-     }
-   }
-   AUTH
+   EXISTING=$(cat "<engagement_dir>/auth.json" 2>/dev/null || echo '{}')
+   HEADER_NAME="<Header-Name>"
+   HEADER_VALUE="<header value>"
+   echo "$EXISTING" | jq --arg name "$HEADER_NAME" --arg value "$HEADER_VALUE" '
+     . * {"headers": ((.headers // {}) + {($name): $value})}
+   ' > "<engagement_dir>/auth.json"
    ```
 
 4. Confirm what was saved. Display the updated auth.json contents.
+5. Remind the user/operator: in-scope `run_tool curl` requests automatically read `auth.json` via `rtcurl`. Do not manually duplicate the same header in every request unless testing override behavior.
 
 ## Action: show
 
@@ -94,15 +94,17 @@ After successfully configuring auth (cookie or header), if an active engagement 
 and Katana was previously running (check for scans/katana_output.jsonl):
 
 1. Announce: "[operator] Auth configured. Re-crawling with credentials to discover authenticated endpoints."
-2. Restart Katana with new cookies:
+2. Restart Katana with updated auth from `auth.json`:
    ```bash
    source scripts/lib/container.sh
    export ENGAGEMENT_DIR="<engagement_dir>"
    stop_katana
    start_katana "$(jq -r .target <engagement_dir>/scope.json)"
    ```
-3. New authenticated endpoints will flow into cases.db (dedup handles overlap with existing cases)
-4. Resume the consumption loop for any new pending cases
+3. `start_katana` reads both `cookies` and `headers` from `auth.json`, so authenticated re-collection applies to either auth style.
+4. In-scope `run_tool curl` requests also consume `auth.json` automatically via the engagement-scoped `rtcurl` wrapper.
+5. New authenticated endpoints will flow into cases.db (dedup handles overlap with existing cases)
+6. Resume the consumption loop for any new pending cases
 
 ## User Arguments
 

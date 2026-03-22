@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS cases (
     -- State management
     status TEXT NOT NULL DEFAULT 'pending',
     assigned_agent TEXT,
+    retry_count INTEGER NOT NULL DEFAULT 0,
 
     -- Timestamps
     created_at TEXT DEFAULT (datetime('now')),

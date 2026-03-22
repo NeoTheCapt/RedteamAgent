@@ -40,7 +40,7 @@
     "references/INDEX.md"
   ],
   "plugin": [
-    "./.opencode/plugins"
+    "./plugins"
   ],
   "agent": {
     "operator": {
