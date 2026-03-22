@@ -160,7 +160,7 @@ If Docker is not installed, the engagement CANNOT proceed. Tell the user to inst
 
 ## Step 4: Configure Authentication
 
-**AUTONOMOUS MODE**: skip auth setup. If `auth.json` has a token, use it. Otherwise start unauthenticated — operator Credential Auto-Use rules apply during engagement. Never wait for approval prompts.
+**AUTONOMOUS MODE**: skip auth setup. If `auth.json` already has `cookies` or `headers`, use them. Proxy-detected bearer-style login tokens are promoted into `auth.json.headers.Authorization` automatically when possible. Otherwise start unauthenticated — operator Credential Auto-Use rules apply during engagement. Never wait for approval prompts.
 
 **INTERACTIVE MODE**: Present to user:
 ```

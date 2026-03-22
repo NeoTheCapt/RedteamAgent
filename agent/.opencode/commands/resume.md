@@ -38,14 +38,18 @@ tail -30 "$ENG_DIR/log.md"
 echo "=== Auth ==="
 if [ -f "$ENG_DIR/auth.json" ]; then
     echo "Configured"
-    jq '{cookies: ((.cookies // {}) | keys), headers: ((.headers // {}) | keys)}' "$ENG_DIR/auth.json"
+    jq '{cookies: ((.cookies // {}) | keys), headers: ((.headers // {}) | keys), tokens: ((.tokens // {}) | keys)}' "$ENG_DIR/auth.json"
 else
     echo "Not configured"
 fi
 
 # Container state
 echo "=== Containers ==="
-docker ps --format "{{.Names}} ({{.Status}})" --filter "name=redteam" 2>/dev/null || echo "None running"
+source scripts/lib/container.sh
+export ENGAGEMENT_DIR="$ENG_DIR"
+PROXY_NAME="$(_proxy_container_name)"
+KATANA_NAME="$(_katana_container_name)"
+docker ps --format "{{.Names}} ({{.Status}})" --filter "name=^${PROXY_NAME}$" --filter "name=^${KATANA_NAME}$" 2>/dev/null || echo "None running"
 ```
 
 ## Step 3: Reset Stale Cases

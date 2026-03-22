@@ -288,7 +288,7 @@ Agent prompts and commands are maintained **only** in OpenCode format (`.opencod
 - `agent/.opencode/prompts/agents/operator.txt` stays as the OpenCode source prompt
 - `agent/operator-core.md` is the shared Claude/Codex methodology body
 - `agent/scripts/render-operator-prompts.sh` renders `CLAUDE.md`, `AGENTS.md`, and the thin local operator wrappers
-- `bash agent/scripts/check-operator-prompts.sh` verifies the generated files are still in sync
+- `bash tests/agent-contracts/check-operator-prompts.sh` verifies the generated files are still in sync
 
 ## Troubleshooting
 

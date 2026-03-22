@@ -13,7 +13,7 @@
  */
 
 import type { PluginInput } from "@opencode-ai/plugin"
-import { appendFile, readFile, readdir } from "node:fs/promises"
+import { appendFile, readFile, readdir, stat } from "node:fs/promises"
 import path from "node:path"
 
 interface ScopeJson {
@@ -51,32 +51,47 @@ export const EngagementHooksPlugin = async ({
   /** Localhost / loopback addresses — always allowed regardless of scope. */
   const LOCALHOST = new Set(["localhost", "127.0.0.1", "0.0.0.0", "::1"])
 
-  /**
-   * Find the most recent engagement directory with the given status.
-   * Returns the directory path or null.
-   */
-  const findActiveEngagement = async (): Promise<string | null> => {
+  const scopeEntries = (scope: ScopeJson | null): string[] => {
+    if (!scope) return []
+    return [...new Set([scope.hostname, ...(scope.scope || [])].filter(Boolean))]
+  }
+
+  const validEngagementDir = async (candidate: string | null | undefined): Promise<string | null> => {
+    if (!candidate) return null
     try {
-      const engagementsDir = path.join(root, "engagements")
+      const info = await stat(candidate)
+      return info.isDirectory() ? candidate : null
+    } catch {
+      return null
+    }
+  }
+
+  /**
+   * Resolve engagement directory using the same precedence as shell helpers:
+   * ENGAGEMENT_DIR env -> engagements/.active -> most recent engagements/* directory.
+   */
+  const resolveEngagementDir = async (): Promise<string | null> => {
+    const envDir = await validEngagementDir(process.env.ENGAGEMENT_DIR)
+    if (envDir) return envDir
+
+    const engagementsDir = path.join(root, "engagements")
+    try {
+      const activePath = path.join(engagementsDir, ".active")
+      const active = (await readFile(activePath, "utf8")).trim()
+      const activeDir = await validEngagementDir(active)
+      if (activeDir) return activeDir
+    } catch {
+      // no active engagement marker
+    }
+
+    try {
       const entries = await readdir(engagementsDir, { withFileTypes: true })
       const engagementDirs = entries
         .filter((entry) => entry.isDirectory())
         .map((entry) => path.join(engagementsDir, entry.name))
         .sort()
         .reverse()
-
-      for (const engagementDir of engagementDirs) {
-        try {
-          const scopeFile = path.join(engagementDir, "scope.json")
-          const content = await readFile(scopeFile, "utf8")
-          const scope: ScopeJson = JSON.parse(content)
-          if (scope.status === "in_progress") {
-            return engagementDir
-          }
-        } catch {
-          // Malformed scope.json, skip
-        }
-      }
+      return engagementDirs[0] || null
     } catch {
       // No engagement directories found
     }
@@ -158,14 +173,14 @@ export const EngagementHooksPlugin = async ({
     "session.created": async () => {
       log("info", "[Engagement] Plugin loaded")
 
-      const engagementDir = await findActiveEngagement()
+      const engagementDir = await resolveEngagementDir()
       if (!engagementDir) {
         log("info", "[Engagement] No active engagement found")
         return
       }
 
       const scope = await readScope(engagementDir)
-      if (!scope) return
+      if (!scope || scope.status !== "in_progress") return
 
       let logContent = ""
       let findingsContent = ""
@@ -240,18 +255,19 @@ export const EngagementHooksPlugin = async ({
       const hostnames = extractHostnames(command)
       if (hostnames.length === 0) return
 
-      const engagementDir = await findActiveEngagement()
+      const engagementDir = await resolveEngagementDir()
       if (!engagementDir) return
 
       const scope = await readScope(engagementDir)
-      if (!scope || !scope.scope || scope.scope.length === 0) return
+      const allowedEntries = scopeEntries(scope)
+      if (!scope || allowedEntries.length === 0) return
 
       for (const hostname of hostnames) {
-        if (!isInScope(hostname, scope.scope)) {
+        if (!isInScope(hostname, allowedEntries)) {
           log(
             "warn",
             `[Engagement] OUT OF SCOPE: "${hostname}" does not match any scope entry ` +
-              `[${scope.scope.join(", ")}]. Agent: ${currentAgent}. Verify this is intentional.`
+              `[${allowedEntries.join(", ")}]. Agent: ${currentAgent}. Verify this is intentional.`
           )
         }
       }
@@ -298,7 +314,7 @@ export const EngagementHooksPlugin = async ({
         }
       }
       if (!engagementDir) {
-        engagementDir = await findActiveEngagement()
+        engagementDir = await resolveEngagementDir()
       }
       if (!engagementDir) return
 

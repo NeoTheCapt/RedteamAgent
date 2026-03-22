@@ -41,7 +41,7 @@ ENG_DIR=$(resolve_engagement_dir "$(pwd)" || true)
 [ ! -f "$ENG_DIR/scope.json" ] && exit 0
 
 # Extract allowed scope entries
-SCOPE=$(jq -r '.scope[]? // empty' "$ENG_DIR/scope.json" 2>/dev/null || true)
+SCOPE=$(jq -r '([.hostname] + (.scope // [])) | map(select(type == "string" and . != "")) | unique[]' "$ENG_DIR/scope.json" 2>/dev/null || true)
 [ -z "$SCOPE" ] && exit 0
 
 # Extract hostnames/IPs from the command
