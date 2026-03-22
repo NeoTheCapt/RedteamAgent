@@ -101,6 +101,17 @@ echo "{}" > "$DIR/auth.json"
 sqlite3 "$DIR/cases.db" < scripts/schema.sql
 
 cp scripts/templates/intel.md "$DIR/intel.md" 2>/dev/null || echo "# Intelligence Collection" > "$DIR/intel.md"
+awk '
+  /^[[:space:]]*#/ { next }
+  /^[[:space:]]*$/ { next }
+  { lines[++count] = $0 }
+  END {
+    srand()
+    if (count > 0) {
+      print lines[int(rand() * count) + 1]
+    }
+  }
+' scripts/templates/user-agents.txt > "$DIR/user-agent.txt"
 cp scripts/templates/rtcurl.sh "$DIR/tools/rtcurl"
 chmod +x "$DIR/tools/rtcurl"
 

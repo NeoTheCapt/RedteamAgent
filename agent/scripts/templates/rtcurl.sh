@@ -3,6 +3,7 @@ set -euo pipefail
 
 AUTH_FILE="${RTCURL_AUTH_FILE:-/engagement/auth.json}"
 SCOPE_FILE="${RTCURL_SCOPE_FILE:-/engagement/scope.json}"
+UA_FILE="${RTCURL_USER_AGENT_FILE:-/engagement/user-agent.txt}"
 
 debug() {
     if [[ "${RTCURL_DEBUG:-0}" == "1" ]]; then
@@ -81,6 +82,7 @@ collect_explicit_auth_overrides() {
 
     EXPLICIT_COOKIE=0
     EXPLICIT_LOCATION=0
+    EXPLICIT_USER_AGENT=0
     EXPLICIT_HEADERS=()
 
     while (( i < ${#args[@]} )); do
@@ -93,6 +95,7 @@ collect_explicit_auth_overrides() {
                     lower="$(printf '%s' "$header_name" | tr '[:upper:]' '[:lower:]')"
                     EXPLICIT_HEADERS+=("$lower")
                     [[ "$lower" == "cookie" ]] && EXPLICIT_COOKIE=1
+                    [[ "$lower" == "user-agent" ]] && EXPLICIT_USER_AGENT=1
                     ((i += 2))
                     continue
                 fi
@@ -103,6 +106,7 @@ collect_explicit_auth_overrides() {
                 lower="$(printf '%s' "$header_name" | tr '[:upper:]' '[:lower:]')"
                 EXPLICIT_HEADERS+=("$lower")
                 [[ "$lower" == "cookie" ]] && EXPLICIT_COOKIE=1
+                [[ "$lower" == "user-agent" ]] && EXPLICIT_USER_AGENT=1
                 ;;
             -b|--cookie)
                 EXPLICIT_COOKIE=1
@@ -111,6 +115,14 @@ collect_explicit_auth_overrides() {
                 ;;
             --cookie=*)
                 EXPLICIT_COOKIE=1
+                ;;
+            -A|--user-agent)
+                EXPLICIT_USER_AGENT=1
+                ((i += 2))
+                continue
+                ;;
+            --user-agent=*)
+                EXPLICIT_USER_AGENT=1
                 ;;
             -L|--location|--location-trusted)
                 EXPLICIT_LOCATION=1
@@ -130,7 +142,7 @@ has_explicit_header() {
 }
 
 build_auth_args() {
-    local cookie_header key value
+    local cookie_header key value user_agent
     RTCURL_ARGS=()
 
     [[ -f "$AUTH_FILE" ]] || return 0
@@ -162,6 +174,13 @@ build_auth_args() {
         then .headers | to_entries[] | [.key, .value] | @tsv
         else empty end
     ' "$AUTH_FILE" 2>/dev/null)
+
+    if ! (( EXPLICIT_USER_AGENT )) && ! has_explicit_header "user-agent" && [[ -f "$UA_FILE" ]]; then
+        user_agent="$(grep -v '^[[:space:]]*#' "$UA_FILE" | sed '/^[[:space:]]*$/d' | head -n 1)"
+        if [[ -n "$user_agent" ]]; then
+            RTCURL_ARGS+=("-H" "User-Agent: ${user_agent}")
+        fi
+    fi
 }
 
 main() {
