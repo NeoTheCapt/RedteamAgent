@@ -44,20 +44,30 @@ An autonomous red team simulation agent that works with **Claude Code**, **OpenC
 ### One-Line Install
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/NeoTheCapt/RedteamAgent/dev/install.sh)
+# Choose your CLI — each installs ONLY that product's files
+bash <(curl -fsSL https://raw.githubusercontent.com/NeoTheCapt/RedteamAgent/dev/install.sh) opencode
+bash <(curl -fsSL https://raw.githubusercontent.com/NeoTheCapt/RedteamAgent/dev/install.sh) claude
+bash <(curl -fsSL https://raw.githubusercontent.com/NeoTheCapt/RedteamAgent/dev/install.sh) codex
 ```
 
-This auto-clones the repo, copies agent files to `~/redteam-agent`, builds Docker images, and runs verification.
+This auto-clones the repo, installs product-specific files to `~/redteam-agent`, builds Docker images (if not already built), and runs verification.
 
 ### Manual Setup
 
 ```bash
 git clone https://github.com/NeoTheCapt/RedteamAgent.git
 cd RedteamAgent
-./install.sh
 
-# Dry run — validate everything without writing files or building images
-./install.sh --dry-run
+# Install for your CLI (choose one)
+./install.sh opencode
+./install.sh claude
+./install.sh codex
+
+# Custom install directory
+./install.sh opencode ~/my-project
+
+# Dry run — validate without writing
+./install.sh --dry-run opencode
 ```
 
 ### Docker Images
@@ -257,19 +267,18 @@ This repo has two layers:
 
 ### Single-Source Architecture
 
-Agent prompts and commands are maintained **only** in OpenCode format (`.opencode/`). Claude Code and Codex versions are **generated** by `scripts/build-agents.sh`:
+Agent prompts and commands are maintained **only** in OpenCode format (`.opencode/`). Claude Code and Codex versions are **generated at install time** by `install.sh`:
 
 ```bash
-cd agent && bash scripts/build-agents.sh
-# Generates .claude/agents/*.md + .codex/agents/*.toml + .claude/commands/*.md
-
-# Dry run — validate sources without writing files
-bash scripts/build-agents.sh --dry-run
+# install.sh handles building for the target product:
+./install.sh claude ~/my-project   # generates .claude/agents/*.md + commands from .opencode/ sources
+./install.sh codex ~/my-project    # generates .codex/agents/*.toml from .opencode/ sources
+./install.sh opencode ~/my-project # copies .opencode/ directly (no build needed)
 ```
 
-**To modify an agent:** edit `agent/.opencode/prompts/agents/<name>.txt`, then run `build-agents.sh`.
+**To modify an agent:** edit `agent/.opencode/prompts/agents/<name>.txt`, then re-run `install.sh` for your product.
 
-**To add a new agent:** create the `.txt` file, add agent entry to `opencode.json`, run `build-agents.sh`.
+**To add a new agent:** create the `.txt` file, add agent entry to `opencode.json`, re-run `install.sh`.
 
 **Operator prompts** (`CLAUDE.md`, `AGENTS.md`, `operator.txt`) are maintained separately — they contain platform-specific content that can't be single-sourced.
 
@@ -308,14 +317,16 @@ RedTeam Agent 是一个自主红队模拟 Agent，支持 **Claude Code**、**Ope
 ## 快速开始
 
 ```bash
-# 一键安装
-bash <(curl -fsSL https://raw.githubusercontent.com/NeoTheCapt/RedteamAgent/dev/install.sh)
+# 一键安装（选择你的 CLI 工具）
+bash <(curl -fsSL https://raw.githubusercontent.com/NeoTheCapt/RedteamAgent/dev/install.sh) opencode
+bash <(curl -fsSL https://raw.githubusercontent.com/NeoTheCapt/RedteamAgent/dev/install.sh) claude
+bash <(curl -fsSL https://raw.githubusercontent.com/NeoTheCapt/RedteamAgent/dev/install.sh) codex
 
-# 选择你的 CLI 工具：
-cd ~/redteam-agent
-claude              # Claude Code（推荐）
-opencode            # OpenCode（需配置 .opencode/opencode.json 中的 model）
-codex               # Codex
+# 自定义安装目录
+bash <(curl -fsSL ...) opencode ~/my-project
+
+# 启动
+cd ~/redteam-agent && opencode   # 或 claude / codex
 
 # 半自主模式（需确认认证方式和首阶段）
 /engage http://your-ctf-target:8080
