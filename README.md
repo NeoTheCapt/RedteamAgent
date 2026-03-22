@@ -240,6 +240,10 @@ RedteamOpencode/                ← dev workspace (git root)
 | Scope enforcement | Hook blocks out-of-scope | Hook warns out-of-scope | N/A |
 | Agent attribution | `agent_type` in hook JSON | `chat.message` event tracking | N/A |
 
+**Development-only wrappers**
+- `agent/.claude/agents/operator.md` and `agent/.codex/agents/operator.toml` exist only for working inside the source repo.
+- Installed Claude/Codex workspaces keep `CLAUDE.md` or `AGENTS.md` as the operator entrypoint and install only generated subagents.
+
 ## Customization
 
 ### Add a Skill
