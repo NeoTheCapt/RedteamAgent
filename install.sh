@@ -224,9 +224,10 @@ else
 
     # --- Shared files (all products need these) ---
     info "Copying shared files..."
-    for dir in skills references scripts docker engagements; do
+    for dir in skills references scripts docker; do
       [ -d "$SOURCE_DIR/$dir" ] && cp -a "$SOURCE_DIR/$dir" "$INSTALL_DIR/"
     done
+    mkdir -p "$INSTALL_DIR/engagements"
     # Copy .env.example if exists
     [ -f "$SOURCE_DIR/.env.example" ] && cp "$SOURCE_DIR/.env.example" "$INSTALL_DIR/"
     ok "Shared files (skills, references, scripts, docker)"
@@ -398,7 +399,7 @@ echo ""
 # Show installed file summary
 echo "  Files installed:"
 case "$PRODUCT" in
-  opencode) echo "    .opencode/  skills/  references/  scripts/  docker/  AGENTS.md" ;;
+  opencode) echo "    .opencode/  skills/  references/  scripts/  docker/" ;;
   claude)   echo "    .claude/    skills/  references/  scripts/  docker/  CLAUDE.md" ;;
   codex)    echo "    .codex/     skills/  references/  scripts/  docker/  AGENTS.md" ;;
 esac
