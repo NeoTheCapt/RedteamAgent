@@ -222,6 +222,25 @@ if $DRY_RUN; then
 else
     mkdir -p "$INSTALL_DIR"
 
+    # --- Detect upgrade: clean old installation, preserve engagements ---
+    if [ -d "$INSTALL_DIR/skills" ] || [ -d "$INSTALL_DIR/.opencode" ] || [ -d "$INSTALL_DIR/.claude" ] || [ -d "$INSTALL_DIR/.codex" ]; then
+        warn "Existing installation detected in $INSTALL_DIR — upgrading"
+        # Preserve engagement data and .env (user config)
+        for keep in engagements .env auth.json; do
+            [ -e "$INSTALL_DIR/$keep" ] && mv "$INSTALL_DIR/$keep" "/tmp/redteam-preserve-$keep" 2>/dev/null
+        done
+        # Remove old files
+        rm -rf "$INSTALL_DIR/.opencode" "$INSTALL_DIR/.claude" "$INSTALL_DIR/.codex" \
+               "$INSTALL_DIR/skills" "$INSTALL_DIR/references" "$INSTALL_DIR/scripts" \
+               "$INSTALL_DIR/docker" "$INSTALL_DIR/CLAUDE.md" "$INSTALL_DIR/AGENTS.md" \
+               "$INSTALL_DIR/.env.example"
+        # Restore preserved data
+        for keep in engagements .env auth.json; do
+            [ -e "/tmp/redteam-preserve-$keep" ] && mv "/tmp/redteam-preserve-$keep" "$INSTALL_DIR/$keep" 2>/dev/null
+        done
+        ok "Old installation cleaned (engagements + .env preserved)"
+    fi
+
     # --- Shared files (all products need these) ---
     info "Copying shared files..."
     for dir in skills references scripts docker; do
