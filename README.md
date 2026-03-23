@@ -25,7 +25,7 @@ An autonomous red team simulation agent that works with **Claude Code**, **OpenC
 - **Autonomous workflow** — 5-phase methodology (Recon → Collect → Test → Exploit+OSINT → Report) runs with minimal user interaction
 - **Intelligence collection** — `intel.md` accumulates tech stack, people, domains, credentials from recon through exploitation; OSINT agent enriches with CVE, breach, DNS history, and social data
 - **8 specialized agents** — operator, recon-specialist, source-analyzer, vulnerability-analyst, exploit-developer, fuzzer, osint-analyst, report-writer
-- **Containerized tools** — all pentest tools run in Docker (Kali toolbox, mitmproxy, Katana), zero local installation
+- **Containerized tools** — all pentest tools run in Docker (Kali toolbox, mitmproxy, Katana, optional Metasploit RPC for OpenCode), zero local installation
 - **Case collection pipeline** — SQLite-backed queue with 4 producers, automatic type classification, zero-token dispatcher
 - **78 reference files** — OWASP Top 10:2025, API Security 2023, offensive tactics, AD/Kerberos attacks
 - **Resume support** — interrupt and continue any engagement without losing progress

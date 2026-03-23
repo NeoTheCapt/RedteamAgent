@@ -75,6 +75,10 @@ PARALLEL: Independent tasks → parallel. Dependent → sequential.
 4. **EXPLOIT** → dispatch osint-analyst + exploit-developer in parallel. After osint: read intel.md, HIGH value → findings.md + exploit 2nd round.
 5. **REPORT** → dispatch report-writer
 
+In the Exploit phase, if a finding clearly matches a Metasploit-covered service, product,
+version, or CVE, expect `exploit-developer` to try the bounded Metasploit path before
+deeper custom exploitation.
+
 After each phase update scope.json:
 ```bash
 jq '.phases_completed += ["<phase>"] | .current_phase = "<next>"' "$DIR/scope.json" > "$DIR/scope_tmp.json" && mv "$DIR/scope_tmp.json" "$DIR/scope.json"

@@ -142,7 +142,7 @@ case "$PRODUCT" in
 esac
 
 # Common tools
-for tool in curl jq sqlite3; do
+for tool in curl jq sqlite3 python3 git; do
   if command -v "$tool" >/dev/null 2>&1; then
     ok "$tool"
   else
@@ -276,6 +276,7 @@ else
       opencode)
         info "Installing OpenCode files..."
         cp -a "$SOURCE_DIR/.opencode" "$INSTALL_DIR/"
+        bash "$INSTALL_DIR/scripts/install_metasploit_mcp.sh" "$INSTALL_DIR"
         ok "OpenCode config (.opencode/)"
         # NO .claude/, NO .codex/, NO CLAUDE.md, NO AGENTS.md
         ;;
@@ -365,6 +366,19 @@ else
             cd ..; fail "Failed to build redteam-proxy"; ERRORS=$((ERRORS + 1))
         fi
     fi
+
+    if [ "$PRODUCT" = "opencode" ]; then
+        if docker image inspect redteam-metasploit:latest >/dev/null 2>&1; then
+            ok "redteam-metasploit (already exists)"
+        else
+            info "Building redteam-metasploit..."
+            if cd docker && docker compose build metasploit 2>&1 | tail -3; then
+                cd ..; ok "redteam-metasploit"
+            else
+                cd ..; fail "Failed to build redteam-metasploit"; ERRORS=$((ERRORS + 1))
+            fi
+        fi
+    fi
 fi
 
 echo ""
@@ -384,7 +398,11 @@ else
 
     source scripts/lib/container.sh 2>/dev/null
     if check_images; then
-        ok "All 3 images verified"
+        if [ "$PRODUCT" = "opencode" ] && docker image inspect redteam-metasploit:latest >/dev/null 2>&1; then
+            ok "All 4 images verified"
+        else
+            ok "All 3 images verified"
+        fi
     else
         fail "Image verification failed"
         exit 1
