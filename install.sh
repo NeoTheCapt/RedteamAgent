@@ -22,6 +22,8 @@ set -e
 DRY_RUN=false
 PRODUCT=""
 TARGET_DIR=""
+SKIP_PREREQ_CHECKS="${REDTEAM_SKIP_PREREQ_CHECKS:-0}"
+SKIP_DOCKER_IMAGE_CHECKS="${REDTEAM_SKIP_DOCKER_IMAGE_CHECKS:-0}"
 
 for arg in "$@"; do
   case "$arg" in
@@ -101,6 +103,9 @@ TXT_DIR="$SOURCE_DIR/.opencode/prompts/agents"
 echo "Step 1: Checking prerequisites..."
 echo ""
 
+if [ "$SKIP_PREREQ_CHECKS" = "1" ]; then
+    warn "Skipping prerequisite checks (REDTEAM_SKIP_PREREQ_CHECKS=1)"
+else
 # Docker
 if command -v docker >/dev/null 2>&1; then
     ok "Docker: $(docker --version 2>&1 | head -1)"
@@ -157,6 +162,7 @@ if [ $ERRORS -gt 0 ]; then
     exit 1
 fi
 ok "All prerequisites satisfied"
+fi
 
 # ============================================
 # Step 2: Install product-specific files
@@ -332,6 +338,8 @@ $DRY_RUN || cd "$INSTALL_DIR"
 
 if $DRY_RUN; then
     info "[DRY RUN] Would build Docker images if missing — skipping"
+elif [ "$SKIP_DOCKER_IMAGE_CHECKS" = "1" ]; then
+    warn "Skipping Docker image build/verification (REDTEAM_SKIP_DOCKER_IMAGE_CHECKS=1)"
 else
     # Only build/pull images that don't already exist
     if docker image inspect projectdiscovery/katana:latest >/dev/null 2>&1; then
@@ -392,6 +400,8 @@ fi
 # ============================================
 if $DRY_RUN; then
     echo "Step 4: [DRY RUN] Skipping verification"
+elif [ "$SKIP_DOCKER_IMAGE_CHECKS" = "1" ]; then
+    echo "Step 4: Skipping verification (REDTEAM_SKIP_DOCKER_IMAGE_CHECKS=1)"
 else
     echo "Step 4: Verification..."
     echo ""
