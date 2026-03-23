@@ -146,8 +146,9 @@ Plus any secrets/tokens for findings.md.
    - If a regex fails with "backreferences are not supported", rewrite using alternation (|)
      or multiple simpler patterns. Do NOT retry the same broken regex.
    - Do NOT use `grep -P` (unavailable on macOS).
-10. FINDING IDs: Use your agent prefix (FINDING-SA-NNN). Count YOUR existing prefixed findings:
-   `grep -c '^\#\# \[FINDING-SA-' "$DIR/findings.md"` to get next number. Never use unprefixed IDs.
+10. FINDING IDs: Never hand-allocate IDs. Write findings with `## [FINDING-ID] Title`, then append via:
+   `./scripts/append_finding.sh "$DIR" source-analyzer <finding-body-file>`
+   This allocates the next `FINDING-SA-NNN` under a lock and updates `Finding Count`.
 11. CONTENT VALIDATION: Before analyzing any downloaded file:
    - Verify file type matches expectation (use `file` command or check first bytes)
    - If a .js/.json/.pyc file contains "<!DOCTYPE html>", it is an SPA catch-all — skip it

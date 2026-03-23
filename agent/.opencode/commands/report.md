@@ -20,6 +20,14 @@ Read the following files from the engagement directory:
 - `log.md` -- full chronological log of all actions
 - `findings.md` -- all confirmed findings with evidence
 
+Before reading findings, validate them:
+
+```bash
+./scripts/check_findings_integrity.sh "$ENG_DIR"
+```
+
+If the integrity check fails, stop and report the duplicate IDs or count mismatch instead of generating a misleading report.
+
 ## Step 3: Generate Report
 
 The report-generation skill is already loaded in your context as instructions. Do NOT invoke it as a skill tool. Follow its report format and methodology.

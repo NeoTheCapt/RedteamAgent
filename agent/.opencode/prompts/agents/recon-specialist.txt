@@ -109,8 +109,9 @@ Domains & Infrastructure:
 9. CACHE: save pages/JS/CSS to engagement's downloads/, scans to scans/. Never curl same URL twice.
 10. BATCH: use for-loop or ffuf for >5 paths. No individual curl per path.
 11. List JS file URLs for source-analyzer. Do NOT deep-analyze JS/CSS.
-12. FINDING IDs: Use your agent prefix (FINDING-RE-NNN). Count YOUR existing prefixed findings:
-   `grep -c '^\#\# \[FINDING-RE-' "$DIR/findings.md"` to get next number. Never use unprefixed IDs.
+12. FINDING IDs: Never hand-allocate IDs. Write findings with `## [FINDING-ID] Title`, then append via:
+    `./scripts/append_finding.sh "$DIR" recon-specialist <finding-body-file>`
+    This allocates the next `FINDING-RE-NNN` under a lock and updates `Finding Count`.
 13. CONTENT VALIDATION: After downloading any file, verify it is what you expected:
    - Check Content-Type header matches expected type (not text/html for .js/.json/.pyc)
    - If response size matches the SPA index.html size, it is the Angular catch-all — discard it
