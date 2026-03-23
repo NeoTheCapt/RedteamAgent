@@ -105,6 +105,18 @@ codex               # Codex
 >
 > **Optional Metasploit for OpenCode**: the OpenCode install includes a local `metasploit` MCP server backed by a containerized `msfrpcd`. It is only intended for the `Exploit` phase when a finding clearly maps to a known Metasploit module family, service, product/version, or CVE. It is not used for blind spraying or broad recon.
 
+### Single-Image Runtime Mode
+
+For OpenCode-only deployments, the project is also being extended toward an
+all-in-one container runtime:
+- one image bundles OpenCode, Redteam Agent, and the pentest/runtime toolchain
+- runtime secrets still come from `.env` / `--env-file`, not the image
+- local bundled execution uses `REDTEAM_RUNTIME_MODE=local`
+- existing host installs remain supported and continue to use Docker child containers
+
+This mode is intended for fully containerized execution where you do not want to
+install OpenCode and the toolchain directly on the host.
+
 ### `/engage` vs `/autoengage`
 
 | | `/engage` | `/autoengage` |
