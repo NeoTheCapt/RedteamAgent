@@ -2,6 +2,8 @@
 # scripts/lib/container.sh — Container execution layer for pentest tools
 # Source this file: . scripts/lib/container.sh
 
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/processes.sh"
+
 REDTEAM_IMAGE="${REDTEAM_IMAGE:-kali-redteam:latest}"
 PROXY_IMAGE="${PROXY_IMAGE:-redteam-proxy:latest}"
 KATANA_IMAGE="${KATANA_IMAGE:-projectdiscovery/katana:latest}"
@@ -103,48 +105,38 @@ _pid_file() {
     echo "${ENGAGEMENT_DIR_ABS}/pids/$1.pid"
 }
 
+_engagement_pid_dir() {
+    _resolve_engagement_dir || return 1
+    mkdir -p "${ENGAGEMENT_DIR_ABS}/pids"
+    echo "${ENGAGEMENT_DIR_ABS}/pids"
+}
+
 _start_local_process() {
     local name="$1"; shift
-    local pid_file
-    pid_file="$(_pid_file "$name")" || return 1
-
-    if [ -f "$pid_file" ]; then
-        local existing_pid
-        existing_pid=$(cat "$pid_file" 2>/dev/null || true)
-        if [ -n "$existing_pid" ] && kill -0 "$existing_pid" 2>/dev/null; then
-            echo "[$name] Already running"
-            return 0
-        fi
-        rm -f "$pid_file"
-    fi
-
-    (
+    local pid_dir
+    local env_file
+    pid_dir="$(_engagement_pid_dir)" || return 1
+    env_file="$(_engagement_env_file)"
+    start_managed_process "$pid_dir" "$name" env \
+        ENGAGEMENT_DIR_ABS="$ENGAGEMENT_DIR_ABS" \
+        ENGAGEMENT_DIR="$ENGAGEMENT_DIR_ABS" \
+        REDTEAM_ENV_FILE="$env_file" \
+        bash -lc '
         cd "$ENGAGEMENT_DIR_ABS"
-        export ENGAGEMENT_DIR="$ENGAGEMENT_DIR_ABS"
-        _load_engagement_env
+        if [ -n "${REDTEAM_ENV_FILE:-}" ] && [ -f "$REDTEAM_ENV_FILE" ]; then
+            set -a
+            . "$REDTEAM_ENV_FILE"
+            set +a
+        fi
         "$@"
-    ) >/dev/null 2>&1 &
-    local pid=$!
-    printf '%s\n' "$pid" > "$pid_file"
-    echo "[$name] Started"
+    ' bash "$@"
 }
 
 _stop_local_process() {
     local name="$1"
-    local pid_file
-    pid_file="$(_pid_file "$name")" || return 1
-    if [ ! -f "$pid_file" ]; then
-        echo "[$name] Not running"
-        return 0
-    fi
-    local pid
-    pid=$(cat "$pid_file" 2>/dev/null || true)
-    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
-        kill "$pid" 2>/dev/null || true
-        wait "$pid" 2>/dev/null || true
-    fi
-    rm -f "$pid_file"
-    echo "[$name] Stopped"
+    local pid_dir
+    pid_dir="$(_engagement_pid_dir)" || return 1
+    stop_managed_process "$pid_dir" "$name"
 }
 
 # Run a one-shot tool in the kali-redteam container

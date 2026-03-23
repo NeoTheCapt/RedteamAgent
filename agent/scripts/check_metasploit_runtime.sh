@@ -1,12 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+SCRIPT_DIR=$(cd "${BASH_SOURCE[0]%/*}/.." && pwd)
+ROOT_DIR="$SCRIPT_DIR"
+. "$ROOT_DIR/scripts/lib/processes.sh"
 COMPOSE_FILE="${METASPLOIT_COMPOSE_FILE:-$ROOT_DIR/docker/docker-compose.yml}"
 SERVICE_NAME="${METASPLOIT_SERVICE_NAME:-metasploit}"
 ENV_FILE="$ROOT_DIR/.env"
 MSF_HOST="${MSF_SERVER:-${METASPLOIT_RUNTIME_HOST:-127.0.0.1}}"
 MSF_PORT="${MSF_PORT:-${METASPLOIT_RUNTIME_PORT:-55553}}"
+RUNTIME_MODE="${REDTEAM_RUNTIME_MODE:-docker}"
+PID_DIR="${METASPLOIT_PID_DIR:-$ROOT_DIR/pids}"
+LOCAL_CMD_DEFAULT="msfrpcd -P ${MSF_PASSWORD:-msf} -U ${MSF_USER:-msf} -a ${MSF_HOST} -p ${MSF_PORT} -S"
+LOCAL_CMD="${METASPLOIT_LOCAL_CMD:-$LOCAL_CMD_DEFAULT}"
 
 ensure_runtime=false
 probe_port=false
@@ -47,6 +53,47 @@ if [ -f "$ENV_FILE" ] && { [ -z "${MSF_SERVER:-}" ] || [ -z "${MSF_PORT:-}" ]; }
   set +a
   MSF_HOST="${MSF_SERVER:-${METASPLOIT_RUNTIME_HOST:-127.0.0.1}}"
   MSF_PORT="${MSF_PORT:-${METASPLOIT_RUNTIME_PORT:-55553}}"
+fi
+
+RUNTIME_MODE="${REDTEAM_RUNTIME_MODE:-$RUNTIME_MODE}"
+PID_DIR="${METASPLOIT_PID_DIR:-$PID_DIR}"
+LOCAL_CMD_DEFAULT="msfrpcd -P ${MSF_PASSWORD:-msf} -U ${MSF_USER:-msf} -a ${MSF_HOST} -p ${MSF_PORT} -S"
+LOCAL_CMD="${METASPLOIT_LOCAL_CMD:-$LOCAL_CMD_DEFAULT}"
+
+local_runtime_is_running() {
+  pid_is_running "$(pid_file_path "$PID_DIR" "$SERVICE_NAME")"
+}
+
+local_start_service_once() {
+  echo "[metasploit] Runtime unavailable, starting local $SERVICE_NAME..." >&2
+  start_managed_process "$PID_DIR" "$SERVICE_NAME" bash -lc "$LOCAL_CMD" >/dev/null
+}
+
+local_probe_ready() {
+  if [ "${METASPLOIT_RUNTIME_SKIP_PORT_PROBE:-0}" = "1" ]; then
+    return 0
+  fi
+  probe_rpc_port
+}
+
+if [ "$RUNTIME_MODE" = "local" ]; then
+  if ! local_runtime_is_running; then
+    if [ "$ensure_runtime" = true ]; then
+      local_start_service_once
+      if ! local_runtime_is_running; then
+        echo "ERROR: local Metasploit runtime is still not running after startup attempt" >&2
+        exit 1
+      fi
+    else
+      echo "ERROR: local Metasploit runtime is not running. Set REDTEAM_RUNTIME_MODE=local and start msfrpcd." >&2
+      exit 1
+    fi
+  fi
+  if [ "$probe_port" = true ]; then
+    local_probe_ready
+  fi
+  echo "[OK] Metasploit runtime is available"
+  exit 0
 fi
 
 if ! command -v docker >/dev/null 2>&1; then
