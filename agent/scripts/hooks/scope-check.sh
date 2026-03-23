@@ -12,6 +12,8 @@ INPUT=$(cat)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/../lib/engagement.sh"
+# shellcheck source=/dev/null
+source "$SCRIPT_DIR/../lib/scope.sh"
 
 # Only check Bash tool calls
 TOOL_NAME=$(echo "$INPUT" | jq -r '.tool_name // empty' 2>/dev/null || true)
@@ -41,46 +43,18 @@ ENG_DIR=$(resolve_engagement_dir "$(pwd)" || true)
 [ ! -f "$ENG_DIR/scope.json" ] && exit 0
 
 # Extract allowed scope entries
-SCOPE=$(jq -r '([.hostname] + (.scope // [])) | map(select(type == "string" and . != "")) | unique[]' "$ENG_DIR/scope.json" 2>/dev/null || true)
-[ -z "$SCOPE" ] && exit 0
+mapfile -t SCOPE_LIST < <(scope_entries "$ENG_DIR")
+[ "${#SCOPE_LIST[@]}" -eq 0 ] && exit 0
 
-# Extract hostnames/IPs from the command
-HOSTS=$(echo "$COMMAND" | grep -oE '(https?://)?[a-zA-Z0-9]([a-zA-Z0-9\-]*\.)+[a-zA-Z]{2,}(:[0-9]+)?' 2>/dev/null | \
-  sed 's|https\?://||' | sed 's|:[0-9]*$||' | sort -u || true)
-
-IPS=$(echo "$COMMAND" | grep -oE '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}' 2>/dev/null | sort -u || true)
-
-# If no hosts or IPs found, allow (local command)
-[ -z "$HOSTS" ] && [ -z "$IPS" ] && exit 0
+mapfile -t HOST_LIST < <(extract_command_hosts "$COMMAND")
+[ "${#HOST_LIST[@]}" -eq 0 ] && exit 0
 
 # Check each host against scope
-for HOST in $HOSTS $IPS; do
-  IN_SCOPE=false
-
-  # Always allow localhost/loopback
-  case "$HOST" in
-    localhost|127.0.0.1|0.0.0.0|::1) continue ;;
-  esac
-
-  for ALLOWED in $SCOPE; do
-    if [ "$HOST" = "$ALLOWED" ]; then
-      IN_SCOPE=true
-      break
-    fi
-    # Wildcard: *.domain matches any subdomain
-    WILDCARD_DOMAIN=$(echo "$ALLOWED" | sed 's/^\*\.//')
-    if [ "$ALLOWED" != "$WILDCARD_DOMAIN" ]; then
-      case "$HOST" in
-        *".$WILDCARD_DOMAIN") IN_SCOPE=true; break ;;
-        "$WILDCARD_DOMAIN") IN_SCOPE=true; break ;;
-      esac
-    fi
-  done
-
-  if [ "$IN_SCOPE" = false ]; then
+for HOST in "${HOST_LIST[@]}"; do
+  if ! host_in_scope "$HOST" "${SCOPE_LIST[@]}"; then
     AGENT_TYPE=$(echo "$INPUT" | jq -r '.agent_type // "operator"' 2>/dev/null || echo "unknown")
     echo "BLOCKED: Host '$HOST' is not in scope. (agent: $AGENT_TYPE)" >&2
-    echo "Allowed scope: $SCOPE" >&2
+    echo "Allowed scope: ${SCOPE_LIST[*]}" >&2
     exit 2
   fi
 done
