@@ -130,7 +130,8 @@ url_path, content_type, response_snippet.
 Per case: download URL to /tmp (cache, never re-download), analyze by type, compile discoveries.
 
 Output: case IDs analyzed, NEW ENDPOINTS as JSON lines for requeue:
-  {"method":"GET","url":"https://target/api/found","url_path":"/api/found","type":"api","source":"source-analyzer","params_key_sig":"..."}
+  {"method":"GET","url":"https://target/api/found?limit=10","url_path":"/api/found","type":"api","source":"source-analyzer","query_params":{"limit":"10"},"body_params":{},"path_params":{}}
+  {"method":"POST","url":"https://target/rest/user/login","url_path":"/rest/user/login","type":"api","source":"source-analyzer","query_params":{},"body_params":{"email":"demo@target.local","password":"Password123!"},"path_params":{}}
 Plus any secrets/tokens for findings.md.
 
 === EXECUTION RULES ===
