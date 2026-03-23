@@ -235,9 +235,10 @@ Reply (1-2):
 ```
 
 After approval:
-1. Import recon endpoints directly. Import source-analyzer endpoints only when they are already fully
-   concrete and directly requestable JSONL endpoints:
-   `echo "source-endpoint-jsonl" | ./scripts/recon_ingest.sh "$DIR/cases.db" source-analyzer`
+1. Import only concrete queue-ready endpoints:
+   - recon-specialist: use `#### Queue Endpoints` JSONL only
+   - source-analyzer: use fully concrete, directly requestable JSONL endpoints only
+   `echo "endpoint-jsonl" | ./scripts/recon_ingest.sh "$DIR/cases.db" <source>`
    Dynamic templates, string fragments, route constants, unresolved placeholders, and write endpoints
    without real parameters belong in `Surface Candidates`, not `cases.db`.
 2. Start Katana container + ingest pipeline:
