@@ -117,7 +117,7 @@ Email Addresses:
 | Email | Source | Notes |
 
 Credentials & Secrets:
-| Type | Value (truncated) | Source | Notes |
+| Type | Value (preview) | Ref | Source | Notes |
 
 Domains & Infrastructure:
 | Item | Type | Source | Notes |
@@ -162,3 +162,7 @@ Plus any secrets/tokens for findings.md.
     emit it under `#### Surface Candidates`. Allowed `surface_type` values:
     `auth_entry`, `account_recovery`, `object_reference`, `privileged_write`, `file_handling`,
     `dynamic_render`, `api_documentation`, `workflow_token`.
+13. SECRET STORAGE: If a credential, token, seed phrase, API key, or setup secret is needed for
+    later use, store the full value in `intel-secrets.json` via:
+    `./scripts/store_intel_secret.sh "$DIR" <ref> <type> <full-value> <source> "<notes>"`
+    Then put only the returned preview row into `intel.md`. Do not put full secret material directly in `intel.md`.

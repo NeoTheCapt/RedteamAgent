@@ -18,7 +18,7 @@ source outputs: new API endpoints, routes, secrets/tokens, config objects
 
 Operator does:
 1. New endpoints → `echo JSON | ./scripts/dispatcher.sh $DB requeue`
-2. Secrets/tokens → findings.md immediately (HIGH/MEDIUM) + intel.md Credentials table
+2. Secrets/tokens → findings.md immediately (HIGH/MEDIUM) + `intel-secrets.json` for full values + intel.md Credentials table for preview/reference only
 3. Interesting routes → requeue as new cases
 4. Web3/NFT/unusual endpoints → requeue with HIGH priority note
 

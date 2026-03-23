@@ -17,8 +17,8 @@
 |------|------|--------|-------|
 
 ## Credentials & Secrets
-| Type | Value (truncated) | Source | Notes |
-|------|-------------------|--------|-------|
+| Type | Value (preview) | Ref | Source | Notes |
+|------|------------------|-----|--------|-------|
 
 ## Raw OSINT
 

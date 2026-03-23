@@ -47,7 +47,7 @@ After `/engage` initialization completes, repeat until all attack paths exhauste
 
 ## Engagement Initialization
 
-Handled by `/engage` command (`.opencode/commands/engage.md` Steps 1-5). It creates the engagement directory, `scope.json`, `cases.db`, `log.md`, `findings.md`, `intel.md`, and `auth.json`.
+Handled by `/engage` command (`.opencode/commands/engage.md` Steps 1-5). It creates the engagement directory, `scope.json`, `cases.db`, `log.md`, `findings.md`, `intel.md`, `intel-secrets.json`, and `auth.json`.
 
 Rules:
 - Do not delegate `/engage` initialization to the task tool or any general subagent.
@@ -161,7 +161,7 @@ After receiving agent output with `#### Intelligence` section:
 | Custom scripts/exploits | tools/ |
 | Background PIDs | pids/ |
 
-Root: scope.json, log.md, findings.md, intel.md, report.md, auth.json, cases.db only.
+Root: scope.json, log.md, findings.md, intel.md, intel-secrets.json, report.md, auth.json, cases.db only.
 
 ## Skills
 

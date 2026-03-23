@@ -97,6 +97,7 @@ cat > "$DIR/findings.md" << EOF
 EOF
 
 : > "$DIR/surfaces.jsonl"
+printf '[]\n' > "$DIR/intel-secrets.json"
 
 echo "{}" > "$DIR/auth.json"
 
