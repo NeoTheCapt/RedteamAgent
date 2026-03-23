@@ -40,12 +40,21 @@ while IFS= read -r line; do
     method=""
     url=""
     override_type=""
+    query_params=""
+    body_params=""
+    path_params=""
+    cookie_params="{}"
 
     if [[ "$line" == "{"* ]]; then
         # JSON format
         method=$(echo "$line" | jq -r '.method // "GET"' 2>/dev/null)
         url=$(echo "$line" | jq -r '.url // empty' 2>/dev/null)
+        url_path=$(echo "$line" | jq -r '.url_path // empty' 2>/dev/null)
         override_type=$(echo "$line" | jq -r '.type // empty' 2>/dev/null)
+        query_params=$(echo "$line" | jq -c '.query_params // {}' 2>/dev/null || echo '{}')
+        body_params=$(echo "$line" | jq -c '.body_params // {}' 2>/dev/null || echo '{}')
+        path_params=$(echo "$line" | jq -c '.path_params // {}' 2>/dev/null || echo '{}')
+        cookie_params=$(echo "$line" | jq -c '.cookie_params // {}' 2>/dev/null || echo '{}')
         if [[ -z "$url" ]]; then
             continue
         fi
@@ -80,10 +89,18 @@ while IFS= read -r line; do
     fi
 
     # Run through parameter extraction pipeline
-    url_path=$(extract_url_path "$url")
-    query_params=$(extract_query_params "$url")
-    path_params=$(extract_path_params "$url_path")
-    body_params="{}"
+    if [[ -z "${url_path:-}" || "$url_path" == "null" ]]; then
+        url_path=$(extract_url_path "$url")
+    fi
+    if [[ -z "$query_params" || "$query_params" == "null" ]]; then
+        query_params=$(extract_query_params "$url")
+    fi
+    if [[ -z "$path_params" || "$path_params" == "null" ]]; then
+        path_params=$(extract_path_params "$url_path")
+    fi
+    if [[ -z "$body_params" || "$body_params" == "null" ]]; then
+        body_params="{}"
+    fi
 
     # Classify type (use override if provided)
     if [[ -n "$override_type" ]]; then
@@ -98,7 +115,7 @@ while IFS= read -r line; do
     # Insert into DB
     db_insert_case "$DB_PATH" \
         "$method" "$url" "$url_path" \
-        "$query_params" "$body_params" "$path_params" "{}" \
+        "$query_params" "$body_params" "$path_params" "$cookie_params" \
         "" "" "" "0" \
         "0" "" "0" "" \
         "$case_type" "$SOURCE" "$params_sig"
