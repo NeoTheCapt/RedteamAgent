@@ -100,6 +100,10 @@ source-analysis
 #### Source Maps & Debug Info
 #### Recommended Follow-Up (return to operator — do NOT execute)
 
+#### Surface Candidates
+Emit only when the mapping is reasonably clear. Use one JSON line per candidate:
+`{"surface_type":"workflow_token","target":"GET /rest/2fa/status","source":"source-analyzer","rationale":"bundle discloses setup-token flow","evidence_ref":"downloads/source-analysis/assets/main.js","status":"discovered"}`
+
 #### Intelligence
 Extracted intel for intel.md. ONLY include items actually discovered — omit empty tables.
 
@@ -154,3 +158,7 @@ Plus any secrets/tokens for findings.md.
    - If a .js/.json/.pyc file contains "<!DOCTYPE html>", it is an SPA catch-all — skip it
    - If multiple files have identical byte sizes, they are likely the same SPA fallback
    Never report findings from HTML error pages misidentified as source files.
+12. SURFACE DISCOVERY: When bundles, routes, specs, or secrets clearly expose a high-risk flow,
+    emit it under `#### Surface Candidates`. Allowed `surface_type` values:
+    `auth_entry`, `account_recovery`, `object_reference`, `privileged_write`, `file_handling`,
+    `dynamic_render`, `api_documentation`, `workflow_token`.
