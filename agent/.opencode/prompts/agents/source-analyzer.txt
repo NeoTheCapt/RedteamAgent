@@ -171,13 +171,17 @@ Plus any secrets/tokens for findings.md.
     - absolute `url` with http/https scheme
     - matching absolute `url_path`
     - concrete method and concrete path
-    - real example parameters only when they are actually known from source
+    - for write operations (`POST`, `PUT`, `PATCH`, `DELETE`): real example parameters are mandatory
+    - for read operations: include concrete query parameters whenever the source clearly reveals them
     Do NOT emit:
     - string fragments, route constants, MIME strings, or path prefixes
     - unresolved templates such as `{id}`, `:id`, `{{href}}`
     - concatenation remnants such as `'+...+'`
+    - write endpoints with empty or guessed parameters
     - front-end routes unless they are clearly testable server endpoints
     If the source suggests a risky flow but not a directly requestable endpoint, emit it only under
     `#### Surface Candidates`, not as a NEW ENDPOINT.
-15. QUEUE HANDOFF: NEW ENDPOINTS must survive `./scripts/normalize_source_endpoints.sh`.
-    Anything that would be dropped by that script should be surfaced as a `Surface Candidate` instead.
+15. QUEUE HANDOFF: You are fully responsible for endpoint quality. The operator will import your
+    NEW ENDPOINT JSON lines directly. If an endpoint is incomplete, templated, parameterless on a
+    write method, or otherwise not directly testable, do not emit it as a NEW ENDPOINT. Surface it
+    under `#### Surface Candidates` instead.
