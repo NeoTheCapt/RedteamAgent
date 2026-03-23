@@ -39,111 +39,157 @@ An autonomous red team simulation agent that works with **Claude Code**, **OpenC
 ### Prerequisites
 
 - [Docker](https://docs.docker.com/get-docker/) (with Docker Compose)
-- At least one AI CLI tool:
-  - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (recommended)
+- At least one AI CLI tool if you are not using the Docker all-in-one runtime:
+  - [Claude Code](https://docs.anthropic.com/en/docs/claude-code)
   - [OpenCode](https://opencode.ai) (`npm install -g opencode-ai`)
   - [Codex](https://github.com/openai/codex)
-- Local tools: `curl`, `jq`, `sqlite3`
+- Local tools: `curl`, `jq`, `sqlite3` (not required for the Docker all-in-one runtime)
 - Native Windows/PowerShell is not supported
 
-### One-Line Install
+### Installation Help
 
-**macOS / Linux:**
 ```bash
-# Choose your CLI — each installs ONLY that product's files
-bash <(curl -fsSL https://raw.githubusercontent.com/NeoTheCapt/RedteamAgent/dev/install.sh) opencode
-bash <(curl -fsSL https://raw.githubusercontent.com/NeoTheCapt/RedteamAgent/dev/install.sh) claude
-bash <(curl -fsSL https://raw.githubusercontent.com/NeoTheCapt/RedteamAgent/dev/install.sh) codex
+./install.sh -h
 ```
 
-This auto-clones the repo, installs product-specific files to `~/redteam-agent`, builds Docker images (if not already built), and runs verification.
+## Usage by CLI
 
-### Manual Setup
+### Docker (Recommended)
 
-**macOS / Linux:**
-```bash
-git clone https://github.com/NeoTheCapt/RedteamAgent.git
-cd RedteamAgent
-
-./install.sh opencode                  # Install for OpenCode
-./install.sh claude                    # Install for Claude Code
-./install.sh codex                     # Install for Codex
-./install.sh docker                    # Install Docker all-in-one runtime
-./install.sh opencode ~/my-project     # Custom directory
-./install.sh --dry-run opencode        # Validate without writing
-./install.sh --force docker            # Force rebuild related images
-./install.sh -h                        # Show install help
-```
-
-Windows is intentionally unsupported. Use a macOS/Linux environment for installation and runtime.
-
-### Docker Images
-
-| Image | Size | Contents |
-|-------|------|----------|
-| `kali-redteam` | ~3.5GB | nmap, ffuf, sqlmap, nikto, whatweb, hydra, gobuster, nuclei, wfuzz, wordlists, seclists |
-| `redteam-proxy` | ~250MB | mitmproxy + case collection addon |
-| `projectdiscovery/katana` | ~780MB | Web crawler + headless Chrome |
-
-## Quick Start
+**Install**
 
 ```bash
-cd ~/redteam-agent
-
-# Choose your CLI:
-claude              # Claude Code (recommended)
-opencode            # OpenCode
-codex               # Codex
-
-# Semi-autonomous (asks for auth setup, confirms phases)
-/engage http://your-ctf-target:8080
-
-# Fully autonomous (zero interaction — just watch)
-/autoengage http://your-ctf-target:8080
-
-# Wildcard domain (enumerates subdomains, parallel testing)
-/autoengage *.target.com --parallel 5
-```
-
-> **OpenCode users**: configure your LLM provider in `.opencode/opencode.json`:
-> ```json
-> { "model": "anthropic/claude-sonnet-4-6", "small_model": "anthropic/claude-haiku-4-5-20251001" }
-> ```
->
-> **Optional Metasploit for OpenCode**: the OpenCode install includes a local `metasploit` MCP server backed by a containerized `msfrpcd`. It is only intended for the `Exploit` phase when a finding clearly maps to a known Metasploit module family, service, product/version, or CVE. It is not used for blind spraying or broad recon.
-
-### Single-Image Runtime Mode
-
-For OpenCode-only deployments, the project is also being extended toward an
-all-in-one container runtime:
-- one image bundles OpenCode, Redteam Agent, and the pentest/runtime toolchain
-- runtime secrets still come from `.env` / `--env-file`, not the image
-- local bundled execution uses `REDTEAM_RUNTIME_MODE=local`
-- existing host installs remain supported and continue to use Docker child containers
-
-This mode is intended for fully containerized execution where you do not want to
-install OpenCode and the toolchain directly on the host.
-
-Install it as its own product:
-
-```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/NeoTheCapt/RedteamAgent/dev/install.sh) docker
+# or:
 ./install.sh docker ~/redteam-docker
+./install.sh --force docker ~/redteam-docker
+```
+
+**Start**
+
+```bash
 cd ~/redteam-docker
 ./run.sh
 ```
 
-The generated `run.sh` starts from the image-baked clean template and persists
-its runtime state under the install directory `workspace/`.
-
-To force a clean image rebuild during install or runtime:
+**Run**
 
 ```bash
-./install.sh --force docker ~/redteam-docker
-cd ~/redteam-docker
-./run.sh --rebuild
+/engage http://your-ctf-target:8080
+/autoengage http://your-ctf-target:8080
 ```
 
-### `/engage` vs `/autoengage`
+**Notes**
+- This is the cleanest runtime path: the image bundles OpenCode, Redteam Agent, and the pentest toolchain.
+- `run.sh` starts from the image-baked clean template and persists state in `workspace/`.
+- Use `./run.sh --rebuild` to force a clean image rebuild after install.
+
+### OpenCode (Recommended)
+
+**Install**
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/NeoTheCapt/RedteamAgent/dev/install.sh) opencode
+# or:
+./install.sh opencode
+./install.sh opencode ~/my-project
+./install.sh --dry-run opencode
+```
+
+**Start**
+
+```bash
+cd ~/redteam-agent
+opencode
+```
+
+**Run**
+
+```bash
+/engage http://your-ctf-target:8080
+/autoengage http://your-ctf-target:8080
+```
+
+**Notes**
+- Configure your LLM provider in `.opencode/opencode.json`.
+- OpenCode can optionally use the local Metasploit MCP path during `Exploit` when a finding clearly maps to a known module family, service, product/version, or CVE.
+
+### Claude Code
+
+**Install**
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/NeoTheCapt/RedteamAgent/dev/install.sh) claude
+# or:
+./install.sh claude
+./install.sh claude ~/my-project
+```
+
+**Start**
+
+```bash
+cd ~/redteam-agent
+claude
+```
+
+**Run**
+
+```bash
+/engage http://your-ctf-target:8080
+/autoengage http://your-ctf-target:8080
+```
+
+### Codex
+
+**Install**
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/NeoTheCapt/RedteamAgent/dev/install.sh) codex
+# or:
+./install.sh codex
+./install.sh codex ~/my-project
+```
+
+**Start**
+
+```bash
+cd ~/redteam-agent
+codex
+```
+
+**Run**
+
+```text
+engage http://your-ctf-target:8080
+autoengage http://your-ctf-target:8080
+```
+
+**Notes**
+- Codex does not support slash commands the same way OpenCode and Claude Code do; use natural-language command invocation when needed.
+
+## Shared Outputs
+
+Every runtime writes engagement artifacts to:
+
+```text
+engagements/<timestamp-target>/
+```
+
+Common outputs:
+- `findings.md` — vulnerability findings and supporting evidence
+- `report.md` — final engagement report
+- `log.md` — execution log and operator timeline
+- `intel.md` — summary intelligence safe for routine review
+- `intel-secrets.json` — full captured secrets and tokens
+- `auth.json` — active auth material and session state
+- `cases.db` — SQLite queue, classification, and work state
+- `surfaces.jsonl` — high-risk surface coverage tracking
+
+Sensitive outputs:
+- Do not casually share `intel-secrets.json`, `auth.json`, or any engagement directory that still contains live credentials, tokens, or session state.
+- If you need to share results, prefer `report.md`, selected excerpts from `findings.md`, and a reviewed/redacted subset of supporting files.
+
+## Engagement Modes
 
 | | `/engage` | `/autoengage` |
 |---|---|---|
@@ -155,7 +201,7 @@ cd ~/redteam-docker
 
 The agent runs through 5 phases:
 
-```
+```text
 Phase 1: RECON ─── recon-specialist + source-analyzer (parallel)
     │
 Phase 2: COLLECT ─ Import endpoints → SQLite queue, start Katana crawler
@@ -170,7 +216,7 @@ Phase 4: EXPLOIT ── osint-analyst + exploit-developer (parallel)
 Phase 5: REPORT ── report-writer with coverage statistics + intelligence summary
 ```
 
-### Commands
+## Common Commands
 
 | Command | Description |
 |---------|-------------|
@@ -190,11 +236,9 @@ Phase 5: REPORT ── report-writer with coverage statistics + intelligence sum
 | `/osint` | Run OSINT intelligence gathering on current engagement |
 | `/recon` `/scan` `/enumerate` `/exploit` `/pivot` | Manual phase overrides |
 
-During `/exploit`, OpenCode may use the optional Metasploit MCP path for read-only module lookup first, then escalate to bounded module execution only when the current finding is a strong fit. The decision remains inside the `exploit-developer` path; Metasploit is not a default first step for vague findings.
-
 ### Authentication
 
-```
+```text
 1 — Proxy login (recommended): /proxy start → login in browser
 2 — Manual cookie: /auth cookie "session=abc123"
 3 — Manual header: /auth header "Authorization: Bearer ..."
