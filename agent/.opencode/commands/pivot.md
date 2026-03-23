@@ -36,7 +36,7 @@ Based on the gap analysis and any hint provided by the user in the arguments, pr
 - **Logic flaws**: business logic vulnerabilities, race conditions, IDOR
 - **Infrastructure attacks**: misconfigured services, default credentials, exposed admin panels
 
-## Step 4: Present Strategy for Approval
+## Step 4: Present or Proceed Strategy
 
 Present the new strategy to the user as a numbered list of proposed actions, including:
 
@@ -45,7 +45,8 @@ Present the new strategy to the user as a numbered list of proposed actions, inc
 3. **How**: which skill or tool to use
 4. **Expected effort**: quick test vs. deep investigation
 
-Wait for user approval before executing the new strategy.
+- **INTERACTIVE / manual-confirm**: wait for user approval before executing the new strategy.
+- **AUTO-CONFIRM / AUTONOMOUS**: announce the strategy, then continue without waiting.
 
 ## User Arguments
 

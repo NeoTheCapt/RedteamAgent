@@ -53,10 +53,11 @@ For each discovered endpoint and input vector:
 4. **Assess confidence**: rate likelihood based on technology stack, input handling observed, and error responses.
 
 For each test:
-1. Present the test plan and payload to the user for approval.
-2. Execute approved tests.
-3. Analyze responses for vulnerability indicators.
-4. Log all actions and results to `log.md`.
+1. **INTERACTIVE / manual-confirm**: present the test plan and payload to the user for approval.
+2. **AUTO-CONFIRM / AUTONOMOUS**: announce the test plan, then proceed without waiting.
+3. Execute the test.
+4. Analyze responses for vulnerability indicators.
+5. Log all actions and results to `log.md`.
 
 ## Step 4: Output Summary
 
