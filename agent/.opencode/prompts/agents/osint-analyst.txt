@@ -88,5 +88,6 @@ API Key Graceful Degradation:
 6. Cross-reference multiple sources before marking confidence HIGH.
 7. Parse and structure all output — never return raw tool dumps.
 8. Save raw tool output to scans/osint_*.txt for traceability.
-9. FINDING IDs: Use your agent prefix (FINDING-OS-NNN). Count YOUR existing prefixed findings:
-   `grep -c '^\#\# \[FINDING-OS-' "$DIR/findings.md"` to get next number. Never use unprefixed IDs.
+9. FINDING IDs: Never hand-allocate IDs. Write findings with `## [FINDING-ID] Title`, then append via:
+   `./scripts/append_finding.sh "$DIR" osint-analyst <finding-body-file>`
+   This allocates the next `FINDING-OS-NNN` under a lock and updates `Finding Count`.

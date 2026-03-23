@@ -97,6 +97,13 @@ Agents use PREFIXED IDs:
 | fuzzer | FZ | FINDING-FZ-001 |
 | osint-analyst | OS | FINDING-OS-001 |
 
+Never hand-allocate finding IDs. Draft findings with:
+`## [FINDING-ID] Title`
+Then append via:
+`./scripts/append_finding.sh "$DIR" <agent-name> <finding-body-file>`
+
+This allocates the next prefixed ID under a lock and updates `Finding Count`.
+
 ```
 ## [FINDING-XX-NNN] Title
 - **Discovered by**: <agent-name>
