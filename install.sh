@@ -17,10 +17,30 @@
 # Each product gets ONLY its own files — no cross-product contamination.
 set -e
 
+show_help() {
+  echo "Usage: $0 [--dry-run] [--force] <opencode|claude|codex|docker> [target_dir]"
+  echo ""
+  echo "  opencode  — Install for OpenCode (source files, no build needed)"
+  echo "  claude    — Install for Claude Code (generates .claude/agents + commands)"
+  echo "  codex     — Install for Codex (generates .codex/agents)"
+  echo "  docker    — Install the all-in-one Docker runtime with generated run.sh"
+  echo ""
+  echo "Options:"
+  echo "  --dry-run    Validate install steps without writing files"
+  echo "  --force      Force rebuild of product-related Docker images"
+  echo "  -h, --help   Show this help and exit"
+  echo ""
+  echo "  Supported platforms: macOS, Linux"
+  echo "  Windows / PowerShell: not supported"
+  echo ""
+  echo "  target_dir defaults to ~/redteam-agent"
+}
+
 # ============================================
 # Parse arguments
 # ============================================
 DRY_RUN=false
+FORCE_REBUILD=false
 PRODUCT=""
 TARGET_DIR=""
 SKIP_PREREQ_CHECKS="${REDTEAM_SKIP_PREREQ_CHECKS:-0}"
@@ -29,23 +49,15 @@ SKIP_DOCKER_IMAGE_CHECKS="${REDTEAM_SKIP_DOCKER_IMAGE_CHECKS:-0}"
 for arg in "$@"; do
   case "$arg" in
     --dry-run) DRY_RUN=true ;;
+    --force) FORCE_REBUILD=true ;;
+    -h|--help) show_help; exit 0 ;;
     opencode|claude|codex|docker) PRODUCT="$arg" ;;
     *) [ -z "$TARGET_DIR" ] && TARGET_DIR="$arg" ;;
   esac
 done
 
 if [ -z "$PRODUCT" ]; then
-  echo "Usage: $0 [--dry-run] <opencode|claude|codex|docker> [target_dir]"
-  echo ""
-  echo "  opencode  — Install for OpenCode (source files, no build needed)"
-  echo "  claude    — Install for Claude Code (generates .claude/agents + commands)"
-  echo "  codex     — Install for Codex (generates .codex/agents)"
-  echo "  docker    — Install the all-in-one Docker runtime with generated run.sh"
-  echo ""
-  echo "  Supported platforms: macOS, Linux"
-  echo "  Windows / PowerShell: not supported"
-  echo ""
-  echo "  target_dir defaults to ~/redteam-agent"
+  show_help
   exit 1
 fi
 
@@ -400,7 +412,14 @@ elif [ "$SKIP_DOCKER_IMAGE_CHECKS" = "1" ]; then
     warn "Skipping Docker image build/verification (REDTEAM_SKIP_DOCKER_IMAGE_CHECKS=1)"
 else
     if [ "$PRODUCT" = "docker" ]; then
-        if docker image inspect redteam-allinone:latest >/dev/null 2>&1; then
+        if $FORCE_REBUILD; then
+            info "Force rebuilding redteam-allinone..."
+            if docker build --pull --no-cache -t redteam-allinone:latest -f docker/redteam-allinone/Dockerfile . 2>&1 | tail -3; then
+                ok "redteam-allinone"
+            else
+                fail "Failed to build redteam-allinone"; ERRORS=$((ERRORS + 1))
+            fi
+        elif docker image inspect redteam-allinone:latest >/dev/null 2>&1; then
             ok "redteam-allinone (already exists)"
         else
             info "Building redteam-allinone (this may take several minutes)..."
@@ -412,7 +431,14 @@ else
         fi
     else
     # Only build/pull images that don't already exist
-    if docker image inspect projectdiscovery/katana:latest >/dev/null 2>&1; then
+    if $FORCE_REBUILD; then
+        info "Force pulling projectdiscovery/katana:latest..."
+        if docker pull projectdiscovery/katana:latest >/dev/null 2>&1; then
+            ok "Katana image"
+        else
+            fail "Failed to pull Katana"; ERRORS=$((ERRORS + 1))
+        fi
+    elif docker image inspect projectdiscovery/katana:latest >/dev/null 2>&1; then
         ok "Katana image (already exists)"
     else
         info "Pulling projectdiscovery/katana:latest..."
@@ -423,7 +449,14 @@ else
         fi
     fi
 
-    if docker image inspect kali-redteam:latest >/dev/null 2>&1; then
+    if $FORCE_REBUILD; then
+        info "Force rebuilding kali-redteam (this may take several minutes)..."
+        if cd docker && docker compose build --no-cache kali-redteam 2>&1 | tail -3; then
+            cd ..; ok "kali-redteam"
+        else
+            cd ..; fail "Failed to build kali-redteam"; ERRORS=$((ERRORS + 1))
+        fi
+    elif docker image inspect kali-redteam:latest >/dev/null 2>&1; then
         ok "kali-redteam (already exists)"
     else
         info "Building kali-redteam (this may take several minutes)..."
@@ -434,7 +467,14 @@ else
         fi
     fi
 
-    if docker image inspect redteam-proxy:latest >/dev/null 2>&1; then
+    if $FORCE_REBUILD; then
+        info "Force rebuilding redteam-proxy..."
+        if cd docker && docker compose build --no-cache mitmproxy 2>&1 | tail -3; then
+            cd ..; ok "redteam-proxy"
+        else
+            cd ..; fail "Failed to build redteam-proxy"; ERRORS=$((ERRORS + 1))
+        fi
+    elif docker image inspect redteam-proxy:latest >/dev/null 2>&1; then
         ok "redteam-proxy (already exists)"
     else
         info "Building redteam-proxy..."
@@ -446,7 +486,14 @@ else
     fi
 
     if [ "$PRODUCT" = "opencode" ]; then
-        if docker image inspect redteam-metasploit:latest >/dev/null 2>&1; then
+        if $FORCE_REBUILD; then
+            info "Force rebuilding redteam-metasploit..."
+            if cd docker && docker compose build --no-cache metasploit 2>&1 | tail -3; then
+                cd ..; ok "redteam-metasploit"
+            else
+                cd ..; fail "Failed to build redteam-metasploit"; ERRORS=$((ERRORS + 1))
+            fi
+        elif docker image inspect redteam-metasploit:latest >/dev/null 2>&1; then
             ok "redteam-metasploit (already exists)"
         else
             info "Building redteam-metasploit..."
