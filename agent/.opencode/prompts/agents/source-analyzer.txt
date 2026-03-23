@@ -166,3 +166,18 @@ Plus any secrets/tokens for findings.md.
     later use, store the full value in `intel-secrets.json` via:
     `./scripts/store_intel_secret.sh "$DIR" <ref> <type> <full-value> <source> "<notes>"`
     Then put only the returned preview row into `intel.md`. Do not put full secret material directly in `intel.md`.
+14. ENDPOINT QUALITY BAR: Only emit NEW ENDPOINTS that are directly requestable as-is.
+    Required:
+    - absolute `url` with http/https scheme
+    - matching absolute `url_path`
+    - concrete method and concrete path
+    - real example parameters only when they are actually known from source
+    Do NOT emit:
+    - string fragments, route constants, MIME strings, or path prefixes
+    - unresolved templates such as `{id}`, `:id`, `{{href}}`
+    - concatenation remnants such as `'+...+'`
+    - front-end routes unless they are clearly testable server endpoints
+    If the source suggests a risky flow but not a directly requestable endpoint, emit it only under
+    `#### Surface Candidates`, not as a NEW ENDPOINT.
+15. QUEUE HANDOFF: NEW ENDPOINTS must survive `./scripts/normalize_source_endpoints.sh`.
+    Anything that would be dropped by that script should be surfaced as a `Surface Candidate` instead.
