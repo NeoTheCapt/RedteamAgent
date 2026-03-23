@@ -20,6 +20,10 @@
 
 An autonomous red team simulation agent that works with **Claude Code**, **OpenCode**, and **Codex**. It transforms any workspace into a full penetration testing environment for CTF/lab targets — featuring **8 AI agents**, **containerized Kali tools**, a **streaming case collection pipeline**, and **78 security reference files**.
 
+## Demo
+
+![RedTeam Agent demo (fast)](docs/redteam-agent-demo-fast.gif)
+
 **Key Features:**
 - **Multi-CLI support** — works with Claude Code, OpenCode, and Codex out of the box
 - **Autonomous workflow** — 5-phase methodology (Recon → Collect → Test → Exploit+OSINT → Report) runs with minimal user interaction
