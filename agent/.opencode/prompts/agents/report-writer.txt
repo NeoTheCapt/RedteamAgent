@@ -104,4 +104,5 @@ Before generating the report:
 3. Write to <engagement-dir>/report.md.
 4. Verify report includes every finding from findings.md.
 5. If data missing, produce report with available data and note gaps.
-6. Return file path to operator.
+6. After writing `report.md`, run `./scripts/finalize_engagement.sh "$DIR"` to normalize scope/log/report status and SQLite finalization.
+7. Return file path to operator.

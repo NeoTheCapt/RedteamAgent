@@ -75,12 +75,19 @@ Prioritized list of remediation actions, grouped by effort (quick wins vs. longe
 - Timeline of actions
 ```
 
-## Step 4: Update Engagement Status
+## Step 4: Finalize Engagement State
 
-After generating the report, update `scope.json`:
-- Set `"status"` to `"completed"`
-- Add the current timestamp as `"end_time"`
-- Ensure `"phases_completed"` includes `"report"`
+After generating `report.md`, run:
+
+```bash
+./scripts/finalize_engagement.sh "$ENG_DIR"
+```
+
+This is the single supported finalize path. It updates:
+- `scope.json` (`status=complete`, `current_phase=complete`, `end_time`, `phases_completed += report`)
+- `log.md` (`Status: Completed`)
+- `report.md` header date/status lines
+- SQLite WAL/SHM sidecars via checkpoint + cleanup
 
 ## User Arguments
 
