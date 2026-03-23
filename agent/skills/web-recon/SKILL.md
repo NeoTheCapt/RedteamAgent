@@ -69,6 +69,10 @@ run_tool curl -sL https://TARGET | grep -oE 'src="[^"]*\.js"' | sed 's/src="//;s
 # Quick grep for API paths and secrets in each JS file
 ```
 
+Only queue endpoints that are directly requestable and evidenced by a real response or real
+HTML/form/link extraction. Directory stems, SPA routes, and guessed names should stay as follow-up
+notes or surface candidates, not queue inputs.
+
 ### 7. HTML Source (surface-level — deep analysis is source-analyzer's job)
 ```bash
 run_tool curl -sL https://TARGET | grep -oE '<!--.*?-->'                           # Comments

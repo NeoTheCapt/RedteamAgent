@@ -5,6 +5,7 @@
 #   ./install.sh opencode [target_dir]           Install for OpenCode
 #   ./install.sh claude [target_dir]             Install for Claude Code
 #   ./install.sh codex [target_dir]              Install for Codex
+#   ./install.sh docker [target_dir]             Install Docker all-in-one runtime
 #   ./install.sh --dry-run opencode              Validate without writing
 #   bash <(curl -fsSL URL) opencode ~/my-agent   Auto-clone and install
 #
@@ -16,37 +17,53 @@
 # Each product gets ONLY its own files — no cross-product contamination.
 set -e
 
-# ============================================
-# Parse arguments
-# ============================================
-DRY_RUN=false
-PRODUCT=""
-TARGET_DIR=""
-
-for arg in "$@"; do
-  case "$arg" in
-    --dry-run) DRY_RUN=true ;;
-    opencode|claude|codex) PRODUCT="$arg" ;;
-    *) [ -z "$TARGET_DIR" ] && TARGET_DIR="$arg" ;;
-  esac
-done
-
-if [ -z "$PRODUCT" ]; then
-  echo "Usage: $0 [--dry-run] <opencode|claude|codex> [target_dir]"
+show_help() {
+  echo "Usage: $0 [--dry-run] [--force] <opencode|claude|codex|docker> [target_dir]"
   echo ""
   echo "  opencode  — Install for OpenCode (source files, no build needed)"
   echo "  claude    — Install for Claude Code (generates .claude/agents + commands)"
   echo "  codex     — Install for Codex (generates .codex/agents)"
+  echo "  docker    — Install the all-in-one Docker runtime with generated run.sh"
+  echo ""
+  echo "Options:"
+  echo "  --dry-run    Validate install steps without writing files"
+  echo "  --force      Force rebuild of product-related Docker images"
+  echo "  -h, --help   Show this help and exit"
   echo ""
   echo "  Supported platforms: macOS, Linux"
   echo "  Windows / PowerShell: not supported"
   echo ""
   echo "  target_dir defaults to ~/redteam-agent"
+}
+
+# ============================================
+# Parse arguments
+# ============================================
+DRY_RUN=false
+FORCE_REBUILD=false
+PRODUCT=""
+TARGET_DIR=""
+SKIP_PREREQ_CHECKS="${REDTEAM_SKIP_PREREQ_CHECKS:-0}"
+SKIP_DOCKER_IMAGE_CHECKS="${REDTEAM_SKIP_DOCKER_IMAGE_CHECKS:-0}"
+
+for arg in "$@"; do
+  case "$arg" in
+    --dry-run) DRY_RUN=true ;;
+    --force) FORCE_REBUILD=true ;;
+    -h|--help) show_help; exit 0 ;;
+    opencode|claude|codex|docker) PRODUCT="$arg" ;;
+    *) [ -z "$TARGET_DIR" ] && TARGET_DIR="$arg" ;;
+  esac
+done
+
+if [ -z "$PRODUCT" ]; then
+  show_help
   exit 1
 fi
 
 REPO_URL="https://github.com/NeoTheCapt/RedteamAgent.git"
 INSTALL_DIR="${TARGET_DIR:-${REDTEAM_DIR:-$HOME/redteam-agent}}"
+REPO_ROOT=""
 
 echo ""
 if $DRY_RUN; then
@@ -94,6 +111,7 @@ fi
 
 OPENCODE_JSON="$SOURCE_DIR/.opencode/opencode.json"
 TXT_DIR="$SOURCE_DIR/.opencode/prompts/agents"
+REPO_ROOT="$(cd "$SOURCE_DIR/.." && pwd)"
 
 # ============================================
 # Step 1: Check prerequisites
@@ -101,6 +119,9 @@ TXT_DIR="$SOURCE_DIR/.opencode/prompts/agents"
 echo "Step 1: Checking prerequisites..."
 echo ""
 
+if [ "$SKIP_PREREQ_CHECKS" = "1" ]; then
+    warn "Skipping prerequisite checks (REDTEAM_SKIP_PREREQ_CHECKS=1)"
+else
 # Docker
 if command -v docker >/dev/null 2>&1; then
     ok "Docker: $(docker --version 2>&1 | head -1)"
@@ -139,17 +160,22 @@ case "$PRODUCT" in
         fail "Codex not installed"
         ERRORS=$((ERRORS + 1))
     fi ;;
+  docker)
+    ok "Docker-only install mode"
+    ;;
 esac
 
 # Common tools
-for tool in curl jq sqlite3; do
-  if command -v "$tool" >/dev/null 2>&1; then
-    ok "$tool"
-  else
-    fail "$tool not installed"
-    ERRORS=$((ERRORS + 1))
-  fi
-done
+if [ "$PRODUCT" != "docker" ]; then
+  for tool in curl jq sqlite3 python3 git; do
+    if command -v "$tool" >/dev/null 2>&1; then
+      ok "$tool"
+    else
+      fail "$tool not installed"
+      ERRORS=$((ERRORS + 1))
+    fi
+  done
+fi
 
 echo ""
 if [ $ERRORS -gt 0 ]; then
@@ -157,6 +183,7 @@ if [ $ERRORS -gt 0 ]; then
     exit 1
 fi
 ok "All prerequisites satisfied"
+fi
 
 # ============================================
 # Step 2: Install product-specific files
@@ -235,52 +262,64 @@ else
     mkdir -p "$INSTALL_DIR"
 
     # --- Detect upgrade: clean old installation, preserve engagements ---
-    if [ -d "$INSTALL_DIR/skills" ] || [ -d "$INSTALL_DIR/.opencode" ] || [ -d "$INSTALL_DIR/.claude" ] || [ -d "$INSTALL_DIR/.codex" ]; then
+    if [ -d "$INSTALL_DIR/skills" ] || [ -d "$INSTALL_DIR/.opencode" ] || [ -d "$INSTALL_DIR/.claude" ] || [ -d "$INSTALL_DIR/.codex" ] || [ -d "$INSTALL_DIR/agent" ] || [ -f "$INSTALL_DIR/run.sh" ]; then
         warn "Existing installation detected in $INSTALL_DIR — upgrading"
         # Preserve engagement data and .env (user config)
-        for keep in engagements .env auth.json; do
+        for keep in engagements .env auth.json workspace; do
             [ -e "$INSTALL_DIR/$keep" ] && mv "$INSTALL_DIR/$keep" "/tmp/redteam-preserve-$keep" 2>/dev/null
         done
         # Remove old files
         rm -rf "$INSTALL_DIR/.opencode" "$INSTALL_DIR/.claude" "$INSTALL_DIR/.codex" \
                "$INSTALL_DIR/skills" "$INSTALL_DIR/references" "$INSTALL_DIR/scripts" \
                "$INSTALL_DIR/docker" "$INSTALL_DIR/CLAUDE.md" "$INSTALL_DIR/AGENTS.md" \
-               "$INSTALL_DIR/.env.example"
+               "$INSTALL_DIR/.env.example" "$INSTALL_DIR/agent" "$INSTALL_DIR/run.sh" \
+               "$INSTALL_DIR/install.sh"
         # Restore preserved data
-        for keep in engagements .env auth.json; do
+        for keep in engagements .env auth.json workspace; do
             [ -e "/tmp/redteam-preserve-$keep" ] && mv "/tmp/redteam-preserve-$keep" "$INSTALL_DIR/$keep" 2>/dev/null
         done
-        ok "Old installation cleaned (engagements + .env preserved)"
-    fi
-
-    # --- Shared files (all products need these) ---
-    info "Copying shared files..."
-    for dir in skills references scripts docker; do
-      [ -d "$SOURCE_DIR/$dir" ] && cp -a "$SOURCE_DIR/$dir" "$INSTALL_DIR/"
-    done
-    mkdir -p "$INSTALL_DIR/engagements"
-    ok "Shared files (skills, references, scripts, docker)"
-
-    # Seed .env from the tracked agent template on first install.
-    if [ -f "$SOURCE_DIR/.env.example" ]; then
-        if [ -f "$INSTALL_DIR/.env" ]; then
-            ok ".env preserved"
-        else
-            cp "$SOURCE_DIR/.env.example" "$INSTALL_DIR/.env"
-            warn "Created $INSTALL_DIR/.env from template — update API keys before using passive recon tools"
-        fi
+        ok "Old installation cleaned (state + .env preserved)"
     fi
 
     # --- Product-specific files ---
     case "$PRODUCT" in
       opencode)
+        info "Copying shared files..."
+        for dir in skills references scripts docker; do
+          [ -d "$SOURCE_DIR/$dir" ] && cp -a "$SOURCE_DIR/$dir" "$INSTALL_DIR/"
+        done
+        mkdir -p "$INSTALL_DIR/engagements"
+        ok "Shared files (skills, references, scripts, docker)"
+        if [ -f "$SOURCE_DIR/.env.example" ]; then
+            if [ -f "$INSTALL_DIR/.env" ]; then
+                ok ".env preserved"
+            else
+                cp "$SOURCE_DIR/.env.example" "$INSTALL_DIR/.env"
+                warn "Created $INSTALL_DIR/.env from template — update API keys before using passive recon tools"
+            fi
+        fi
         info "Installing OpenCode files..."
         cp -a "$SOURCE_DIR/.opencode" "$INSTALL_DIR/"
+        bash "$INSTALL_DIR/scripts/install_metasploit_mcp.sh" "$INSTALL_DIR"
         ok "OpenCode config (.opencode/)"
         # NO .claude/, NO .codex/, NO CLAUDE.md, NO AGENTS.md
         ;;
 
       claude)
+        info "Copying shared files..."
+        for dir in skills references scripts docker; do
+          [ -d "$SOURCE_DIR/$dir" ] && cp -a "$SOURCE_DIR/$dir" "$INSTALL_DIR/"
+        done
+        mkdir -p "$INSTALL_DIR/engagements"
+        ok "Shared files (skills, references, scripts, docker)"
+        if [ -f "$SOURCE_DIR/.env.example" ]; then
+            if [ -f "$INSTALL_DIR/.env" ]; then
+                ok ".env preserved"
+            else
+                cp "$SOURCE_DIR/.env.example" "$INSTALL_DIR/.env"
+                warn "Created $INSTALL_DIR/.env from template — update API keys before using passive recon tools"
+            fi
+        fi
         info "Building and installing Claude Code files..."
         # Generate agents
         mkdir -p "$INSTALL_DIR/.claude/agents"
@@ -301,6 +340,20 @@ else
         ;;
 
       codex)
+        info "Copying shared files..."
+        for dir in skills references scripts docker; do
+          [ -d "$SOURCE_DIR/$dir" ] && cp -a "$SOURCE_DIR/$dir" "$INSTALL_DIR/"
+        done
+        mkdir -p "$INSTALL_DIR/engagements"
+        ok "Shared files (skills, references, scripts, docker)"
+        if [ -f "$SOURCE_DIR/.env.example" ]; then
+            if [ -f "$INSTALL_DIR/.env" ]; then
+                ok ".env preserved"
+            else
+                cp "$SOURCE_DIR/.env.example" "$INSTALL_DIR/.env"
+                warn "Created $INSTALL_DIR/.env from template — update API keys before using passive recon tools"
+            fi
+        fi
         info "Building and installing Codex files..."
         # Generate agents
         mkdir -p "$INSTALL_DIR/.codex/agents"
@@ -313,11 +366,35 @@ else
         ok "AGENTS.md (operator prompt)"
         # NO .opencode/, NO .claude/, NO CLAUDE.md
         ;;
+
+      docker)
+        info "Installing Docker all-in-one runtime files..."
+        (
+          cd "$REPO_ROOT"
+          git ls-files install.sh agent docker/redteam-allinone | while IFS= read -r path; do
+            mkdir -p "$INSTALL_DIR/$(dirname "$path")"
+            cp "$REPO_ROOT/$path" "$INSTALL_DIR/$path"
+          done
+        )
+        cp "$REPO_ROOT/docker/redteam-allinone/run.sh.tpl" "$INSTALL_DIR/run.sh"
+        chmod +x "$INSTALL_DIR/run.sh"
+        cp "$INSTALL_DIR/docker/redteam-allinone/.env.example" "$INSTALL_DIR/.env.example"
+        if [ -f "$INSTALL_DIR/.env" ]; then
+            ok ".env preserved"
+        else
+            cp "$INSTALL_DIR/.env.example" "$INSTALL_DIR/.env"
+            warn "Created $INSTALL_DIR/.env from Docker template — update API keys before running ./run.sh"
+        fi
+        mkdir -p "$INSTALL_DIR/workspace"
+        ok "Docker runtime files (agent/, docker/redteam-allinone/, run.sh, .env)"
+        ;;
     esac
 
     # Set permissions
-    chmod +x "$INSTALL_DIR/scripts/"*.sh "$INSTALL_DIR/scripts/lib/"*.sh "$INSTALL_DIR/scripts/hooks/"*.sh 2>/dev/null
-    ok "Script permissions set"
+    if [ -d "$INSTALL_DIR/scripts" ]; then
+        chmod +x "$INSTALL_DIR/scripts/"*.sh "$INSTALL_DIR/scripts/lib/"*.sh "$INSTALL_DIR/scripts/hooks/"*.sh 2>/dev/null || true
+        ok "Script permissions set"
+    fi
 fi
 
 # ============================================
@@ -331,9 +408,37 @@ $DRY_RUN || cd "$INSTALL_DIR"
 
 if $DRY_RUN; then
     info "[DRY RUN] Would build Docker images if missing — skipping"
+elif [ "$SKIP_DOCKER_IMAGE_CHECKS" = "1" ]; then
+    warn "Skipping Docker image build/verification (REDTEAM_SKIP_DOCKER_IMAGE_CHECKS=1)"
 else
+    if [ "$PRODUCT" = "docker" ]; then
+        if $FORCE_REBUILD; then
+            info "Force rebuilding redteam-allinone..."
+            if docker build --pull --no-cache -t redteam-allinone:latest -f docker/redteam-allinone/Dockerfile . 2>&1 | tail -3; then
+                ok "redteam-allinone"
+            else
+                fail "Failed to build redteam-allinone"; ERRORS=$((ERRORS + 1))
+            fi
+        elif docker image inspect redteam-allinone:latest >/dev/null 2>&1; then
+            ok "redteam-allinone (already exists)"
+        else
+            info "Building redteam-allinone (this may take several minutes)..."
+            if docker build -t redteam-allinone:latest -f docker/redteam-allinone/Dockerfile . 2>&1 | tail -3; then
+                ok "redteam-allinone"
+            else
+                fail "Failed to build redteam-allinone"; ERRORS=$((ERRORS + 1))
+            fi
+        fi
+    else
     # Only build/pull images that don't already exist
-    if docker image inspect projectdiscovery/katana:latest >/dev/null 2>&1; then
+    if $FORCE_REBUILD; then
+        info "Force pulling projectdiscovery/katana:latest..."
+        if docker pull projectdiscovery/katana:latest >/dev/null 2>&1; then
+            ok "Katana image"
+        else
+            fail "Failed to pull Katana"; ERRORS=$((ERRORS + 1))
+        fi
+    elif docker image inspect projectdiscovery/katana:latest >/dev/null 2>&1; then
         ok "Katana image (already exists)"
     else
         info "Pulling projectdiscovery/katana:latest..."
@@ -344,7 +449,14 @@ else
         fi
     fi
 
-    if docker image inspect kali-redteam:latest >/dev/null 2>&1; then
+    if $FORCE_REBUILD; then
+        info "Force rebuilding kali-redteam (this may take several minutes)..."
+        if cd docker && docker compose build --no-cache kali-redteam 2>&1 | tail -3; then
+            cd ..; ok "kali-redteam"
+        else
+            cd ..; fail "Failed to build kali-redteam"; ERRORS=$((ERRORS + 1))
+        fi
+    elif docker image inspect kali-redteam:latest >/dev/null 2>&1; then
         ok "kali-redteam (already exists)"
     else
         info "Building kali-redteam (this may take several minutes)..."
@@ -355,7 +467,14 @@ else
         fi
     fi
 
-    if docker image inspect redteam-proxy:latest >/dev/null 2>&1; then
+    if $FORCE_REBUILD; then
+        info "Force rebuilding redteam-proxy..."
+        if cd docker && docker compose build --no-cache mitmproxy 2>&1 | tail -3; then
+            cd ..; ok "redteam-proxy"
+        else
+            cd ..; fail "Failed to build redteam-proxy"; ERRORS=$((ERRORS + 1))
+        fi
+    elif docker image inspect redteam-proxy:latest >/dev/null 2>&1; then
         ok "redteam-proxy (already exists)"
     else
         info "Building redteam-proxy..."
@@ -364,6 +483,27 @@ else
         else
             cd ..; fail "Failed to build redteam-proxy"; ERRORS=$((ERRORS + 1))
         fi
+    fi
+
+    if [ "$PRODUCT" = "opencode" ]; then
+        if $FORCE_REBUILD; then
+            info "Force rebuilding redteam-metasploit..."
+            if cd docker && docker compose build --no-cache metasploit 2>&1 | tail -3; then
+                cd ..; ok "redteam-metasploit"
+            else
+                cd ..; fail "Failed to build redteam-metasploit"; ERRORS=$((ERRORS + 1))
+            fi
+        elif docker image inspect redteam-metasploit:latest >/dev/null 2>&1; then
+            ok "redteam-metasploit (already exists)"
+        else
+            info "Building redteam-metasploit..."
+            if cd docker && docker compose build metasploit 2>&1 | tail -3; then
+                cd ..; ok "redteam-metasploit"
+            else
+                cd ..; fail "Failed to build redteam-metasploit"; ERRORS=$((ERRORS + 1))
+            fi
+        fi
+    fi
     fi
 fi
 
@@ -378,26 +518,41 @@ fi
 # ============================================
 if $DRY_RUN; then
     echo "Step 4: [DRY RUN] Skipping verification"
+elif [ "$SKIP_DOCKER_IMAGE_CHECKS" = "1" ]; then
+    echo "Step 4: Skipping verification (REDTEAM_SKIP_DOCKER_IMAGE_CHECKS=1)"
 else
     echo "Step 4: Verification..."
     echo ""
 
-    source scripts/lib/container.sh 2>/dev/null
-    if check_images; then
-        ok "All 3 images verified"
+    if [ "$PRODUCT" = "docker" ]; then
+        if docker run --rm redteam-allinone:latest opencode --version >/dev/null 2>&1; then
+            ok "redteam-allinone runtime verified"
+        else
+            fail "redteam-allinone runtime verification failed"
+            exit 1
+        fi
     else
-        fail "Image verification failed"
-        exit 1
-    fi
+        source scripts/lib/container.sh 2>/dev/null
+        if check_images; then
+            if [ "$PRODUCT" = "opencode" ] && docker image inspect redteam-metasploit:latest >/dev/null 2>&1; then
+                ok "All 4 images verified"
+            else
+                ok "All 3 images verified"
+            fi
+        else
+            fail "Image verification failed"
+            exit 1
+        fi
 
-    mkdir -p /tmp/redteam-test
-    export ENGAGEMENT_DIR="/tmp/redteam-test"
-    if run_tool echo "ok" >/dev/null 2>&1; then
-        ok "run_tool: container execution works"
-    else
-        fail "run_tool failed"; ERRORS=$((ERRORS + 1))
+        mkdir -p /tmp/redteam-test
+        export ENGAGEMENT_DIR="/tmp/redteam-test"
+        if run_tool echo "ok" >/dev/null 2>&1; then
+            ok "run_tool: container execution works"
+        else
+            fail "run_tool failed"; ERRORS=$((ERRORS + 1))
+        fi
+        rm -rf /tmp/redteam-test
     fi
-    rm -rf /tmp/redteam-test
 fi
 
 # ============================================
@@ -437,6 +592,11 @@ case "$PRODUCT" in
     echo "    cd $INSTALL_DIR && codex"
     echo "    engage http://your-ctf-target:port"
     ;;
+  docker)
+    echo "  Start:"
+    echo "    cd $INSTALL_DIR && ./run.sh"
+    echo "    # Optional reset: ./run.sh --reset"
+    ;;
 esac
 echo ""
 
@@ -446,5 +606,6 @@ case "$PRODUCT" in
   opencode) echo "    .opencode/  skills/  references/  scripts/  docker/" ;;
   claude)   echo "    .claude/    skills/  references/  scripts/  docker/  CLAUDE.md" ;;
   codex)    echo "    .codex/     skills/  references/  scripts/  docker/  AGENTS.md" ;;
+  docker)   echo "    agent/  docker/redteam-allinone/  run.sh  .env  workspace/" ;;
 esac
 echo ""

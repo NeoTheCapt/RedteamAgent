@@ -25,7 +25,7 @@ An autonomous red team simulation agent that works with **Claude Code**, **OpenC
 - **Autonomous workflow** — 5-phase methodology (Recon → Collect → Test → Exploit+OSINT → Report) runs with minimal user interaction
 - **Intelligence collection** — `intel.md` accumulates tech stack, people, domains, credentials from recon through exploitation; OSINT agent enriches with CVE, breach, DNS history, and social data
 - **8 specialized agents** — operator, recon-specialist, source-analyzer, vulnerability-analyst, exploit-developer, fuzzer, osint-analyst, report-writer
-- **Containerized tools** — all pentest tools run in Docker (Kali toolbox, mitmproxy, Katana), zero local installation
+- **Containerized tools** — all pentest tools run in Docker (Kali toolbox, mitmproxy, Katana, optional Metasploit RPC for OpenCode), zero local installation
 - **Case collection pipeline** — SQLite-backed queue with 4 producers, automatic type classification, zero-token dispatcher
 - **78 reference files** — OWASP Top 10:2025, API Security 2023, offensive tactics, AD/Kerberos attacks
 - **Resume support** — interrupt and continue any engagement without losing progress
@@ -64,8 +64,11 @@ cd RedteamAgent
 ./install.sh opencode                  # Install for OpenCode
 ./install.sh claude                    # Install for Claude Code
 ./install.sh codex                     # Install for Codex
+./install.sh docker                    # Install Docker all-in-one runtime
 ./install.sh opencode ~/my-project     # Custom directory
 ./install.sh --dry-run opencode        # Validate without writing
+./install.sh --force docker            # Force rebuild related images
+./install.sh -h                        # Show install help
 ```
 
 Windows is intentionally unsupported. Use a macOS/Linux environment for installation and runtime.
@@ -102,6 +105,39 @@ codex               # Codex
 > ```json
 > { "model": "anthropic/claude-sonnet-4-6", "small_model": "anthropic/claude-haiku-4-5-20251001" }
 > ```
+>
+> **Optional Metasploit for OpenCode**: the OpenCode install includes a local `metasploit` MCP server backed by a containerized `msfrpcd`. It is only intended for the `Exploit` phase when a finding clearly maps to a known Metasploit module family, service, product/version, or CVE. It is not used for blind spraying or broad recon.
+
+### Single-Image Runtime Mode
+
+For OpenCode-only deployments, the project is also being extended toward an
+all-in-one container runtime:
+- one image bundles OpenCode, Redteam Agent, and the pentest/runtime toolchain
+- runtime secrets still come from `.env` / `--env-file`, not the image
+- local bundled execution uses `REDTEAM_RUNTIME_MODE=local`
+- existing host installs remain supported and continue to use Docker child containers
+
+This mode is intended for fully containerized execution where you do not want to
+install OpenCode and the toolchain directly on the host.
+
+Install it as its own product:
+
+```bash
+./install.sh docker ~/redteam-docker
+cd ~/redteam-docker
+./run.sh
+```
+
+The generated `run.sh` starts from the image-baked clean template and persists
+its runtime state under the install directory `workspace/`.
+
+To force a clean image rebuild during install or runtime:
+
+```bash
+./install.sh --force docker ~/redteam-docker
+cd ~/redteam-docker
+./run.sh --rebuild
+```
 
 ### `/engage` vs `/autoengage`
 
@@ -149,6 +185,8 @@ Phase 5: REPORT ── report-writer with coverage statistics + intelligence sum
 | `/vuln-analyze` | Analyze scan results for vulnerabilities |
 | `/osint` | Run OSINT intelligence gathering on current engagement |
 | `/recon` `/scan` `/enumerate` `/exploit` `/pivot` | Manual phase overrides |
+
+During `/exploit`, OpenCode may use the optional Metasploit MCP path for read-only module lookup first, then escalate to bounded module execution only when the current finding is a strong fit. The decision remains inside the `exploit-developer` path; Metasploit is not a default first step for vague findings.
 
 ### Authentication
 

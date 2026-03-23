@@ -96,6 +96,9 @@ cat > "$DIR/findings.md" << EOF
 ---
 EOF
 
+: > "$DIR/surfaces.jsonl"
+printf '[]\n' > "$DIR/intel-secrets.json"
+
 echo "{}" > "$DIR/auth.json"
 
 sqlite3 "$DIR/cases.db" < scripts/schema.sql
@@ -197,20 +200,10 @@ Start the pipeline regardless of auth choice (skip or configured):
 
 The engagement loop starts only after Steps 1-5 finish successfully. Do not enter the operator core loop early.
 
-Before Phase 1 begins, initialize OpenCode's native progress UI with `todowrite`:
-- Recon — `in_progress`
-- Collect — `pending`
-- Consume & Test — `pending`
-- Exploit — `pending`
-- Report — `pending`
-
-At each later phase transition, update the same todo list:
-- completed phases → `completed`
-- current phase → `in_progress`
-- future phases → `pending`
-
-Do not rely on `/status` alone for progress UI. `/status` is textual; the right-side TUI
-progress panel is driven by the todo list.
+Before Phase 1 begins, initialize OpenCode's native progress UI with `todowrite` following
+the operator progress rules in `prompts/agents/operator.txt`. At each later phase transition,
+update the same todo list there. Do not rely on `/status` alone for progress UI; the right-side
+TUI progress panel is driven by the todo list.
 
 ### Phase 1: RECON
 
@@ -242,7 +235,12 @@ Reply (1-2):
 ```
 
 After approval:
-1. Import recon/source-analyzer endpoints: `echo "endpoints" | ./scripts/recon_ingest.sh "$DIR/cases.db" recon-specialist`
+1. Import only concrete queue-ready endpoints:
+   - recon-specialist: use `#### Queue Endpoints` JSONL only
+   - source-analyzer: use fully concrete, directly requestable JSONL endpoints only
+   `echo "endpoint-jsonl" | ./scripts/recon_ingest.sh "$DIR/cases.db" <source>`
+   Dynamic templates, string fragments, route constants, unresolved placeholders, and write endpoints
+   without real parameters belong in `Surface Candidates`, not `cases.db`.
 2. Start Katana container + ingest pipeline:
    ```bash
    source scripts/lib/container.sh
@@ -261,6 +259,12 @@ Follow the case-dispatching skill methodology. For each cycle:
 2. `./scripts/dispatcher.sh "$DIR/cases.db" stats`
 3. Fetch batch by type → dispatch to appropriate agent → mark done → requeue new endpoints
 4. Continue until queue empty + producers stopped
+
+Before leaving Test phase, run:
+`./scripts/check_surface_coverage.sh "$DIR"`
+
+If it fails, do not advance yet. Resolve each remaining discovered surface by marking it
+`covered`, `deferred`, or `not_applicable`.
 
 ### Phase 4: EXPLOIT
 
