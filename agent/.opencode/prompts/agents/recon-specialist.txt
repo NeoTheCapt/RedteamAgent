@@ -72,6 +72,10 @@ Save as temp wordlist and run ONE ffuf pass with these paths. Record all non-404
 | Path | Status | Size | Notes |
 |------|--------|------|-------|
 
+#### Queue Endpoints
+Emit only directly requestable queue inputs. Use one JSON line per endpoint:
+`{"method":"GET","url":"https://target/api-docs","url_path":"/api-docs","type":"api-spec","source":"recon-specialist"}`
+
 #### Interesting Findings
 - Notable items with WHY they matter
 
@@ -120,8 +124,16 @@ Domains & Infrastructure:
    - Check Content-Type header matches expected type (not text/html for .js/.json/.pyc)
    - If response size matches the SPA index.html size, it is the Angular catch-all — discard it
    - If HTTP 200 but body contains "<title>Error:" or "<!DOCTYPE html>" for non-HTML requests,
-     the file does not exist — record as 404-equivalent
+   the file does not exist — record as 404-equivalent
    Never analyze HTML error pages as if they were the intended file content.
 14. SURFACE DISCOVERY: When you find a clear high-risk surface, emit it under `#### Surface Candidates`.
     Allowed `surface_type` values: `auth_entry`, `account_recovery`, `object_reference`,
     `privileged_write`, `file_handling`, `dynamic_render`, `api_documentation`, `workflow_token`.
+15. QUEUE QUALITY BAR: Only emit `#### Queue Endpoints` when the target is directly requestable
+    and already evidenced by a real response, a real link/form, or a confirmed discovered file.
+    Do NOT queue:
+    - directory prefixes or broad path stems (`/assets`, `/media`, `/api` unless actually confirmed useful)
+    - front-end routes or SPA paths unless they are clearly server-backed test targets
+    - guessed paths, wordlist candidates, or “interesting names” without response evidence
+    - endpoints that still need parameter guessing
+    If it is interesting but not directly testable yet, emit it under `#### Surface Candidates` instead.
