@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=/dev/null
+source "$SCRIPT_DIR/lib/time.sh"
+
 ENG_DIR="${1:?usage: finalize_engagement.sh <engagement_dir>}"
 SCOPE_FILE="$ENG_DIR/scope.json"
 LOG_FILE="$ENG_DIR/log.md"
@@ -10,9 +14,13 @@ DB_FILE="$ENG_DIR/cases.db"
 [[ -f "$SCOPE_FILE" ]] || { echo "scope.json not found in $ENG_DIR" >&2; exit 1; }
 [[ -f "$LOG_FILE" ]] || { echo "log.md not found in $ENG_DIR" >&2; exit 1; }
 
-END_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-ENG_DATE="$(sed -n 's/^- \*\*Date\*\*: //p' "$LOG_FILE" | head -1)"
-ENG_DATE="${ENG_DATE:-$(date +%Y-%m-%d)}"
+END_TIME="$(engagement_now_utc)"
+START_TIME="$(jq -r '.start_time // empty' "$SCOPE_FILE" 2>/dev/null || true)"
+if [[ -n "$START_TIME" ]]; then
+    ENG_DATE="$(engagement_header_date_from_utc "$START_TIME")"
+else
+    ENG_DATE="$(engagement_header_date_today)"
+fi
 
 tmp_scope="$(mktemp "${TMPDIR:-/tmp}/scope-finalize.XXXXXX")"
 jq --arg end_time "$END_TIME" '
