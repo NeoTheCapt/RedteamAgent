@@ -102,6 +102,8 @@ codex               # Codex
 > ```json
 > { "model": "anthropic/claude-sonnet-4-6", "small_model": "anthropic/claude-haiku-4-5-20251001" }
 > ```
+>
+> **Optional Metasploit for OpenCode**: the OpenCode install includes a local `metasploit` MCP server backed by a containerized `msfrpcd`. It is only intended for the `Exploit` phase when a finding clearly maps to a known Metasploit module family, service, product/version, or CVE. It is not used for blind spraying or broad recon.
 
 ### `/engage` vs `/autoengage`
 
@@ -149,6 +151,8 @@ Phase 5: REPORT ── report-writer with coverage statistics + intelligence sum
 | `/vuln-analyze` | Analyze scan results for vulnerabilities |
 | `/osint` | Run OSINT intelligence gathering on current engagement |
 | `/recon` `/scan` `/enumerate` `/exploit` `/pivot` | Manual phase overrides |
+
+During `/exploit`, OpenCode may use the optional Metasploit MCP path for read-only module lookup first, then escalate to bounded module execution only when the current finding is a strong fit. The decision remains inside the `exploit-developer` path; Metasploit is not a default first step for vague findings.
 
 ### Authentication
 
