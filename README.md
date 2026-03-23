@@ -64,8 +64,11 @@ cd RedteamAgent
 ./install.sh opencode                  # Install for OpenCode
 ./install.sh claude                    # Install for Claude Code
 ./install.sh codex                     # Install for Codex
+./install.sh docker                    # Install Docker all-in-one runtime
 ./install.sh opencode ~/my-project     # Custom directory
 ./install.sh --dry-run opencode        # Validate without writing
+./install.sh --force docker            # Force rebuild related images
+./install.sh -h                        # Show install help
 ```
 
 Windows is intentionally unsupported. Use a macOS/Linux environment for installation and runtime.
@@ -127,6 +130,14 @@ cd ~/redteam-docker
 
 The generated `run.sh` starts from the image-baked clean template and persists
 its runtime state under the install directory `workspace/`.
+
+To force a clean image rebuild during install or runtime:
+
+```bash
+./install.sh --force docker ~/redteam-docker
+cd ~/redteam-docker
+./run.sh --rebuild
+```
 
 ### `/engage` vs `/autoengage`
 
