@@ -359,9 +359,9 @@ RedTeam Agent 是一个自主红队模拟 Agent，支持 **Claude Code**、**Ope
 - **自主工作流** — 5 阶段方法论（侦察 → 收集 → 测试 → 利用+OSINT → 报告），最少用户干预
 - **8 个专业 Agent** — 操作员、侦察专家、源码分析师、漏洞分析师、利用开发者、模糊测试器、OSINT 分析师、报告撰写者
 - **情报收集** — `intel.md` 从侦察阶段开始积累技术栈、人员、域名、凭证等情报；OSINT 分析师通过联网数据源（CVE、泄露数据库、DNS 历史、社工情报）富化分析
-- **容器化工具** — 所有渗透工具运行在 Docker 中（Kali 工具箱、mitmproxy、Katana），无需本地安装
+- **容器化工具** — 所有渗透工具运行在 Docker 中（Kali 工具箱、mitmproxy、Katana，OpenCode 可选 Metasploit RPC），无需本地安装
 - **用例收集管道** — 基于 SQLite 的队列，4 个生产者，15 种内容分类，零 token 消耗的调度器
-- **57 个参考文件** — OWASP Top 10:2025、API 安全 2023、攻击战术、AD/Kerberos 攻击
+- **78 个参考文件** — OWASP Top 10:2025、API 安全 2023、攻击战术、AD/Kerberos 攻击
 - **断点续扫** — 中断后可从断点继续，不重复已完成的工作
 
 ## 快速开始
@@ -377,6 +377,17 @@ bash <(curl -fsSL https://raw.githubusercontent.com/NeoTheCapt/RedteamAgent/dev/
 不支持原生 Windows / PowerShell。请使用 macOS 或 Linux 环境。
 
 ```bash
+# 手动安装
+git clone https://github.com/NeoTheCapt/RedteamAgent.git
+cd RedteamAgent
+
+./install.sh opencode                  # 安装 OpenCode 版本
+./install.sh claude                    # 安装 Claude Code 版本
+./install.sh codex                     # 安装 Codex 版本
+./install.sh docker                    # 安装 Docker 一体化运行时
+./install.sh --force docker            # 强制重建相关镜像
+./install.sh -h                        # 查看帮助
+
 # 启动
 cd ~/redteam-agent && opencode   # 或 claude / codex
 
@@ -389,6 +400,24 @@ cd ~/redteam-agent && opencode   # 或 claude / codex
 # 通配符域名（枚举子域名，并行渗透）
 /autoengage *.target.com --parallel 5
 ```
+
+### Docker 一体化运行时
+
+```bash
+./install.sh docker ~/redteam-docker
+cd ~/redteam-docker
+./run.sh
+```
+
+需要强制重建镜像时：
+
+```bash
+./install.sh --force docker ~/redteam-docker
+cd ~/redteam-docker
+./run.sh --rebuild
+```
+
+`run.sh` 会从镜像内置的干净模板初始化工作目录，并将运行状态持久化到安装目录下的 `workspace/`。
 
 ## 工作流程
 
@@ -422,7 +451,7 @@ Phases: [x] Recon  [x] Collect  [>] Consume & Test  [ ] Exploit  [ ] Report
 
 - Docker（含 Docker Compose）
 - AI CLI 工具（至少一个）：Claude Code、OpenCode 或 Codex
-- 本地工具：`curl`、`jq`、`sqlite3`
+- 本地工具：`curl`、`jq`、`sqlite3`（Docker 一体化模式除外）
 - 不支持原生 Windows / PowerShell
 
 ## 许可
