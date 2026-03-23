@@ -96,6 +96,8 @@ cat > "$DIR/findings.md" << EOF
 ---
 EOF
 
+: > "$DIR/surfaces.jsonl"
+
 echo "{}" > "$DIR/auth.json"
 
 sqlite3 "$DIR/cases.db" < scripts/schema.sql
@@ -251,6 +253,12 @@ Follow the case-dispatching skill methodology. For each cycle:
 2. `./scripts/dispatcher.sh "$DIR/cases.db" stats`
 3. Fetch batch by type → dispatch to appropriate agent → mark done → requeue new endpoints
 4. Continue until queue empty + producers stopped
+
+Before leaving Test phase, run:
+`./scripts/check_surface_coverage.sh "$DIR"`
+
+If it fails, do not advance yet. Resolve each remaining discovered surface by marking it
+`covered`, `deferred`, or `not_applicable`.
 
 ### Phase 4: EXPLOIT
 

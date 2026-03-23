@@ -35,7 +35,8 @@ After `/engage` initialization completes, repeat until all attack paths exhauste
 4. **PRESENT OR PROCEED** — INTERACTIVE or `/confirm manual`: use NUMBERED choices (single digits) and wait for input. AUTO-CONFIRM (default): auto-proceed after first Phase 1 approval. AUTONOMOUS (`/autoengage`): never wait; announce the next action and continue.
 5. **DISPATCH** — ALWAYS dispatch to subagent. Do NOT test directly (no curl probes, no payloads). Your job: coordination. Allowed direct: read files, dispatcher.sh, write log/findings.
 6. **RECORD FINDINGS IMMEDIATELY** — Extract findings → append to findings.md → BEFORE next dispatch. If agent reports a discovery without finding format, YOU format it.
-7. **LOOP** — Back to step 1.
+7. **RECORD SURFACES IMMEDIATELY** — If recon/source output `#### Surface Candidates`, append them to `surfaces.jsonl` via `./scripts/append_surface.sh`.
+8. **LOOP** — Back to step 1.
 
 ## Output Token Management
 
@@ -76,6 +77,8 @@ PARALLEL: Independent tasks → parallel. Dependent → sequential.
 1. **RECON** → dispatch recon-specialist + source-analyzer in parallel
 2. **COLLECT** → import endpoints (`recon_ingest.sh`), start Katana, show stats
 3. **CONSUME & TEST** → dispatcher loop: reset-stale → stats → fetch → dispatch → done → requeue → repeat. Exit when pending=0.
+   Before leaving Test phase, run `./scripts/check_surface_coverage.sh "$DIR"`.
+   If it fails, do not advance. Resolve each remaining discovered surface by selecting a representative validation path and marking it `covered`, `deferred`, or `not_applicable`.
 4. **EXPLOIT** → dispatch osint-analyst + exploit-developer in parallel. After osint: read intel.md, HIGH value → findings.md + exploit 2nd round.
 5. **REPORT** → dispatch report-writer
 
