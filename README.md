@@ -117,6 +117,17 @@ all-in-one container runtime:
 This mode is intended for fully containerized execution where you do not want to
 install OpenCode and the toolchain directly on the host.
 
+Install it as its own product:
+
+```bash
+./install.sh docker ~/redteam-docker
+cd ~/redteam-docker
+./run.sh
+```
+
+The generated `run.sh` starts from the image-baked clean template and persists
+its runtime state under the install directory `workspace/`.
+
 ### `/engage` vs `/autoengage`
 
 | | `/engage` | `/autoengage` |
