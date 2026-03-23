@@ -5,6 +5,12 @@
 REDTEAM_IMAGE="${REDTEAM_IMAGE:-kali-redteam:latest}"
 PROXY_IMAGE="${PROXY_IMAGE:-redteam-proxy:latest}"
 KATANA_IMAGE="${KATANA_IMAGE:-projectdiscovery/katana:latest}"
+MITMPROXY_BIN="${MITMPROXY_BIN:-mitmdump}"
+KATANA_LOCAL_BIN="${KATANA_LOCAL_BIN:-katana}"
+
+runtime_mode() {
+    echo "${REDTEAM_RUNTIME_MODE:-docker}"
+}
 
 # Resolve ENGAGEMENT_DIR to absolute path (Docker requires absolute paths for -v mounts)
 # Usage: _resolve_engagement_dir
@@ -66,7 +72,79 @@ _auth_header_array() {
     while IFS= read -r -d '' item; do
         args+=("$item")
     done < <(_auth_header_args)
-    printf '%s\n' "${args[@]}"
+    if [ ${#args[@]} -gt 0 ]; then
+        printf '%s\n' "${args[@]}"
+    fi
+}
+
+_engagement_env_file() {
+    _resolve_engagement_dir || return 1
+    if [ -f "${ENGAGEMENT_DIR_ABS}/.env" ]; then
+        echo "${ENGAGEMENT_DIR_ABS}/.env"
+    elif [ -f "$(pwd)/.env" ]; then
+        echo "$(pwd)/.env"
+    fi
+}
+
+_load_engagement_env() {
+    local env_file
+    env_file="$(_engagement_env_file)"
+    if [ -n "$env_file" ] && [ -f "$env_file" ]; then
+        set -a
+        # shellcheck disable=SC1090
+        source "$env_file"
+        set +a
+    fi
+}
+
+_pid_file() {
+    _resolve_engagement_dir || return 1
+    mkdir -p "${ENGAGEMENT_DIR_ABS}/pids"
+    echo "${ENGAGEMENT_DIR_ABS}/pids/$1.pid"
+}
+
+_start_local_process() {
+    local name="$1"; shift
+    local pid_file
+    pid_file="$(_pid_file "$name")" || return 1
+
+    if [ -f "$pid_file" ]; then
+        local existing_pid
+        existing_pid=$(cat "$pid_file" 2>/dev/null || true)
+        if [ -n "$existing_pid" ] && kill -0 "$existing_pid" 2>/dev/null; then
+            echo "[$name] Already running"
+            return 0
+        fi
+        rm -f "$pid_file"
+    fi
+
+    (
+        cd "$ENGAGEMENT_DIR_ABS"
+        export ENGAGEMENT_DIR="$ENGAGEMENT_DIR_ABS"
+        _load_engagement_env
+        "$@"
+    ) >/dev/null 2>&1 &
+    local pid=$!
+    printf '%s\n' "$pid" > "$pid_file"
+    echo "[$name] Started"
+}
+
+_stop_local_process() {
+    local name="$1"
+    local pid_file
+    pid_file="$(_pid_file "$name")" || return 1
+    if [ ! -f "$pid_file" ]; then
+        echo "[$name] Not running"
+        return 0
+    fi
+    local pid
+    pid=$(cat "$pid_file" 2>/dev/null || true)
+    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+        kill "$pid" 2>/dev/null || true
+        wait "$pid" 2>/dev/null || true
+    fi
+    rm -f "$pid_file"
+    echo "[$name] Stopped"
 }
 
 # Run a one-shot tool in the kali-redteam container
@@ -75,6 +153,19 @@ _auth_header_array() {
 run_tool() {
     local tool="$1"; shift
     _resolve_engagement_dir || return 1
+    if [ "$(runtime_mode)" = "local" ]; then
+        (
+            cd "$ENGAGEMENT_DIR_ABS"
+            export ENGAGEMENT_DIR="$ENGAGEMENT_DIR_ABS"
+            _load_engagement_env
+            if [[ "$tool" == "curl" && -x "${ENGAGEMENT_DIR_ABS}/tools/rtcurl" ]]; then
+                "${ENGAGEMENT_DIR_ABS}/tools/rtcurl" "$@"
+            else
+                "$tool" "$@"
+            fi
+        )
+        return
+    fi
     # Build docker args array to avoid word-splitting issues
     local docker_args=(--rm --network host -v "${ENGAGEMENT_DIR_ABS}:/engagement" -w /engagement)
     # Mount .env file if it exists (provides API keys for subfinder, nuclei, etc.)
@@ -94,6 +185,12 @@ run_tool() {
 # Usage: start_proxy [extra_mitmdump_args...]
 start_proxy() {
     _resolve_engagement_dir || return 1
+    if [ "$(runtime_mode)" = "local" ]; then
+        mkdir -p "${ENGAGEMENT_DIR_ABS}/scans"
+        _start_local_process proxy "$MITMPROXY_BIN" --set engagement_dir="$ENGAGEMENT_DIR_ABS" "$@"
+        echo "[proxy] Started on port ${MITMPROXY_PORT:-8080}"
+        return 0
+    fi
     local container_name
     container_name="$(_proxy_container_name)" || return 1
     if docker ps --format '{{.Names}}' | grep -q "^${container_name}\$"; then
@@ -114,6 +211,10 @@ start_proxy() {
 
 # Stop the mitmproxy container (also removes exited containers to avoid name conflicts)
 stop_proxy() {
+    if [ "$(runtime_mode)" = "local" ]; then
+        _stop_local_process proxy
+        return 0
+    fi
     local container_name
     container_name="$(_proxy_container_name)" || return 0
     docker stop "$container_name" 2>/dev/null
@@ -126,6 +227,21 @@ stop_proxy() {
 start_katana() {
     local target="$1"; shift
     _resolve_engagement_dir || return 1
+    if [ "$(runtime_mode)" = "local" ]; then
+        if [ -z "$target" ]; then
+            echo "ERROR: target URL required" >&2
+            return 1
+        fi
+        mkdir -p "${ENGAGEMENT_DIR_ABS}/scans"
+        local auth_args=()
+        while IFS= read -r line; do
+            [ -n "$line" ] || continue
+            auth_args+=("$line")
+        done < <(_auth_header_array)
+        _start_local_process katana "$KATANA_LOCAL_BIN" -u "$target" -jc -d 3 -jsonl -silent "${auth_args[@]+"${auth_args[@]}"}" -o "${ENGAGEMENT_DIR_ABS}/scans/katana_output.jsonl" "$@"
+        echo "[katana] Started crawling $target"
+        return 0
+    fi
     local container_name
     container_name="$(_katana_container_name)" || return 1
     if [ -z "$target" ]; then
@@ -163,6 +279,10 @@ start_katana() {
 
 # Stop Katana container (also removes exited containers to avoid name conflicts)
 stop_katana() {
+    if [ "$(runtime_mode)" = "local" ]; then
+        _stop_local_process katana
+        return 0
+    fi
     local container_name
     container_name="$(_katana_container_name)" || return 0
     docker stop "$container_name" 2>/dev/null
