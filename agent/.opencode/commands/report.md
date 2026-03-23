@@ -24,9 +24,10 @@ Before reading findings, validate them:
 
 ```bash
 ./scripts/check_findings_integrity.sh "$ENG_DIR"
+./scripts/check_target_curl_usage.sh "$ENG_DIR"
 ```
 
-If the integrity check fails, stop and report the duplicate IDs or count mismatch instead of generating a misleading report.
+If either check fails, stop and report the duplicate IDs, count mismatch, or in-scope raw curl usage instead of generating a misleading report.
 
 ## Step 3: Generate Report
 
