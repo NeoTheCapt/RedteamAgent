@@ -10,8 +10,11 @@
 /opencode.json
 /tools/
 /tests/
-docs/
+docs/**
+!docs/
+!docs/redteam-agent-demo-fast.gif
 /tmp/
+.venv/
 /tmp-*/
 /scratch/
 /scratch-*/
@@ -94,6 +97,7 @@ screenshots/
 *.jpeg
 *.gif
 *.bmp
+!docs/redteam-agent-demo-fast.gif
 
 # ============================================
 # Generated scripts & payloads
