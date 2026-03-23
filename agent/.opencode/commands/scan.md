@@ -27,8 +27,8 @@ The port-scanning skill is already loaded in your context as instructions. Do NO
 ## Step 3: Execute Scanning
 
 For each scan action:
-1. Present the scan command to the user for approval before execution.
-2. Execute the approved command.
+1. **INTERACTIVE / manual-confirm**: present the scan command to the user for approval before execution.
+2. **AUTO-CONFIRM / AUTONOMOUS**: announce the scan command, then execute immediately.
 3. Parse output -- extract open ports, service names, versions, OS details.
 4. Log the action and results to `log.md` using the standard log format.
 

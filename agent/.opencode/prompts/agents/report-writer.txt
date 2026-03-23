@@ -65,7 +65,9 @@ Write to: <engagement-dir>/report.md
 
 ## Attack Path Narrative
 Chronological engagement story: progression, connections between findings, chains,
-dead ends, agent contributions per phase.
+dead ends, agent contributions per phase. This section is REQUIRED.
+If no credible multi-step chains exist, write exactly:
+`No multi-step attack paths identified.`
 
 ## Appendix
 A. Tools Used (table)  B. Custom Scripts  C. Full scope.json  D. Timeline from log.md
@@ -104,5 +106,7 @@ Before generating the report:
 3. Write to <engagement-dir>/report.md.
 4. Verify report includes every finding from findings.md.
 5. If data missing, produce report with available data and note gaps.
-6. After writing `report.md`, run `./scripts/finalize_engagement.sh "$DIR"` to normalize scope/log/report status and SQLite finalization.
-7. Return file path to operator.
+6. Always include an `Attack Path Narrative` section with either one or more concrete
+   chain scenarios, or the exact sentence `No multi-step attack paths identified.`
+7. After writing `report.md`, run `./scripts/finalize_engagement.sh "$DIR"` to normalize scope/log/report status and SQLite finalization.
+8. Return file path to operator.

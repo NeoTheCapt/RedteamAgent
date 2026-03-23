@@ -67,6 +67,8 @@ Create `report.md` in the engagement directory with the following structure:
 
 ## Attack Narrative
 Chronological walkthrough of the engagement: what was discovered, what was tested, and how findings were confirmed. This tells the story of the assessment.
+If there is no credible multi-step chain, include the exact sentence:
+`No multi-step attack paths identified.`
 
 ## Recommendations
 Prioritized list of remediation actions, grouped by effort (quick wins vs. longer-term fixes).

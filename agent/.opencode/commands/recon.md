@@ -28,8 +28,8 @@ The web-recon skill is already loaded in your context as instructions. Do NOT in
 ## Step 3: Execute Recon
 
 For each recon action:
-1. Present the command to the user for approval before execution.
-2. Execute the approved command.
+1. **INTERACTIVE / manual-confirm**: present the command to the user for approval before execution.
+2. **AUTO-CONFIRM / AUTONOMOUS**: announce the command, then execute immediately.
 3. Parse the output -- extract structured data (endpoints, technologies, versions, headers).
 4. Log the action and results to `log.md` using the standard log format.
 
