@@ -15,6 +15,8 @@ INPUT=$(cat)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/../lib/engagement.sh"
+# shellcheck source=/dev/null
+source "$SCRIPT_DIR/../lib/scope.sh"
 
 # Parse fields
 TOOL_NAME=$(echo "$INPUT" | jq -r '.tool_name // empty' 2>/dev/null || true)
@@ -73,6 +75,9 @@ case "$TOOL_NAME" in
       [ -n "$EXIT_CODE" ] && [ "$EXIT_CODE" != "0" ] && printf '**Exit code**: %s\n' "$EXIT_CODE"
       if [ -n "$OUTPUT_SUMMARY" ]; then
         printf '**Output**: %s\n' "$OUTPUT_SUMMARY"
+      fi
+      if command_hits_in_scope_target_with_raw_curl "$ENG_DIR" "$COMMAND"; then
+        printf '**Warning**: In-scope raw curl bypassed `run_tool curl`; switch to `run_tool curl`/`rtcurl`.\n'
       fi
     } >> "$ENG_DIR/log.md"
     ;;

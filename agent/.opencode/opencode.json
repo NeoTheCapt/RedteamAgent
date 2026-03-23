@@ -42,6 +42,28 @@
   "plugin": [
     "./plugins"
   ],
+  "mcp": {
+    "metasploit": {
+      "type": "local",
+      "command": [
+        "bash",
+        "scripts/start_metasploit_mcp.sh"
+      ],
+      "enabled": true,
+      "timeout": 10000,
+      "environment": {
+        "MSF_USER": "{env:MSF_USER}",
+        "MSF_PASSWORD": "{env:MSF_PASSWORD}",
+        "MSF_SERVER": "{env:MSF_SERVER}",
+        "MSF_PORT": "{env:MSF_PORT}",
+        "MSF_SSL": "{env:MSF_SSL}",
+        "LOG_LEVEL": "{env:METASPLOIT_MCP_LOG_LEVEL}"
+      }
+    }
+  },
+  "tools": {
+    "metasploit_*": false
+  },
   "agent": {
     "operator": {
       "description": "Lead red team operator. Drives pentest methodology, coordinates phases, dispatches subagents.",
@@ -85,7 +107,10 @@
       "edit": false,
       "bash": true,
       "glob": true,
-      "grep": true
+      "grep": true,
+      "tools": {
+        "metasploit_*": true
+      }
     },
     "fuzzer": {
       "description": "High-volume parameter/directory fuzzing, rapid iteration and result parsing.",

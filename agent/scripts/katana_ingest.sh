@@ -9,6 +9,7 @@ source "$SCRIPT_DIR/lib/params.sh"
 source "$SCRIPT_DIR/lib/classify.sh"
 source "$SCRIPT_DIR/lib/db.sh"
 source "$SCRIPT_DIR/lib/container.sh"
+source "$SCRIPT_DIR/lib/noise.sh"
 
 # --- Validate arguments ---
 if [[ $# -lt 1 ]]; then
@@ -95,6 +96,9 @@ while IFS= read -r line; do
 
     # Run through parameter extraction pipeline
     url_path=$(extract_url_path "$url")
+    if is_katana_noise_path "$url_path"; then
+        continue
+    fi
     query_params=$(extract_query_params "$url")
     path_params=$(extract_path_params "$url_path")
     body_params="{}"

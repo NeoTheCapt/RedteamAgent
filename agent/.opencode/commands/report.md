@@ -20,6 +20,16 @@ Read the following files from the engagement directory:
 - `log.md` -- full chronological log of all actions
 - `findings.md` -- all confirmed findings with evidence
 
+Before reading findings, validate them:
+
+```bash
+./scripts/check_findings_integrity.sh "$ENG_DIR"
+./scripts/check_target_curl_usage.sh "$ENG_DIR"
+./scripts/check_surface_coverage.sh "$ENG_DIR"
+```
+
+If any check fails, stop and report the duplicate IDs, count mismatch, in-scope raw curl usage, or unresolved high-risk surfaces instead of generating a misleading report.
+
 ## Step 3: Generate Report
 
 The report-generation skill is already loaded in your context as instructions. Do NOT invoke it as a skill tool. Follow its report format and methodology.
@@ -57,6 +67,8 @@ Create `report.md` in the engagement directory with the following structure:
 
 ## Attack Narrative
 Chronological walkthrough of the engagement: what was discovered, what was tested, and how findings were confirmed. This tells the story of the assessment.
+If there is no credible multi-step chain, include the exact sentence:
+`No multi-step attack paths identified.`
 
 ## Recommendations
 Prioritized list of remediation actions, grouped by effort (quick wins vs. longer-term fixes).
@@ -67,12 +79,19 @@ Prioritized list of remediation actions, grouped by effort (quick wins vs. longe
 - Timeline of actions
 ```
 
-## Step 4: Update Engagement Status
+## Step 4: Finalize Engagement State
 
-After generating the report, update `scope.json`:
-- Set `"status"` to `"completed"`
-- Add the current timestamp as `"end_time"`
-- Ensure `"phases_completed"` includes `"report"`
+After generating `report.md`, run:
+
+```bash
+./scripts/finalize_engagement.sh "$ENG_DIR"
+```
+
+This is the single supported finalize path. It updates:
+- `scope.json` (`status=complete`, `current_phase=complete`, `end_time`, `phases_completed += report`)
+- `log.md` (`Status: Completed`)
+- `report.md` header date/status lines
+- SQLite WAL/SHM sidecars via checkpoint + cleanup
 
 ## User Arguments
 

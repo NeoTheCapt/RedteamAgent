@@ -37,8 +37,8 @@ Based on prior recon and scan results, enumerate:
 - Identify input vectors (forms, query params, headers, cookies)
 
 For each action:
-1. Present the command to the user for approval before execution.
-2. Execute the approved command.
+1. **INTERACTIVE / manual-confirm**: present the command to the user for approval before execution.
+2. **AUTO-CONFIRM / AUTONOMOUS**: announce the command, then execute immediately.
 3. Parse output -- extract hidden paths, parameters, input vectors.
 4. Log the action and results to `log.md`.
 

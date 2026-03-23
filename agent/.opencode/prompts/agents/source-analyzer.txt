@@ -100,6 +100,10 @@ source-analysis
 #### Source Maps & Debug Info
 #### Recommended Follow-Up (return to operator — do NOT execute)
 
+#### Surface Candidates
+Emit only when the mapping is reasonably clear. Use one JSON line per candidate:
+`{"surface_type":"workflow_token","target":"GET /rest/2fa/status","source":"source-analyzer","rationale":"bundle discloses setup-token flow","evidence_ref":"downloads/source-analysis/assets/main.js","status":"discovered"}`
+
 #### Intelligence
 Extracted intel for intel.md. ONLY include items actually discovered — omit empty tables.
 
@@ -113,7 +117,7 @@ Email Addresses:
 | Email | Source | Notes |
 
 Credentials & Secrets:
-| Type | Value (truncated) | Source | Notes |
+| Type | Value (preview) | Ref | Source | Notes |
 
 Domains & Infrastructure:
 | Item | Type | Source | Notes |
@@ -126,7 +130,8 @@ url_path, content_type, response_snippet.
 Per case: download URL to /tmp (cache, never re-download), analyze by type, compile discoveries.
 
 Output: case IDs analyzed, NEW ENDPOINTS as JSON lines for requeue:
-  {"method":"GET","url":"https://target/api/found","url_path":"/api/found","type":"api","source":"source-analyzer","params_key_sig":"..."}
+  {"method":"GET","url":"https://target/api/found?limit=10","url_path":"/api/found","type":"api","source":"source-analyzer","query_params":{"limit":"10"},"body_params":{},"path_params":{}}
+  {"method":"POST","url":"https://target/rest/user/login","url_path":"/rest/user/login","type":"api","source":"source-analyzer","query_params":{},"body_params":{"email":"demo@target.local","password":"Password123!"},"path_params":{}}
 Plus any secrets/tokens for findings.md.
 
 === EXECUTION RULES ===
@@ -146,10 +151,38 @@ Plus any secrets/tokens for findings.md.
    - If a regex fails with "backreferences are not supported", rewrite using alternation (|)
      or multiple simpler patterns. Do NOT retry the same broken regex.
    - Do NOT use `grep -P` (unavailable on macOS).
-10. FINDING IDs: Use your agent prefix (FINDING-SA-NNN). Count YOUR existing prefixed findings:
-   `grep -c '^\#\# \[FINDING-SA-' "$DIR/findings.md"` to get next number. Never use unprefixed IDs.
+10. FINDING IDs: Never hand-allocate IDs. Write findings with `## [FINDING-ID] Title`, then append via:
+   `./scripts/append_finding.sh "$DIR" source-analyzer <finding-body-file>`
+   This allocates the next `FINDING-SA-NNN` under a lock and updates `Finding Count`.
 11. CONTENT VALIDATION: Before analyzing any downloaded file:
    - Verify file type matches expectation (use `file` command or check first bytes)
    - If a .js/.json/.pyc file contains "<!DOCTYPE html>", it is an SPA catch-all — skip it
    - If multiple files have identical byte sizes, they are likely the same SPA fallback
    Never report findings from HTML error pages misidentified as source files.
+12. SURFACE DISCOVERY: When bundles, routes, specs, or secrets clearly expose a high-risk flow,
+    emit it under `#### Surface Candidates`. Allowed `surface_type` values:
+    `auth_entry`, `account_recovery`, `object_reference`, `privileged_write`, `file_handling`,
+    `dynamic_render`, `api_documentation`, `workflow_token`.
+13. SECRET STORAGE: If a credential, token, seed phrase, API key, or setup secret is needed for
+    later use, store the full value in `intel-secrets.json` via:
+    `./scripts/store_intel_secret.sh "$DIR" <ref> <type> <full-value> <source> "<notes>"`
+    Then put only the returned preview row into `intel.md`. Do not put full secret material directly in `intel.md`.
+14. ENDPOINT QUALITY BAR: Only emit NEW ENDPOINTS that are directly requestable as-is.
+    Required:
+    - absolute `url` with http/https scheme
+    - matching absolute `url_path`
+    - concrete method and concrete path
+    - for write operations (`POST`, `PUT`, `PATCH`, `DELETE`): real example parameters are mandatory
+    - for read operations: include concrete query parameters whenever the source clearly reveals them
+    Do NOT emit:
+    - string fragments, route constants, MIME strings, or path prefixes
+    - unresolved templates such as `{id}`, `:id`, `{{href}}`
+    - concatenation remnants such as `'+...+'`
+    - write endpoints with empty or guessed parameters
+    - front-end routes unless they are clearly testable server endpoints
+    If the source suggests a risky flow but not a directly requestable endpoint, emit it only under
+    `#### Surface Candidates`, not as a NEW ENDPOINT.
+15. QUEUE HANDOFF: You are fully responsible for endpoint quality. The operator will import your
+    NEW ENDPOINT JSON lines directly. If an endpoint is incomplete, templated, parameterless on a
+    write method, or otherwise not directly testable, do not emit it as a NEW ENDPOINT. Surface it
+    under `#### Surface Candidates` instead.
