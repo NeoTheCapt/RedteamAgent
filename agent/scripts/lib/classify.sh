@@ -41,31 +41,36 @@ classify_type() {
   if printf '%s' "$url_path" | grep -qiE '^wss?://'; then
     echo "websocket"; return
   fi
-  if printf '%s' "$url_path" | grep -qiE '/ws(/|$)'; then
+  if printf '%s' "$url_path" | grep -qiE '/ws(/|$)|^/socket\.io(/|$)'; then
     echo "websocket"; return
   fi
 
-  # 3. api
-  if printf '%s' "$url_path" | grep -qiE '/api/|/v[0-9]/'; then
+  # 3. api spec / documentation
+  if printf '%s' "$url_path" | grep -qiE '^/(api-docs|openapi(\.json)?|swagger(\.json|-ui(\.html)?)?|v[0-9]+/api-docs)(/|$)'; then
+    echo "api-spec"; return
+  fi
+
+  # 4. api
+  if printf '%s' "$url_path" | grep -qiE '^/(api|rest)(/|$)|/v[0-9]+(/|$)'; then
     echo "api"; return
   fi
   if (( is_write_method )) && printf '%s' "$ct_lower" | grep -qiE 'application/json'; then
     echo "api"; return
   fi
 
-  # 4. upload
+  # 5. upload
   if printf '%s' "$ct_lower" | grep -qiE 'multipart/form-data'; then
     echo "upload"; return
   fi
 
-  # 5. form
+  # 6. form
   if [ "$method_upper" = "POST" ] || [ "$method_upper" = "PUT" ]; then
     if printf '%s' "$ct_lower" | grep -qiE 'application/x-www-form-urlencoded'; then
       echo "form"; return
     fi
   fi
 
-  # 6. javascript
+  # 7. javascript
   if printf '%s' "$path_no_query" | grep -qiE '\.js$'; then
     echo "javascript"; return
   fi
@@ -73,7 +78,7 @@ classify_type() {
     echo "javascript"; return
   fi
 
-  # 7. stylesheet
+  # 8. stylesheet
   if printf '%s' "$path_no_query" | grep -qiE '\.css$'; then
     echo "stylesheet"; return
   fi
@@ -81,7 +86,7 @@ classify_type() {
     echo "stylesheet"; return
   fi
 
-  # 8. page
+  # 9. page
   if printf '%s' "$path_no_query" | grep -qiE '\.(html?|xhtml|php|aspx?|jsp)$'; then
     echo "page"; return
   fi
@@ -89,15 +94,15 @@ classify_type() {
     echo "page"; return
   fi
 
-  # 9. data
-  if printf '%s' "$path_no_query" | grep -qiE '\.(json|xml|csv|ya?ml)$'; then
+  # 10. data
+  if printf '%s' "$path_no_query" | grep -qiE '\.(json|xml|csv|ya?ml|txt)$'; then
     echo "data"; return
   fi
   if printf '%s' "$ct_lower" | grep -qiE 'application/json|application/xml|text/csv|text/xml|application/pdf|text/plain|application/ld\+json|text/markdown'; then
     echo "data"; return
   fi
 
-  # 10. image (excluding svg, already handled as page)
+  # 11. image (excluding svg, already handled as page)
   if printf '%s' "$ct_lower" | grep -qiE '^image/' && ! printf '%s' "$ct_lower" | grep -qiE 'svg'; then
     echo "image"; return
   fi
@@ -105,7 +110,7 @@ classify_type() {
     echo "image"; return
   fi
 
-  # 11. video
+  # 12. video
   if printf '%s' "$ct_lower" | grep -qiE '^(video|audio)/'; then
     echo "video"; return
   fi
@@ -113,7 +118,7 @@ classify_type() {
     echo "video"; return
   fi
 
-  # 12. font
+  # 13. font
   if printf '%s' "$ct_lower" | grep -qiE '^font/|application/vnd\.ms-fontobject'; then
     echo "font"; return
   fi
@@ -121,11 +126,11 @@ classify_type() {
     echo "font"; return
   fi
 
-  # 13. archive
+  # 14. archive
   if printf '%s' "$ct_lower" | grep -qiE 'zip|gzip|tar|rar|7z|bzip'; then
     echo "archive"; return
   fi
 
-  # 14. unknown
+  # 15. unknown
   echo "unknown"
 }
