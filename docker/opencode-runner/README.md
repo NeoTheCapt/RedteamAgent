@@ -24,6 +24,17 @@ docker compose run --rm opencode
 - Persists OpenCode state (sessions, db) across runs via named volumes
 - Passes API keys from `.env` into the container
 
+## Alternative: Single-Image Runtime
+
+This repo is also gaining a separate all-in-one image under
+`docker/redteam-allinone/`:
+- OpenCode + Redteam Agent + toolchain in one image
+- `REDTEAM_RUNTIME_MODE=local`
+- no per-tool child containers for normal execution
+
+Use `opencode-runner` if you want the current Docker-socket-based host workflow.
+Use `redteam-allinone` if you want a more self-contained container runtime.
+
 ## Usage
 
 ```bash
