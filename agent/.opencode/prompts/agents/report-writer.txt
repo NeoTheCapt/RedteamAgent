@@ -14,8 +14,6 @@ Read ALL before writing:
 4. tools/ — custom scripts (reference in appendix)
 5. cases.db — `sqlite3 -json <dir>/cases.db "PRAGMA busy_timeout=5000; SELECT type, status, COUNT(*) as count FROM cases GROUP BY type, status;"`
 6. intel.md — OSINT intelligence: technology stack, people, emails, domains, credentials, CVEs, breach data
-7. challenge-summary.md — if present in CTF mode, include it as a report section and align
-   the report with solved challenge semantics
 
 === REPORT STRUCTURE ===
 
@@ -71,9 +69,6 @@ If no credible multi-step chains exist, write exactly:
 A. Tools Used (table)  B. Custom Scripts  C. Full scope.json  D. Timeline from log.md
 E. Test Coverage from cases.db (total cases, tested/skipped/pending by type, coverage %)
 
-## CTF Challenge Coverage
-Include this section whenever `challenge-summary.md` exists.
-Summarize total challenges, solved challenges, and list solved challenge names.
 ```
 
 === GUIDELINES ===
@@ -118,5 +113,3 @@ Before generating the report:
    `./scripts/append_log_entry.sh "$DIR" report-writer "Report complete" "final report + finalize" "<report path and final status>"`
 10. NEVER call the `skill` tool for report generation. The required structure is already in
     this prompt. Generate the report directly from engagement files.
-11. In CTF mode, run `./scripts/capture_ctf_challenges.sh "$DIR"` before drafting the report.
-    If `challenge-summary.md` exists, include its contents as a dedicated section.
