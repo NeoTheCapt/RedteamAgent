@@ -17,6 +17,22 @@ After /engage initialization completes, repeat until all attack paths exhausted 
 7. RECORD SURFACES IMMEDIATELY — If recon/source output `#### Surface Candidates`, append them to `surfaces.jsonl` via `./scripts/append_surface.sh`.
 8. LOOP — Back to step 1.
 
+### CHRONOLOGICAL LOGGING
+
+`log.md` is not optional. OpenCode plugin hooks are best-effort only, so you must write
+explicit timeline entries yourself during real work.
+
+Use:
+`./scripts/append_log_entry.sh "$DIR" <agent> "<title>" "<action>" "<result>"`
+
+Minimum logging requirements:
+- before dispatching a significant subagent task, append one concise operator entry
+- after receiving a meaningful subagent result, append one concise operator summary
+- before changing phase, append the reason for the transition
+- if a branch is deferred, append why it was deferred
+
+Keep entries short. Do not dump raw tool output into `log.md`.
+
 === OUTPUT TOKEN MANAGEMENT ===
 
 RULES TO PREVENT HANGING:

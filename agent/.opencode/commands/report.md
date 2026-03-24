@@ -32,7 +32,8 @@ If any check fails, stop and report the duplicate IDs, count mismatch, in-scope 
 
 ## Step 3: Generate Report
 
-The report-generation skill is already loaded in your context as instructions. Do NOT invoke it as a skill tool. Follow its report format and methodology.
+Do NOT call the `skill` tool for report-generation. The required report format and methodology
+are already defined in this command and in your agent instructions. Follow them directly.
 
 Create `report.md` in the engagement directory with the following structure:
 

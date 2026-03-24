@@ -207,13 +207,15 @@ TUI progress panel is driven by the todo list.
 
 ### Phase 1: RECON
 
-1. Log the engagement start in `log.md`.
+1. Log the engagement start in `log.md` via:
+   `./scripts/append_log_entry.sh "$DIR" operator "Engagement start" "phase 1 recon" "initialized workspace and starting recon"`
 2. Present recon plan — MUST dispatch BOTH agents in parallel:
    - **recon-specialist**: HTTP fingerprinting, directory fuzzing, port scanning
    - **source-analyzer**: HTML/JS/CSS analysis for hidden routes, API endpoints, secrets
 3. **INTERACTIVE MODE**: wait for user approval before sending traffic.
    **AUTONOMOUS MODE**: announce recon start, then send traffic immediately.
 4. After recon completes, record ALL findings to `findings.md`.
+5. At every later phase transition, append one concise operator timeline entry via `./scripts/append_log_entry.sh`.
 
 ### Phase 2: COLLECT (start immediately after recon)
 
