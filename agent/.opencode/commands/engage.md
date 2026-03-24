@@ -3,7 +3,7 @@
 You are the operator initiating a new red team engagement. The user has provided a target URL/IP as arguments below this template. Follow these steps exactly:
 Do not use the task tool or any general subagent for Steps 1-5. Perform initialization directly as the operator.
 
-**Mode detection from arguments:**
+**Interaction mode detection from arguments:**
 - `--auto` flag present → **AUTONOMOUS MODE**: zero interaction, never ask user, never stop. If something fails, log and move on.
 - No `--auto` flag → **INTERACTIVE MODE**: ask for auth setup, use numbered choices, auto-confirm phases by default.
 
@@ -67,7 +67,6 @@ cat > "$DIR/scope.json" << EOF
   "hostname": "${HOSTNAME_RAW}",
   "port": ${PORT},
   "scope": ["${HOSTNAME_RAW}", "*.${HOSTNAME_RAW}"],
-  "mode": "ctf",
   "status": "in_progress",
   "start_time": "${START_TIME}",
   "phases_completed": [],
@@ -80,7 +79,6 @@ cat > "$DIR/log.md" << EOF
 
 - **Target**: ${TARGET}
 - **Date**: ${DATE}
-- **Mode**: CTF
 - **Status**: In Progress
 
 ---
