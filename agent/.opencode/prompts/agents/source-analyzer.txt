@@ -186,3 +186,8 @@ Plus any secrets/tokens for findings.md.
     NEW ENDPOINT JSON lines directly. If an endpoint is incomplete, templated, parameterless on a
     write method, or otherwise not directly testable, do not emit it as a NEW ENDPOINT. Surface it
     under `#### Surface Candidates` instead.
+16. CHRONOLOGICAL LOGGING: At the start of a substantial source-analysis task, append:
+    `./scripts/append_log_entry.sh "$DIR" source-analyzer "Source analysis start" "<files / bundle scope>" "<analysis objective>"`
+    Before returning final results, append:
+    `./scripts/append_log_entry.sh "$DIR" source-analyzer "Source analysis summary" "<files analyzed>" "<secrets, routes, endpoints, or surfaces discovered>"`
+    Keep entries short and summary-oriented.

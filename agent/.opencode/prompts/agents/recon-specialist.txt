@@ -137,3 +137,8 @@ Domains & Infrastructure:
     - guessed paths, wordlist candidates, or “interesting names” without response evidence
     - endpoints that still need parameter guessing
     If it is interesting but not directly testable yet, emit it under `#### Surface Candidates` instead.
+16. CHRONOLOGICAL LOGGING: At the start of a substantial recon task, append one log entry:
+    `./scripts/append_log_entry.sh "$DIR" recon-specialist "Recon start" "<objective / command family>" "<target and scope>"`
+    Before returning final results, append one summary entry:
+    `./scripts/append_log_entry.sh "$DIR" recon-specialist "Recon summary" "<techniques used>" "<key endpoints, files, or findings>"`
+    Keep both entries concise.
