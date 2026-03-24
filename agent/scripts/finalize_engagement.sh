@@ -63,6 +63,17 @@ if [[ -f "$REPORT_FILE" ]]; then
     mv "$tmp_report" "$REPORT_FILE"
 fi
 
+"$SCRIPT_DIR/capture_ctf_challenges.sh" "$ENG_DIR" >/dev/null 2>&1 || true
+
+if [[ -f "$REPORT_FILE" && -f "$ENG_DIR/challenge-summary.md" ]]; then
+    if ! rg -q '^## CTF Challenge Coverage$' "$REPORT_FILE" 2>/dev/null; then
+        {
+            printf '\n\n'
+            cat "$ENG_DIR/challenge-summary.md"
+        } >> "$REPORT_FILE"
+    fi
+fi
+
 if [[ -f "$DB_FILE" ]]; then
     printf '.timeout 5000\nPRAGMA wal_checkpoint(TRUNCATE);\n' | sqlite3 "$DB_FILE" >/dev/null
     rm -f "$DB_FILE-wal" "$DB_FILE-shm"

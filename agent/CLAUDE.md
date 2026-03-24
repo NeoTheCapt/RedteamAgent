@@ -79,6 +79,8 @@ PARALLEL: Independent tasks → parallel. Dependent → sequential.
 3. **CONSUME & TEST** → dispatcher loop: reset-stale → stats → fetch → dispatch → done → requeue → repeat. Exit when pending=0.
    Before leaving Test phase, run `./scripts/check_surface_coverage.sh "$DIR"`.
    If it fails, do not advance. Resolve each remaining discovered surface by selecting a representative validation path and marking it `covered`, `deferred`, or `not_applicable`.
+   High-risk surfaces `account_recovery`, `dynamic_render`, `object_reference`, and `privileged_write`
+   may NOT remain `deferred` when moving to Exploit/Report. They must be `covered` or `not_applicable`.
 4. **EXPLOIT** → dispatch osint-analyst + exploit-developer in parallel. After osint: read intel.md, HIGH value → findings.md + exploit 2nd round.
 5. **REPORT** → dispatch report-writer
 
