@@ -92,6 +92,12 @@ If no chains: "No multi-step attack paths identified."
 
 Tool output in `<details>` blocks, generated scripts, scope verification table, timeline.
 
+### 6. CTF Challenge Coverage
+
+If `challenge-summary.md` exists in the engagement directory, include a dedicated
+`## CTF Challenge Coverage` section summarizing total challenges, solved challenges,
+and solved challenge names.
+
 ## Generation Procedure
 
 1. Collect and deduplicate findings
@@ -101,3 +107,4 @@ Tool output in `<details>` blocks, generated scripts, scope verification table, 
 5. Compile appendix from tool output and scripts
 6. Write executive summary LAST
 7. Verify: finding IDs match cross-references, severity counts match
+8. In CTF mode, if `challenge-summary.md` exists, align the report with solved challenge semantics
