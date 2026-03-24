@@ -63,6 +63,8 @@ if [[ -f "$REPORT_FILE" ]]; then
     mv "$tmp_report" "$REPORT_FILE"
 fi
 
+rm -f "$ENG_DIR"/tmp-*.md
+
 if [[ -f "$DB_FILE" ]]; then
     printf '.timeout 5000\nPRAGMA wal_checkpoint(TRUNCATE);\n' | sqlite3 "$DB_FILE" >/dev/null
     rm -f "$DB_FILE-wal" "$DB_FILE-shm"

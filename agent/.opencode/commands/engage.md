@@ -3,7 +3,7 @@
 You are the operator initiating a new red team engagement. The user has provided a target URL/IP as arguments below this template. Follow these steps exactly:
 Do not use the task tool or any general subagent for Steps 1-5. Perform initialization directly as the operator.
 
-**Mode detection from arguments:**
+**Interaction mode detection from arguments:**
 - `--auto` flag present → **AUTONOMOUS MODE**: zero interaction, never ask user, never stop. If something fails, log and move on.
 - No `--auto` flag → **INTERACTIVE MODE**: ask for auth setup, use numbered choices, auto-confirm phases by default.
 
@@ -67,7 +67,6 @@ cat > "$DIR/scope.json" << EOF
   "hostname": "${HOSTNAME_RAW}",
   "port": ${PORT},
   "scope": ["${HOSTNAME_RAW}", "*.${HOSTNAME_RAW}"],
-  "mode": "ctf",
   "status": "in_progress",
   "start_time": "${START_TIME}",
   "phases_completed": [],
@@ -80,7 +79,6 @@ cat > "$DIR/log.md" << EOF
 
 - **Target**: ${TARGET}
 - **Date**: ${DATE}
-- **Mode**: CTF
 - **Status**: In Progress
 
 ---
@@ -207,13 +205,15 @@ TUI progress panel is driven by the todo list.
 
 ### Phase 1: RECON
 
-1. Log the engagement start in `log.md`.
+1. Log the engagement start in `log.md` via:
+   `./scripts/append_log_entry.sh "$DIR" operator "Engagement start" "phase 1 recon" "initialized workspace and starting recon"`
 2. Present recon plan — MUST dispatch BOTH agents in parallel:
    - **recon-specialist**: HTTP fingerprinting, directory fuzzing, port scanning
    - **source-analyzer**: HTML/JS/CSS analysis for hidden routes, API endpoints, secrets
 3. **INTERACTIVE MODE**: wait for user approval before sending traffic.
    **AUTONOMOUS MODE**: announce recon start, then send traffic immediately.
 4. After recon completes, record ALL findings to `findings.md`.
+5. At every later phase transition, append one concise operator timeline entry via `./scripts/append_log_entry.sh`.
 
 ### Phase 2: COLLECT (start immediately after recon)
 

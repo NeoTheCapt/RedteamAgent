@@ -14,7 +14,7 @@ report_failure() {
 }
 
 declared_count="$(
-    sed -n 's/^- \*\*Finding Count\*\*: \([0-9][0-9]*\)$/\1/p' "$FINDINGS_FILE" | head -1
+    sed -n 's/^\(- \)\{0,1\}\*\*Finding Count\*\*: \([0-9][0-9]*\)$/\2/p' "$FINDINGS_FILE" | head -1
 )"
 declared_count="${declared_count:-0}"
 actual_count="$(rg -c '^## \[FINDING-[A-Z]{2}-[0-9]{3}\]' "$FINDINGS_FILE" 2>/dev/null || printf '0')"

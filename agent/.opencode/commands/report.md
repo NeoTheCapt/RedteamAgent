@@ -30,9 +30,19 @@ Before reading findings, validate them:
 
 If any check fails, stop and report the duplicate IDs, count mismatch, in-scope raw curl usage, or unresolved high-risk surfaces instead of generating a misleading report.
 
+If `scope.json` has `"mode": "ctf"`, prepare challenge coverage context first:
+
+```bash
+./scripts/capture_ctf_challenges.sh "$ENG_DIR"
+```
+
+If `challenge-summary.md` exists after this step, read it and include the challenge coverage
+section in the final report.
+
 ## Step 3: Generate Report
 
-The report-generation skill is already loaded in your context as instructions. Do NOT invoke it as a skill tool. Follow its report format and methodology.
+Do NOT call the `skill` tool for report-generation. The required report format and methodology
+are already defined in this command and in your agent instructions. Follow them directly.
 
 Create `report.md` in the engagement directory with the following structure:
 
