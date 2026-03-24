@@ -91,6 +91,10 @@ info() { echo -e "  ${BLUE}[INFO]${NC} $1"; }
 
 ERRORS=0
 
+run_build() {
+    "$@"
+}
+
 # Determine source directory
 SOURCE_DIR=""
 if [ -d "agent/.opencode" ]; then
@@ -414,7 +418,7 @@ else
     if [ "$PRODUCT" = "docker" ]; then
         if $FORCE_REBUILD; then
             info "Force rebuilding redteam-allinone..."
-            if docker build --pull --no-cache -t redteam-allinone:latest -f docker/redteam-allinone/Dockerfile . 2>&1 | tail -3; then
+            if run_build docker build --pull --no-cache -t redteam-allinone:latest -f docker/redteam-allinone/Dockerfile .; then
                 ok "redteam-allinone"
             else
                 fail "Failed to build redteam-allinone"; ERRORS=$((ERRORS + 1))
@@ -423,7 +427,7 @@ else
             ok "redteam-allinone (already exists)"
         else
             info "Building redteam-allinone (this may take several minutes)..."
-            if docker build -t redteam-allinone:latest -f docker/redteam-allinone/Dockerfile . 2>&1 | tail -3; then
+            if run_build docker build -t redteam-allinone:latest -f docker/redteam-allinone/Dockerfile .; then
                 ok "redteam-allinone"
             else
                 fail "Failed to build redteam-allinone"; ERRORS=$((ERRORS + 1))
@@ -433,7 +437,7 @@ else
     # Only build/pull images that don't already exist
     if $FORCE_REBUILD; then
         info "Force pulling projectdiscovery/katana:latest..."
-        if docker pull projectdiscovery/katana:latest >/dev/null 2>&1; then
+        if run_build docker pull projectdiscovery/katana:latest; then
             ok "Katana image"
         else
             fail "Failed to pull Katana"; ERRORS=$((ERRORS + 1))
@@ -442,7 +446,7 @@ else
         ok "Katana image (already exists)"
     else
         info "Pulling projectdiscovery/katana:latest..."
-        if docker pull projectdiscovery/katana:latest >/dev/null 2>&1; then
+        if run_build docker pull projectdiscovery/katana:latest; then
             ok "Katana image"
         else
             fail "Failed to pull Katana"; ERRORS=$((ERRORS + 1))
@@ -451,7 +455,7 @@ else
 
     if $FORCE_REBUILD; then
         info "Force rebuilding kali-redteam (this may take several minutes)..."
-        if cd docker && docker compose build --no-cache kali-redteam 2>&1 | tail -3; then
+        if cd docker && run_build docker compose build --no-cache kali-redteam; then
             cd ..; ok "kali-redteam"
         else
             cd ..; fail "Failed to build kali-redteam"; ERRORS=$((ERRORS + 1))
@@ -460,7 +464,7 @@ else
         ok "kali-redteam (already exists)"
     else
         info "Building kali-redteam (this may take several minutes)..."
-        if cd docker && docker compose build kali-redteam 2>&1 | tail -3; then
+        if cd docker && run_build docker compose build kali-redteam; then
             cd ..; ok "kali-redteam"
         else
             cd ..; fail "Failed to build kali-redteam"; ERRORS=$((ERRORS + 1))
@@ -469,7 +473,7 @@ else
 
     if $FORCE_REBUILD; then
         info "Force rebuilding redteam-proxy..."
-        if cd docker && docker compose build --no-cache mitmproxy 2>&1 | tail -3; then
+        if cd docker && run_build docker compose build --no-cache mitmproxy; then
             cd ..; ok "redteam-proxy"
         else
             cd ..; fail "Failed to build redteam-proxy"; ERRORS=$((ERRORS + 1))
@@ -478,7 +482,7 @@ else
         ok "redteam-proxy (already exists)"
     else
         info "Building redteam-proxy..."
-        if cd docker && docker compose build mitmproxy 2>&1 | tail -3; then
+        if cd docker && run_build docker compose build mitmproxy; then
             cd ..; ok "redteam-proxy"
         else
             cd ..; fail "Failed to build redteam-proxy"; ERRORS=$((ERRORS + 1))
@@ -488,7 +492,7 @@ else
     if [ "$PRODUCT" = "opencode" ]; then
         if $FORCE_REBUILD; then
             info "Force rebuilding redteam-metasploit..."
-            if cd docker && docker compose build --no-cache metasploit 2>&1 | tail -3; then
+            if cd docker && run_build docker compose build --no-cache metasploit; then
                 cd ..; ok "redteam-metasploit"
             else
                 cd ..; fail "Failed to build redteam-metasploit"; ERRORS=$((ERRORS + 1))
@@ -497,7 +501,7 @@ else
             ok "redteam-metasploit (already exists)"
         else
             info "Building redteam-metasploit..."
-            if cd docker && docker compose build metasploit 2>&1 | tail -3; then
+            if cd docker && run_build docker compose build metasploit; then
                 cd ..; ok "redteam-metasploit"
             else
                 cd ..; fail "Failed to build redteam-metasploit"; ERRORS=$((ERRORS + 1))
