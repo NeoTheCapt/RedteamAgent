@@ -81,7 +81,8 @@ cd ~/redteam-docker
 
 **说明**
 - 这是最干净的运行路径：镜像同时打包 OpenCode、Redteam Agent 与渗透测试工具链。
-- `run.sh` 会从镜像内置的干净模板初始化，并把状态持久化到 `workspace/`。
+- `run.sh` 会从镜像内置的干净模板初始化，并把 engagement 产物持久化到 `workspace/`，同时把完整 OpenCode 状态目录持久化到 `opencode-home/`。
+- 如果不想把 OpenCode 状态持久化到容器外，使用 `./run.sh --ephemeral-opencode`。
 - 安装后如需强制重建镜像，使用 `./run.sh --rebuild`。
 
 ### OpenCode（推荐）
