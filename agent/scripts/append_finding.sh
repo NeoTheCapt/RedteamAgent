@@ -4,6 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/lib/findings.sh"
+EMIT_RUNTIME_EVENT="$SCRIPT_DIR/emit_runtime_event.sh"
 
 ENG_DIR="${1:?usage: append_finding.sh <engagement_dir> <agent-name> <finding-body-file>}"
 AGENT_NAME="${2:?usage: append_finding.sh <engagement_dir> <agent-name> <finding-body-file>}"
@@ -34,4 +35,12 @@ fi
 update_finding_count "$FINDINGS_FILE"
 
 rm -f "$tmp_file"
+if [[ -f "$EMIT_RUNTIME_EVENT" ]]; then
+    bash "$EMIT_RUNTIME_EVENT" \
+        "finding.created" \
+        "${ORCHESTRATOR_PHASE:-unknown}" \
+        "$finding_id" \
+        "$AGENT_NAME" \
+        "Added $finding_id"
+fi
 printf '%s\n' "$finding_id"

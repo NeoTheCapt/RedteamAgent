@@ -4,6 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/lib/surfaces.sh"
+EMIT_RUNTIME_EVENT="$SCRIPT_DIR/emit_runtime_event.sh"
 
 ENG_DIR="${1:?usage: append_surface.sh <engagement_dir> <surface_type> <target> <source> <rationale> [evidence_ref] [status]}"
 SURFACE_TYPE="${2:?usage: append_surface.sh <engagement_dir> <surface_type> <target> <source> <rationale> [evidence_ref] [status]}"
@@ -14,3 +15,12 @@ EVIDENCE_REF="${6:-}"
 STATUS="${7:-discovered}"
 
 upsert_surface_record "$ENG_DIR" "$SURFACE_TYPE" "$TARGET" "$SOURCE_NAME" "$RATIONALE" "$EVIDENCE_REF" "$STATUS"
+
+if [[ -f "$EMIT_RUNTIME_EVENT" ]]; then
+    bash "$EMIT_RUNTIME_EVENT" \
+        "surface.updated" \
+        "${ORCHESTRATOR_PHASE:-unknown}" \
+        "$SURFACE_TYPE" \
+        "$SOURCE_NAME" \
+        "${SURFACE_TYPE} ${STATUS}: ${TARGET}"
+fi
