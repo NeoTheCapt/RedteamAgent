@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field
 
 from ..models.run import Run
 from ..security import CurrentUser
-from ..services.runs import create_run_for_project, list_runs_for_project, update_run_status
+from ..services.runs import create_run_for_project, delete_run_for_project, list_runs_for_project, update_run_status
 from ..ws import broadcaster
 
 router = APIRouter(prefix="/projects/{project_id}/runs", tags=["runs"])
@@ -66,3 +66,8 @@ async def set_run_status(
         },
     )
     return response
+
+
+@router.delete("/{run_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_run(project_id: int, run_id: int, current_user: CurrentUser) -> None:
+    delete_run_for_project(project_id, run_id, current_user)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import shutil
 import subprocess
 from threading import Thread
@@ -33,6 +34,10 @@ def metadata_path_for(run: Run) -> Path:
 
 def process_log_path_for(run: Run) -> Path:
     return runtime_root_for(run) / "process.log"
+
+
+def process_metadata_path_for(run: Run) -> Path:
+    return runtime_root_for(run) / "process.json"
 
 
 def _active_engagement_dir(run: Run) -> Path | None:
@@ -132,6 +137,89 @@ def _append_runtime_event(run: Run, event_type: str, phase: str, summary: str) -
     db.create_event(run.id, event_type, phase, "runtime", "launcher", summary)
 
 
+def _write_process_metadata(run: Run, process: subprocess.Popen[bytes]) -> None:
+    metadata = {
+        "pid": process.pid,
+        "command": [settings.opencode_command, "run", "--format", "json", f"/autoengage {run.target}"],
+        "started_at": db.get_run_by_id(run.id).updated_at if db.get_run_by_id(run.id) else None,
+    }
+    process_metadata_path_for(run).write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def locate_runtime_pid(run: Run) -> int | None:
+    metadata_path = process_metadata_path_for(run)
+    if metadata_path.exists():
+        try:
+            payload = json.loads(metadata_path.read_text(encoding="utf-8"))
+            pid = int(payload.get("pid"))
+            if _pid_alive(pid):
+                return pid
+        except (ValueError, TypeError, json.JSONDecodeError):
+            pass
+
+    try:
+        output = subprocess.check_output(["ps", "eww", "-axo", "pid=,command="], text=True)
+    except subprocess.SubprocessError:
+        return None
+
+    needle = f"ORCHESTRATOR_RUN_ID={run.id}"
+    for line in output.splitlines():
+        if needle not in line:
+            continue
+        pid_text, _, _ = line.strip().partition(" ")
+        try:
+            pid = int(pid_text)
+        except ValueError:
+            continue
+        if _pid_alive(pid):
+            process_metadata_path_for(run).write_text(
+                json.dumps({"pid": pid, "command": line.strip()}, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            return pid
+    return None
+
+
+def stop_run_runtime(run: Run) -> None:
+    pid = locate_runtime_pid(run)
+    if pid is not None:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+
+    workspace = workspace_root_for(run)
+    active_file = workspace / "engagements" / ".active"
+    if active_file.exists():
+        active_name = active_file.read_text(encoding="utf-8").strip()
+        if active_name:
+            engagement_dir = workspace / "engagements" / active_name
+            if engagement_dir.exists():
+                subprocess.run(
+                    [
+                        "bash",
+                        "-lc",
+                        "source scripts/lib/container.sh && export ENGAGEMENT_DIR=\"$1\" && stop_all_containers",
+                        "bash",
+                        str(engagement_dir),
+                    ],
+                    cwd=str(workspace),
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                )
+
+
 def _supervise_process(run: Run, process: subprocess.Popen[bytes], log_handle, heartbeat_interval: int = 5) -> None:
     while True:
         try:
@@ -166,6 +254,7 @@ def start_run_runtime(project: Project, run: Run, user: User) -> Run:
             stdout=log_handle,
             stderr=subprocess.STDOUT,
         )
+        _write_process_metadata(run, process)
     except Exception as exc:
         log_handle.write(f"launcher failed: {exc!r}\n".encode("utf-8"))
         log_handle.close()

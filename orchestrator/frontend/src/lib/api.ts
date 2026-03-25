@@ -133,6 +133,12 @@ export function createProject(token: string, name: string) {
   }, token);
 }
 
+export function deleteProject(token: string, projectId: number) {
+  return request<void>(`/projects/${projectId}`, {
+    method: "DELETE",
+  }, token);
+}
+
 export function listRuns(token: string, projectId: number) {
   return request<Run[]>(`/projects/${projectId}/runs`, {}, token);
 }
@@ -141,6 +147,12 @@ export function createRun(token: string, projectId: number, target: string) {
   return request<Run>(`/projects/${projectId}/runs`, {
     method: "POST",
     body: JSON.stringify({ target }),
+  }, token);
+}
+
+export function deleteRun(token: string, projectId: number, runId: number) {
+  return request<void>(`/projects/${projectId}/runs/${runId}`, {
+    method: "DELETE",
   }, token);
 }
 

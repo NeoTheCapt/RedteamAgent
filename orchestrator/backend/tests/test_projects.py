@@ -1,5 +1,9 @@
+import json
+from pathlib import Path
+
 from fastapi.testclient import TestClient
 
+from app import db
 from app.main import app
 
 def register_and_login(client: TestClient, username: str) -> str:
@@ -77,3 +81,43 @@ def test_project_roots_are_isolated_per_user_and_slug_conflict_is_rejected(isola
         json={"name": "Demo Workspace"},
     )
     assert duplicate_for_alice.status_code == 400
+
+
+def test_delete_project_cascades_runs_and_removes_project_root():
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+
+    project_response = client.post(
+        "/projects",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Disposable"},
+    )
+    assert project_response.status_code == 201
+    project = project_response.json()
+
+    run_response = client.post(
+        f"/projects/{project['id']}/runs",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"target": "https://example.com"},
+    )
+    assert run_response.status_code == 201
+    run = run_response.json()
+
+    run_root = Path(run["engagement_root"])
+    runtime_dir = run_root / "runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    (runtime_dir / "process.json").write_text(
+        json.dumps({"pid": 999999, "command": "opencode run", "started_at": "2026-03-25T00:00:00Z"}),
+        encoding="utf-8",
+    )
+    db.create_event(run["id"], "run.started", "unknown", "runtime", "launcher", "started")
+
+    delete_response = client.request(
+        "DELETE",
+        f"/projects/{project['id']}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert delete_response.status_code == 204
+    assert not Path(project["root_path"]).exists()
+    assert db.get_project_by_id(project["id"]) is None
+    assert db.get_run_by_id(run["id"]) is None

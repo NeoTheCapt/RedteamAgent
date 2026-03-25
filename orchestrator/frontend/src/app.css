@@ -66,7 +66,7 @@ input {
   display: grid;
   grid-template-columns: 0.9fr 1.1fr;
   gap: 20px;
-  align-items: start;
+  align-items: stretch;
 }
 
 .panel,
@@ -97,6 +97,14 @@ input {
   justify-content: space-between;
   gap: 16px;
   align-items: flex-start;
+}
+
+.page-actions,
+.project-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
 }
 
 .project-column {
@@ -201,6 +209,12 @@ input {
   border: 1px solid var(--border);
 }
 
+.danger-button {
+  color: #991b1b;
+  border-color: rgba(153, 27, 27, 0.18);
+  background: rgba(153, 27, 27, 0.06);
+}
+
 .run-list,
 .timeline,
 .artifact-list {
@@ -219,6 +233,24 @@ input {
   border-radius: 18px;
   background: rgba(255, 255, 255, 0.72);
   border: 1px solid rgba(0, 0, 0, 0.05);
+}
+
+.run-row {
+  grid-template-columns: 1fr auto;
+  align-items: center;
+}
+
+.run-open-button {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 14px;
+  align-items: start;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  text-align: left;
+  cursor: pointer;
 }
 
 .artifact-row,
@@ -280,14 +312,28 @@ input {
   display: grid;
   grid-template-columns: 300px 1fr;
   gap: 14px;
+  min-height: 0;
+  height: min(72vh, 920px);
+}
+
+.artifact-panel {
+  min-height: 0;
+}
+
+.artifact-list {
+  min-height: 0;
+  overflow: auto;
+  align-content: start;
 }
 
 .artifact-content {
-  min-height: 420px;
+  min-height: 0;
+  height: 100%;
   border-radius: 18px;
   padding: 16px;
   background: rgba(16, 18, 26, 0.96);
   color: #eceff8;
+  overflow: auto;
 }
 
 .artifact-content pre {
@@ -345,5 +391,17 @@ input {
   .artifact-layout,
   .waterfall {
     grid-template-columns: 1fr;
+  }
+
+  .artifact-layout {
+    height: auto;
+  }
+
+  .artifact-list {
+    max-height: 240px;
+  }
+
+  .artifact-content {
+    min-height: 360px;
   }
 }

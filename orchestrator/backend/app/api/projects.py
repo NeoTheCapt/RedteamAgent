@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field
 
 from ..models.project import Project
 from ..security import CurrentUser
-from ..services.projects import create_project_for_user, list_projects_for_user
+from ..services.projects import create_project_for_user, delete_project_for_user, list_projects_for_user
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 
@@ -39,3 +39,8 @@ def create_project(request: CreateProjectRequest, current_user: CurrentUser) -> 
 @router.get("", response_model=list[ProjectResponse])
 def list_projects(current_user: CurrentUser) -> list[ProjectResponse]:
     return [_project_response(project) for project in list_projects_for_user(current_user)]
+
+
+@router.delete("/{project_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_project(project_id: int, current_user: CurrentUser) -> None:
+    delete_project_for_user(current_user, project_id)

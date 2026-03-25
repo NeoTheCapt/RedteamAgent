@@ -21,9 +21,10 @@ type RunPageProps = {
   projectId: number;
   runId: number;
   onBack: () => void;
+  onDeleteRun: (projectId: number, runId: number) => Promise<void>;
 };
 
-export function RunPage({ token, projectId, runId, onBack }: RunPageProps) {
+export function RunPage({ token, projectId, runId, onBack, onDeleteRun }: RunPageProps) {
   const [run, setRun] = useState<Run | null>(null);
   const [events, setEvents] = useState<EventRecord[]>([]);
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
@@ -121,6 +122,13 @@ export function RunPage({ token, projectId, runId, onBack }: RunPageProps) {
 
   const latestSummary = useMemo(() => events.at(-1)?.summary ?? "Waiting for events", [events]);
 
+  async function handleDeleteRun() {
+    if (!window.confirm("Delete this run and all of its files?")) {
+      return;
+    }
+    await onDeleteRun(projectId, runId);
+  }
+
   return (
     <main className="shell run-shell">
       <section className="dashboard-header">
@@ -129,9 +137,14 @@ export function RunPage({ token, projectId, runId, onBack }: RunPageProps) {
           <h1>{run?.target ?? `Run #${runId}`}</h1>
           <p className="lead">{latestSummary}</p>
         </div>
-        <button className="ghost-button" onClick={onBack}>
-          Back to projects
-        </button>
+        <div className="page-actions">
+          <button className="ghost-button danger-button" onClick={() => void handleDeleteRun()}>
+            Delete run
+          </button>
+          <button className="ghost-button" onClick={onBack}>
+            Back to projects
+          </button>
+        </div>
       </section>
 
       <section className="run-overview panel">

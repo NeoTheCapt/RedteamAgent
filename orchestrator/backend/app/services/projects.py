@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import shutil
 from pathlib import Path
 
 from fastapi import HTTPException, status
@@ -37,3 +38,19 @@ def create_project_for_user(user: User, name: str) -> Project:
 
 def list_projects_for_user(user: User) -> list[Project]:
     return db.list_projects_for_user(user.id)
+
+
+def delete_project_for_user(user: User, project_id: int) -> None:
+    project = db.get_project_by_id(project_id)
+    if project is None or project.user_id != user.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+
+    from .runs import delete_run_for_project
+
+    for run in db.list_runs_for_project(project.id):
+        delete_run_for_project(project.id, run.id, user)
+
+    root_path = Path(project.root_path)
+    if root_path.exists():
+        shutil.rmtree(root_path, ignore_errors=True)
+    db.delete_project(project.id)

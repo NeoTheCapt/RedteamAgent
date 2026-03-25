@@ -245,6 +245,17 @@ def get_project_by_id(project_id: int) -> Project | None:
     return Project.from_row(row) if row else None
 
 
+def delete_project(project_id: int) -> None:
+    with get_connection() as connection:
+        connection.execute(
+            """
+            DELETE FROM projects
+            WHERE id = ?
+            """,
+            (project_id,),
+        )
+
+
 def create_run(project_id: int, target: str, status: str, engagement_root: str) -> Run:
     with get_connection() as connection:
         cursor = connection.execute(
@@ -313,6 +324,17 @@ def get_run_by_id(run_id: int) -> Run | None:
             (run_id,),
         ).fetchone()
     return Run.from_row(row) if row else None
+
+
+def delete_run(run_id: int) -> None:
+    with get_connection() as connection:
+        connection.execute(
+            """
+            DELETE FROM runs
+            WHERE id = ?
+            """,
+            (run_id,),
+        )
 
 
 def update_run_status(run_id: int, status: str) -> Run:

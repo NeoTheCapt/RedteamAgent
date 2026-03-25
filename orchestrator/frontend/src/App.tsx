@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 
-import { createProject, createRun, listProjects, listRuns, login, register } from "./lib/api";
+import { createProject, createRun, deleteProject, deleteRun, listProjects, listRuns, login, register } from "./lib/api";
 import type { Project, Run } from "./lib/api";
 import { LoginPage } from "./routes/LoginPage";
 import { ProjectsPage } from "./routes/ProjectsPage";
@@ -57,13 +57,28 @@ export default function App() {
       return;
     }
 
-    listProjects(session.token).then(async (nextProjects) => {
+    let cancelled = false;
+
+    async function refreshProjects() {
+      const nextProjects = await listProjects(session.token);
+      if (cancelled) return;
       setProjects(nextProjects);
       const entries = await Promise.all(
         nextProjects.map(async (project) => [project.id, await listRuns(session.token, project.id)] as const),
       );
+      if (cancelled) return;
       setRunsByProject(Object.fromEntries(entries));
-    });
+    }
+
+    void refreshProjects();
+    const interval = window.setInterval(() => {
+      void refreshProjects();
+    }, 5000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
   }, [session]);
 
   const runRoute = useMemo(() => parseRunRoute(route), [route]);
@@ -101,6 +116,28 @@ export default function App() {
     navigate(`/projects/${projectId}/runs/${run.id}`);
   }
 
+  async function handleDeleteProject(projectId: number) {
+    if (!session) return;
+    await deleteProject(session.token, projectId);
+    setProjects((current) => current.filter((project) => project.id !== projectId));
+    setRunsByProject((current) => {
+      const next = { ...current };
+      delete next[projectId];
+      return next;
+    });
+    navigate("/projects");
+  }
+
+  async function handleDeleteRun(projectId: number, runId: number) {
+    if (!session) return;
+    await deleteRun(session.token, projectId, runId);
+    setRunsByProject((current) => ({
+      ...current,
+      [projectId]: (current[projectId] ?? []).filter((run) => run.id !== runId),
+    }));
+    navigate("/projects");
+  }
+
   function handleLogout() {
     window.localStorage.removeItem(SESSION_STORAGE_KEY);
     setSession(null);
@@ -118,6 +155,7 @@ export default function App() {
         projectId={runRoute.projectId}
         runId={runRoute.runId}
         onBack={() => navigate("/projects")}
+        onDeleteRun={handleDeleteRun}
       />
     );
   }
@@ -129,6 +167,8 @@ export default function App() {
       runsByProject={runsByProject}
       onCreateProject={handleCreateProject}
       onCreateRun={handleCreateRun}
+      onDeleteProject={handleDeleteProject}
+      onDeleteRun={handleDeleteRun}
       onOpenRun={(projectId, runId) => navigate(`/projects/${projectId}/runs/${runId}`)}
       onLogout={handleLogout}
     />
