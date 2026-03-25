@@ -8,6 +8,7 @@ BACKEND_ROOT = Path(__file__).resolve().parents[1]
 class Settings:
     app_name: str = "Redteam Orchestrator"
     data_dir: Path = BACKEND_ROOT / "data"
+    session_ttl_hours: int = 24
 
 
 settings = Settings()
