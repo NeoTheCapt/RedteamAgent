@@ -48,11 +48,19 @@ export function RunPage({ token, projectId, runId, onBack }: RunPageProps) {
       .catch(() => setSelectedArtifact(null));
   }
 
-  useEffect(() => {
+  function refreshRunState() {
     listRuns(token, projectId).then((runs) => {
       setRun(runs.find((candidate) => candidate.id === runId) ?? null);
     });
+  }
+
+  function refreshEvents() {
     listEvents(token, projectId, runId).then(setEvents);
+  }
+
+  useEffect(() => {
+    refreshRunState();
+    refreshEvents();
     refreshArtifacts();
   }, [projectId, runId, token]);
 
@@ -97,6 +105,19 @@ export function RunPage({ token, projectId, runId, onBack }: RunPageProps) {
       socket?.close();
     };
   }, [projectId, runId, token]);
+
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      refreshRunState();
+      refreshEvents();
+      refreshArtifacts();
+      if (selectedName) {
+        refreshSelectedArtifact(selectedName);
+      }
+    }, 3000);
+
+    return () => window.clearInterval(interval);
+  }, [projectId, runId, selectedName, token]);
 
   const latestSummary = useMemo(() => events.at(-1)?.summary ?? "Waiting for events", [events]);
 

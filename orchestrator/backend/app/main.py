@@ -1,6 +1,7 @@
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse
 
 from .api.artifacts import router as artifacts_router
 from .api.events import router as events_router
@@ -60,3 +61,19 @@ async def run_stream(websocket: WebSocket, project_id: int, run_id: int) -> None
             await websocket.receive_text()
     except WebSocketDisconnect:
         broadcaster.disconnect(project_id, run_id, websocket)
+
+
+@app.get("/{full_path:path}")
+def frontend_app(full_path: str):
+    if not settings.frontend_dist_dir.exists():
+        return {"detail": "frontend build not found"}
+
+    requested_path = settings.frontend_dist_dir / full_path
+    if full_path and requested_path.is_file() and requested_path.is_relative_to(settings.frontend_dist_dir):
+        return FileResponse(requested_path)
+
+    index_path = settings.frontend_dist_dir / "index.html"
+    if index_path.exists():
+        return FileResponse(index_path)
+
+    return {"detail": "frontend build not found"}

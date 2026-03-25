@@ -1,9 +1,11 @@
 import json
 from pathlib import Path
 from types import SimpleNamespace
+import subprocess
 
 from fastapi.testclient import TestClient
 
+from app import db
 from app.config import settings
 from app.main import app
 
@@ -90,3 +92,42 @@ def test_create_run_can_auto_launch_when_enabled(monkeypatch):
 
     assert run["status"] == "running"
     assert Path(run["engagement_root"], "runtime", "process.log").exists()
+
+
+def test_auto_launch_emits_runtime_heartbeat_when_process_is_still_running(monkeypatch):
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+
+    class FakeProcess:
+        def __init__(self):
+            self.wait_calls = 0
+
+        def wait(self, timeout=None):
+            self.wait_calls += 1
+            if self.wait_calls == 1:
+                raise subprocess.TimeoutExpired(cmd="opencode", timeout=timeout)
+            return 0
+
+    class ImmediateThread:
+        def __init__(self, *, target, args=(), daemon=None):
+            self._target = target
+            self._args = args
+
+        def start(self):
+            self._target(*self._args)
+
+    monkeypatch.setattr("app.services.launcher.subprocess.Popen", lambda *args, **kwargs: FakeProcess())
+    monkeypatch.setattr("app.services.launcher.Thread", ImmediateThread)
+    object.__setattr__(settings, "auto_launch_runs", True)
+
+    try:
+        run = create_run(client, token, project["id"], "https://launched.example")
+    finally:
+        object.__setattr__(settings, "auto_launch_runs", False)
+
+    events = db.list_events_for_run(run["id"])
+    assert any(event.event_type == "run.heartbeat" for event in events)
+    latest = db.get_run_by_id(run["id"])
+    assert latest is not None
+    assert latest.status == "completed"

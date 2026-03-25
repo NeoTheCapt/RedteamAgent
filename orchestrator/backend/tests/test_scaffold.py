@@ -1,6 +1,8 @@
 import sys
 from pathlib import Path
 
+from fastapi.testclient import TestClient
+
 
 def test_orchestrator_root_scaffold_exists():
     repo_root = Path(__file__).resolve().parents[3]
@@ -31,3 +33,28 @@ def test_orchestrator_backend_import_and_healthz():
 
     assert app.title == "Redteam Orchestrator"
     assert healthz() == {"status": "ok", "app": "Redteam Orchestrator"}
+
+
+def test_backend_serves_frontend_build_when_present(isolate_data_dir):
+    repo_root = Path(__file__).resolve().parents[3]
+    backend_root = repo_root / "orchestrator" / "backend"
+    sys.path.insert(0, str(backend_root))
+    try:
+        from app.config import settings
+        from app.main import app
+    finally:
+        sys.path.remove(str(backend_root))
+
+    settings.frontend_dist_dir.mkdir(parents=True, exist_ok=True)
+    (settings.frontend_dist_dir / "assets").mkdir(parents=True, exist_ok=True)
+    (settings.frontend_dist_dir / "index.html").write_text("<html><body>orchestrator</body></html>", encoding="utf-8")
+    (settings.frontend_dist_dir / "assets" / "app.js").write_text("console.log('ok')", encoding="utf-8")
+
+    client = TestClient(app)
+    root_response = client.get("/")
+    asset_response = client.get("/assets/app.js")
+
+    assert root_response.status_code == 200
+    assert "orchestrator" in root_response.text
+    assert asset_response.status_code == 200
+    assert "console.log('ok')" in asset_response.text

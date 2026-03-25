@@ -18,17 +18,21 @@ type RunRoute = {
 
 const SESSION_STORAGE_KEY = "redteam-orchestrator-session";
 
-function parseRunRoute(pathname: string): RunRoute | null {
-  const match = pathname.match(/^\/projects\/(\d+)\/runs\/(\d+)$/);
+function currentRoute(): string {
+  const hashRoute = window.location.hash.replace(/^#/, "");
+  return hashRoute || "/projects";
+}
+
+function parseRunRoute(route: string): RunRoute | null {
+  const match = route.match(/^\/projects\/(\d+)\/runs\/(\d+)$/);
   if (!match) {
     return null;
   }
   return { projectId: Number(match[1]), runId: Number(match[2]) };
 }
 
-function navigate(pathname: string) {
-  window.history.pushState({}, "", pathname);
-  window.dispatchEvent(new PopStateEvent("popstate"));
+function navigate(route: string) {
+  window.location.hash = route;
 }
 
 export default function App() {
@@ -36,14 +40,14 @@ export default function App() {
     const raw = window.localStorage.getItem(SESSION_STORAGE_KEY);
     return raw ? (JSON.parse(raw) as SessionState) : null;
   });
-  const [pathname, setPathname] = useState(window.location.pathname);
+  const [route, setRoute] = useState(currentRoute());
   const [projects, setProjects] = useState<Project[]>([]);
   const [runsByProject, setRunsByProject] = useState<Record<number, Run[]>>({});
 
   useEffect(() => {
-    const handler = () => setPathname(window.location.pathname);
-    window.addEventListener("popstate", handler);
-    return () => window.removeEventListener("popstate", handler);
+    const handler = () => setRoute(currentRoute());
+    window.addEventListener("hashchange", handler);
+    return () => window.removeEventListener("hashchange", handler);
   }, []);
 
   useEffect(() => {
@@ -62,7 +66,7 @@ export default function App() {
     });
   }, [session]);
 
-  const runRoute = useMemo(() => parseRunRoute(pathname), [pathname]);
+  const runRoute = useMemo(() => parseRunRoute(route), [route]);
 
   async function handleLogin(username: string, password: string) {
     const response = await login(username, password);

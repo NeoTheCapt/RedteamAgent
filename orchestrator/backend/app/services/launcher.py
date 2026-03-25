@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 from threading import Thread
 from pathlib import Path
@@ -32,6 +33,37 @@ def metadata_path_for(run: Run) -> Path:
 
 def process_log_path_for(run: Run) -> Path:
     return runtime_root_for(run) / "process.log"
+
+
+def _active_engagement_dir(run: Run) -> Path | None:
+    active_file = workspace_root_for(run) / "engagements" / ".active"
+    if not active_file.exists():
+        return None
+
+    active_name = active_file.read_text(encoding="utf-8").strip()
+    if not active_name:
+        return None
+
+    active_dir = workspace_root_for(run) / "engagements" / active_name
+    return active_dir if active_dir.exists() else None
+
+
+def _heartbeat_context(run: Run) -> tuple[str, str]:
+    engagement_dir = _active_engagement_dir(run)
+    if engagement_dir is None:
+        return ("unknown", "Runtime active; waiting for engagement initialization.")
+
+    scope_path = engagement_dir / "scope.json"
+    if not scope_path.exists():
+        return ("unknown", "Runtime active; engagement created, waiting for phase details.")
+
+    try:
+        scope = json.loads(scope_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return ("unknown", "Runtime active; scope metadata is not yet readable.")
+
+    phase = str(scope.get("current_phase") or "unknown")
+    return (phase, f"Runtime active in {phase}; waiting for new agent output.")
 
 
 def prepare_run_runtime(project: Project, run: Run) -> None:
@@ -66,13 +98,18 @@ def _ensure_opencode_runtime_seeded(run: Run) -> None:
     if sentinel.exists():
         return
 
-    subprocess.run(
-        [str(settings.install_script_path), "opencode", str(workspace_root)],
-        cwd=str(settings.install_script_path.parent),
-        check=True,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
+    for relative_dir in (".opencode", "skills", "references", "scripts", "docker"):
+        source_dir = settings.agent_source_dir / relative_dir
+        target_dir = workspace_root / relative_dir
+        if source_dir.exists():
+            shutil.copytree(source_dir, target_dir, dirs_exist_ok=True)
+
+    env_template = settings.agent_source_dir / ".env.example"
+    env_target = workspace_root / ".env"
+    if env_template.exists() and not env_target.exists():
+        shutil.copy2(env_template, env_target)
+
+    (workspace_root / "engagements").mkdir(parents=True, exist_ok=True)
 
 
 def _runtime_env(project: Project, run: Run, user: User) -> dict[str, str]:
@@ -91,9 +128,27 @@ def _runtime_env(project: Project, run: Run, user: User) -> dict[str, str]:
     return env
 
 
-def _watch_process(run: Run, process: subprocess.Popen[bytes], log_handle) -> None:
-    return_code = process.wait()
+def _append_runtime_event(run: Run, event_type: str, phase: str, summary: str) -> None:
+    db.create_event(run.id, event_type, phase, "runtime", "launcher", summary)
+
+
+def _supervise_process(run: Run, process: subprocess.Popen[bytes], log_handle, heartbeat_interval: int = 5) -> None:
+    while True:
+        try:
+            return_code = process.wait(timeout=heartbeat_interval)
+            break
+        except subprocess.TimeoutExpired:
+            phase, summary = _heartbeat_context(run)
+            _append_runtime_event(run, "run.heartbeat", phase, summary)
+
     log_handle.close()
+    phase, summary = _heartbeat_context(run)
+    _append_runtime_event(
+        run,
+        "run.completed" if return_code == 0 else "run.failed",
+        phase,
+        "Runtime finished successfully." if return_code == 0 else "Runtime exited with failure.",
+    )
     db.update_run_status(run.id, "completed" if return_code == 0 else "failed")
 
 
@@ -112,10 +167,11 @@ def start_run_runtime(project: Project, run: Run, user: User) -> Run:
             stderr=subprocess.STDOUT,
         )
     except Exception as exc:
-        log_handle.write(f"launcher failed: {exc}\n".encode("utf-8"))
+        log_handle.write(f"launcher failed: {exc!r}\n".encode("utf-8"))
         log_handle.close()
         return db.update_run_status(run.id, "failed")
 
     running = db.update_run_status(run.id, "running")
-    Thread(target=_watch_process, args=(running, process, log_handle), daemon=True).start()
+    _append_runtime_event(running, "run.started", "unknown", "Runtime launched; waiting for agent activity.")
+    Thread(target=_supervise_process, args=(running, process, log_handle), daemon=True).start()
     return running

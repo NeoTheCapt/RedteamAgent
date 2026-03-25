@@ -22,7 +22,7 @@ def slugify_project_name(name: str) -> str:
 
 
 def project_root_for(user: User, slug: str) -> Path:
-    return settings.data_dir / "projects" / user.username / slug
+    return settings.projects_dir / user.username / slug
 
 
 def create_project_for_user(user: User, name: str) -> Project:

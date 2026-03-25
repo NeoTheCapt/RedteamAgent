@@ -47,7 +47,45 @@ export type WebSocketTicketResponse = {
   ticket: string;
 };
 
-const API_BASE = "";
+function appBaseUrl(): URL {
+  const pathname = window.location.pathname.endsWith("/")
+    ? window.location.pathname
+    : `${window.location.pathname}/`;
+  return new URL(pathname, window.location.origin);
+}
+
+function resolveAppUrl(path: string): string {
+  const relativePath = path.replace(/^\/+/, "");
+  return new URL(relativePath, appBaseUrl()).toString();
+}
+
+async function readError(response: Response): Promise<string> {
+  const text = await response.text();
+  if (!text) {
+    return `Request failed: ${response.status}`;
+  }
+
+  try {
+    const payload = JSON.parse(text) as { detail?: unknown };
+    if (Array.isArray(payload.detail) && payload.detail.length > 0) {
+      const first = payload.detail[0] as { loc?: unknown[]; msg?: string };
+      const field = Array.isArray(first.loc) ? first.loc[first.loc.length - 1] : undefined;
+      if (typeof field === "string" && typeof first.msg === "string") {
+        return `${field}: ${first.msg}`;
+      }
+      if (typeof first.msg === "string") {
+        return first.msg;
+      }
+    }
+    if (typeof payload.detail === "string") {
+      return payload.detail;
+    }
+  } catch {
+    // Fall back to the raw body below.
+  }
+
+  return text;
+}
 
 async function request<T>(path: string, init: RequestInit = {}, token?: string): Promise<T> {
   const headers = new Headers(init.headers ?? {});
@@ -58,14 +96,13 @@ async function request<T>(path: string, init: RequestInit = {}, token?: string):
     headers.set("Authorization", `Bearer ${token}`);
   }
 
-  const response = await fetch(`${API_BASE}${path}`, {
+  const response = await fetch(resolveAppUrl(path), {
     ...init,
     headers,
   });
 
   if (!response.ok) {
-    const text = await response.text();
-    throw new Error(text || `Request failed: ${response.status}`);
+    throw new Error(await readError(response));
   }
 
   return response.json() as Promise<T>;
@@ -124,7 +161,10 @@ export function createWebSocketTicket(token: string) {
 }
 
 export function runWebSocketUrl(projectId: number, runId: number, ticket: string) {
-  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-  const host = window.location.host;
-  return `${protocol}//${host}/ws/projects/${projectId}/runs/${runId}?ticket=${encodeURIComponent(ticket)}`;
+  const httpUrl = new URL(
+    `ws/projects/${projectId}/runs/${runId}?ticket=${encodeURIComponent(ticket)}`,
+    appBaseUrl(),
+  );
+  httpUrl.protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+  return httpUrl.toString();
 }
