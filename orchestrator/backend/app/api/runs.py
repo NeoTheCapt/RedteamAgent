@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 from ..models.run import Run
 from ..security import CurrentUser
 from ..services.runs import create_run_for_project, list_runs_for_project, update_run_status
+from ..ws import broadcaster
 
 router = APIRouter(prefix="/projects/{project_id}/runs", tags=["runs"])
 
@@ -46,11 +47,22 @@ def list_runs(project_id: int, current_user: CurrentUser) -> list[RunResponse]:
 
 
 @router.post("/{run_id}/status", response_model=RunResponse)
-def set_run_status(
+async def set_run_status(
     project_id: int,
     run_id: int,
     request: UpdateRunStatusRequest,
     current_user: CurrentUser,
 ) -> RunResponse:
     run = update_run_status(project_id, run_id, current_user, request.status)
-    return _run_response(run)
+    response = _run_response(run)
+    await broadcaster.publish(
+        project_id,
+        run_id,
+        {
+            "type": "run.status.updated",
+            "project_id": project_id,
+            "run_id": run_id,
+            "run": response.model_dump(),
+        },
+    )
+    return response

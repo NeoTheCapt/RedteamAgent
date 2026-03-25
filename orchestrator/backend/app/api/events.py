@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 from ..models.event import Event
 from ..security import CurrentUser
 from ..services.events import create_event_for_run, list_events_for_run, summarize_events_for_run
+from ..ws import broadcaster
 
 router = APIRouter(prefix="/projects/{project_id}/runs/{run_id}/events", tags=["events"])
 
@@ -41,7 +42,7 @@ def _event_response(event: Event) -> EventResponse:
 
 
 @router.post("", response_model=EventResponse, status_code=status.HTTP_201_CREATED)
-def create_event(
+async def create_event(
     project_id: int,
     run_id: int,
     request: CreateEventRequest,
@@ -57,7 +58,18 @@ def create_event(
         agent_name=request.agent_name,
         summary=request.summary,
     )
-    return _event_response(event)
+    response = _event_response(event)
+    await broadcaster.publish(
+        project_id,
+        run_id,
+        {
+            "type": "event.created",
+            "project_id": project_id,
+            "run_id": run_id,
+            "event": response.model_dump(),
+        },
+    )
+    return response
 
 
 @router.get("", response_model=list[EventResponse])
