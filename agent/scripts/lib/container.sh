@@ -9,6 +9,8 @@ PROXY_IMAGE="${PROXY_IMAGE:-redteam-proxy:latest}"
 KATANA_IMAGE="${KATANA_IMAGE:-projectdiscovery/katana:latest}"
 MITMPROXY_BIN="${MITMPROXY_BIN:-mitmdump}"
 KATANA_LOCAL_BIN="${KATANA_LOCAL_BIN:-katana}"
+KATANA_CHROME_BIN="${KATANA_CHROME_BIN:-/usr/bin/chromium}"
+KATANA_HEADLESS_OPTIONS="${KATANA_HEADLESS_OPTIONS:---no-sandbox,--disable-dev-shm-usage,--disable-gpu}"
 
 runtime_mode() {
     echo "${REDTEAM_RUNTIME_MODE:-docker}"
@@ -219,6 +221,17 @@ stop_proxy() {
 start_katana() {
     local target="$1"; shift
     _resolve_engagement_dir || return 1
+    local katana_args=(
+        -u "$target"
+        -hl
+        -jc
+        -system-chrome
+        -system-chrome-path "$KATANA_CHROME_BIN"
+        -headless-options "$KATANA_HEADLESS_OPTIONS"
+        -d 3
+        -jsonl
+        -silent
+    )
     if [ "$(runtime_mode)" = "local" ]; then
         if [ -z "$target" ]; then
             echo "ERROR: target URL required" >&2
@@ -230,7 +243,7 @@ start_katana() {
             [ -n "$line" ] || continue
             auth_args+=("$line")
         done < <(_auth_header_array)
-        _start_local_process katana "$KATANA_LOCAL_BIN" -u "$target" -jc -d 3 -jsonl -silent "${auth_args[@]+"${auth_args[@]}"}" -o "${ENGAGEMENT_DIR_ABS}/scans/katana_output.jsonl" "$@"
+        _start_local_process katana "$KATANA_LOCAL_BIN" "${katana_args[@]}" "${auth_args[@]+"${auth_args[@]}"}" -o "${ENGAGEMENT_DIR_ABS}/scans/katana_output.jsonl" "$@"
         echo "[katana] Started crawling $target"
         return 0
     fi
@@ -263,7 +276,7 @@ start_katana() {
         --network host \
         -v "${ENGAGEMENT_DIR_ABS}:/engagement" \
         "$KATANA_IMAGE" \
-        -u "$target" -jc -d 3 -jsonl -silent \
+        "${katana_args[@]}" \
         "${auth_args[@]}" \
         -o /engagement/scans/katana_output.jsonl
     echo "[katana] Started crawling $target"

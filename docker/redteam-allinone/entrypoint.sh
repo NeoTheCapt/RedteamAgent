@@ -18,6 +18,8 @@ fi
 
 export REDTEAM_RUNTIME_MODE="${REDTEAM_RUNTIME_MODE:-local}"
 export KATANA_LOCAL_BIN="${KATANA_LOCAL_BIN:-/usr/local/bin/katana}"
+export KATANA_CHROME_BIN="${KATANA_CHROME_BIN:-/usr/bin/chromium}"
+export KATANA_HEADLESS_OPTIONS="${KATANA_HEADLESS_OPTIONS:---no-sandbox,--disable-dev-shm-usage,--disable-gpu}"
 export MSF_SERVER="${MSF_SERVER:-127.0.0.1}"
 export MSF_PORT="${MSF_PORT:-55553}"
 
