@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Iterator
 
 from .config import settings
+from .models.event import Event
 from .models.project import Project
 from .models.run import Run
 from .models.user import User
@@ -65,6 +66,21 @@ def init_db() -> None:
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id INTEGER NOT NULL,
+                event_type TEXT NOT NULL,
+                phase TEXT NOT NULL,
+                task_name TEXT NOT NULL,
+                agent_name TEXT NOT NULL,
+                summary TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(run_id) REFERENCES runs(id) ON DELETE CASCADE
             )
             """
         )
@@ -303,3 +319,60 @@ def update_run_status(run_id: int, status: str) -> Run:
         ).fetchone()
         assert row is not None
         return Run.from_row(row)
+
+
+def create_event(
+    run_id: int,
+    event_type: str,
+    phase: str,
+    task_name: str,
+    agent_name: str,
+    summary: str,
+) -> Event:
+    with get_connection() as connection:
+        cursor = connection.execute(
+            """
+            INSERT INTO events (run_id, event_type, phase, task_name, agent_name, summary)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (run_id, event_type, phase, task_name, agent_name, summary),
+        )
+        row = connection.execute(
+            """
+            SELECT id, run_id, event_type, phase, task_name, agent_name, summary, created_at
+            FROM events
+            WHERE id = ?
+            """,
+            (cursor.lastrowid,),
+        ).fetchone()
+        assert row is not None
+        return Event.from_row(row)
+
+
+def list_events_for_run(run_id: int) -> list[Event]:
+    with get_connection() as connection:
+        rows = connection.execute(
+            """
+            SELECT id, run_id, event_type, phase, task_name, agent_name, summary, created_at
+            FROM events
+            WHERE run_id = ?
+            ORDER BY id ASC
+            """,
+            (run_id,),
+        ).fetchall()
+    return [Event.from_row(row) for row in rows]
+
+
+def get_latest_event_for_run(run_id: int, prefix: str) -> Event | None:
+    with get_connection() as connection:
+        row = connection.execute(
+            """
+            SELECT id, run_id, event_type, phase, task_name, agent_name, summary, created_at
+            FROM events
+            WHERE run_id = ? AND event_type LIKE ?
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (run_id, f"{prefix}%"),
+        ).fetchone()
+    return Event.from_row(row) if row else None
