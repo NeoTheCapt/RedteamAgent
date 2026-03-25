@@ -91,14 +91,20 @@ EOF
 python3 - <<'PY' "$REQUEST_LOG"
 import json
 import sys
+import time
 
 request_log = sys.argv[1]
-with open(request_log, "r", encoding="utf-8") as fh:
-    rows = [json.loads(line) for line in fh if line.strip()]
-
-event_types = {row["event_type"] for row in rows}
 expected = {"phase.started", "artifact.updated", "finding.created", "surface.updated"}
+deadline = time.time() + 3
+
+while time.time() < deadline:
+    with open(request_log, "r", encoding="utf-8") as fh:
+        rows = [json.loads(line) for line in fh if line.strip()]
+    event_types = {row["event_type"] for row in rows}
+    if expected <= event_types:
+        raise SystemExit(0)
+    time.sleep(0.1)
+
 missing = expected - event_types
-if missing:
-    raise SystemExit(f"missing event types: {sorted(missing)}")
+raise SystemExit(f"missing event types: {sorted(missing)}")
 PY

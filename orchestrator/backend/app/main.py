@@ -8,9 +8,8 @@ from .api.projects import router as projects_router
 from .api.runs import router as runs_router
 from .config import settings
 from .api.auth import router as auth_router
-from .db import get_project_by_id, get_run_by_id, get_user_by_token, init_db
-from .security import format_utc_timestamp, utc_now
-from .ws import broadcaster
+from .db import get_project_by_id, get_run_by_id, get_user_by_id, init_db
+from .ws import broadcaster, ws_tickets
 
 
 @asynccontextmanager
@@ -34,14 +33,19 @@ def healthz() -> dict[str, str]:
 
 @app.websocket("/ws/projects/{project_id}/runs/{run_id}")
 async def run_stream(websocket: WebSocket, project_id: int, run_id: int) -> None:
-    token = websocket.query_params.get("token")
-    if not token:
-        await websocket.close(code=1008, reason="Missing bearer token")
+    ticket = websocket.query_params.get("ticket")
+    if not ticket:
+        await websocket.close(code=1008, reason="Missing websocket ticket")
         return
 
-    user = get_user_by_token(token, format_utc_timestamp(utc_now()))
+    user_id = ws_tickets.consume(ticket)
+    if user_id is None:
+        await websocket.close(code=1008, reason="Invalid or expired websocket ticket")
+        return
+
+    user = get_user_by_id(user_id)
     if user is None:
-        await websocket.close(code=1008, reason="Invalid or expired session")
+        await websocket.close(code=1008, reason="Unknown user")
         return
 
     project = get_project_by_id(project_id)

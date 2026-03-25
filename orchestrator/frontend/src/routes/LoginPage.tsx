@@ -2,22 +2,28 @@ import { FormEvent, useState } from "react";
 
 type LoginPageProps = {
   onLogin: (username: string, password: string) => Promise<void>;
+  onRegister: (username: string, password: string) => Promise<void>;
 };
 
-export function LoginPage({ onLogin }: LoginPageProps) {
+export function LoginPage({ onLogin, onRegister }: LoginPageProps) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [mode, setMode] = useState<"login" | "register">("login");
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setSubmitting(true);
     setError(null);
     try {
-      await onLogin(username, password);
+      if (mode === "login") {
+        await onLogin(username, password);
+      } else {
+        await onRegister(username, password);
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Login failed");
+      setError(err instanceof Error ? err.message : `${mode} failed`);
     } finally {
       setSubmitting(false);
     }
@@ -34,7 +40,19 @@ export function LoginPage({ onLogin }: LoginPageProps) {
         </p>
       </section>
       <section className="panel auth-panel">
-        <h2>Sign in</h2>
+        <div className="panel-header">
+          <h2>{mode === "login" ? "Sign in" : "Create first user"}</h2>
+          <button
+            type="button"
+            className="ghost-button"
+            onClick={() => {
+              setError(null);
+              setMode((current) => (current === "login" ? "register" : "login"));
+            }}
+          >
+            {mode === "login" ? "Need an account?" : "Already have an account?"}
+          </button>
+        </div>
         <form onSubmit={handleSubmit} className="stack">
           <label className="field">
             <span>Username</span>
@@ -51,7 +69,7 @@ export function LoginPage({ onLogin }: LoginPageProps) {
           </label>
           {error ? <p className="error-text">{error}</p> : null}
           <button type="submit" className="primary-button" disabled={submitting}>
-            {submitting ? "Signing in..." : "Sign in"}
+            {submitting ? "Working..." : mode === "login" ? "Sign in" : "Create user"}
           </button>
         </form>
       </section>

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 
-import { createProject, createRun, listProjects, listRuns, login } from "./lib/api";
+import { createProject, createRun, listProjects, listRuns, login, register } from "./lib/api";
 import type { Project, Run } from "./lib/api";
 import { LoginPage } from "./routes/LoginPage";
 import { ProjectsPage } from "./routes/ProjectsPage";
@@ -75,6 +75,11 @@ export default function App() {
     navigate("/projects");
   }
 
+  async function handleRegister(username: string, password: string) {
+    await register(username, password);
+    await handleLogin(username, password);
+  }
+
   async function handleCreateProject(name: string) {
     if (!session) return;
     const project = await createProject(session.token, name);
@@ -99,7 +104,7 @@ export default function App() {
   }
 
   if (!session) {
-    return <LoginPage onLogin={handleLogin} />;
+    return <LoginPage onLogin={handleLogin} onRegister={handleRegister} />;
   }
 
   if (runRoute) {

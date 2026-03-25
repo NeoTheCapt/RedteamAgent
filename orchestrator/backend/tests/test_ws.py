@@ -33,13 +33,23 @@ def create_run(client: TestClient, token: str, project_id: int, target: str = "h
     return response.json()
 
 
+def create_ws_ticket(client: TestClient, token: str) -> str:
+    response = client.post(
+        "/auth/ws-ticket",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    return response.json()["ticket"]
+
+
 def test_websocket_receives_new_event_payload():
     client = TestClient(app)
     token = register_and_login(client, "alice")
     project = create_project(client, token)
     run = create_run(client, token, project["id"])
+    ticket = create_ws_ticket(client, token)
 
-    with client.websocket_connect(f"/ws/projects/{project['id']}/runs/{run['id']}?token={token}") as websocket:
+    with client.websocket_connect(f"/ws/projects/{project['id']}/runs/{run['id']}?ticket={ticket}") as websocket:
         response = client.post(
             f"/projects/{project['id']}/runs/{run['id']}/events",
             headers={"Authorization": f"Bearer {token}"},
@@ -64,8 +74,9 @@ def test_websocket_receives_run_status_updates():
     token = register_and_login(client, "alice")
     project = create_project(client, token)
     run = create_run(client, token, project["id"])
+    ticket = create_ws_ticket(client, token)
 
-    with client.websocket_connect(f"/ws/projects/{project['id']}/runs/{run['id']}?token={token}") as websocket:
+    with client.websocket_connect(f"/ws/projects/{project['id']}/runs/{run['id']}?ticket={ticket}") as websocket:
         response = client.post(
             f"/projects/{project['id']}/runs/{run['id']}/status",
             headers={"Authorization": f"Bearer {token}"},

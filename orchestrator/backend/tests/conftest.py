@@ -13,8 +13,11 @@ from app.config import settings
 @pytest.fixture(autouse=True)
 def isolate_data_dir(tmp_path):
     original_data_dir = settings.data_dir
+    original_auto_launch_runs = settings.auto_launch_runs
     object.__setattr__(settings, "data_dir", tmp_path)
+    object.__setattr__(settings, "auto_launch_runs", False)
     try:
         yield tmp_path
     finally:
         object.__setattr__(settings, "data_dir", original_data_dir)
+        object.__setattr__(settings, "auto_launch_runs", original_auto_launch_runs)

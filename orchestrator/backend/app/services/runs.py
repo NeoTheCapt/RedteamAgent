@@ -5,10 +5,11 @@ from pathlib import Path
 from fastapi import HTTPException, status
 
 from .. import db
+from ..config import settings
 from ..models.project import Project
 from ..models.run import Run
 from ..models.user import User
-from .launcher import prepare_run_runtime
+from .launcher import prepare_run_runtime, start_run_runtime
 
 ALLOWED_STATUSES = {"queued", "running", "completed", "failed"}
 
@@ -31,6 +32,8 @@ def create_run_for_project(project_id: int, user: User, target: str) -> Run:
     run_root.mkdir(parents=True, exist_ok=True)
     run = db.update_run_engagement_root(stub.id, str(run_root))
     prepare_run_runtime(project, run)
+    if settings.auto_launch_runs:
+        return start_run_runtime(project, run, user)
     return run
 
 
