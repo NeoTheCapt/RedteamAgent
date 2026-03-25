@@ -1,5 +1,9 @@
+import json
+from pathlib import Path
+
 from fastapi.testclient import TestClient
 
+from app import db
 from app.main import app
 
 def register_and_login(client: TestClient, username: str) -> str:
@@ -86,3 +90,66 @@ def test_run_status_transitions_require_project_ownership():
     )
     assert completed.status_code == 200
     assert completed.json()["status"] == "completed"
+
+
+def test_list_runs_marks_stale_running_process_as_failed():
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+
+    create_run = client.post(
+        f"/projects/{project['id']}/runs",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"target": "https://example.com"},
+    )
+    assert create_run.status_code == 201
+    run = create_run.json()
+
+    run_root = Path(run["engagement_root"])
+    runtime_dir = run_root / "runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    (runtime_dir / "process.json").write_text(
+        json.dumps({"pid": 999999, "command": "opencode run", "started_at": "2026-03-25T00:00:00Z"}),
+        encoding="utf-8",
+    )
+    db.update_run_status(run["id"], "running")
+
+    runs_response = client.get(
+        f"/projects/{project['id']}/runs",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert runs_response.status_code == 200
+    assert runs_response.json()[0]["status"] == "failed"
+
+
+def test_delete_run_removes_runtime_files_and_db_records():
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+
+    create_run = client.post(
+        f"/projects/{project['id']}/runs",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"target": "https://example.com"},
+    )
+    assert create_run.status_code == 201
+    run = create_run.json()
+
+    run_root = Path(run["engagement_root"])
+    runtime_dir = run_root / "runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    (runtime_dir / "process.json").write_text(
+        json.dumps({"pid": 999999, "command": "opencode run", "started_at": "2026-03-25T00:00:00Z"}),
+        encoding="utf-8",
+    )
+    db.create_event(run["id"], "run.started", "unknown", "runtime", "launcher", "started")
+
+    response = client.request(
+        "DELETE",
+        f"/projects/{project['id']}/runs/{run['id']}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 204
+    assert not run_root.exists()
+    assert db.get_run_by_id(run["id"]) is None
+    assert db.list_events_for_run(run["id"]) == []

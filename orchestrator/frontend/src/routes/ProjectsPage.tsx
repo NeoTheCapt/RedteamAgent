@@ -8,6 +8,8 @@ type ProjectsPageProps = {
   runsByProject: Record<number, Run[]>;
   onCreateProject: (name: string) => Promise<void>;
   onCreateRun: (projectId: number, target: string) => Promise<void>;
+  onDeleteProject: (projectId: number) => Promise<void>;
+  onDeleteRun: (projectId: number, runId: number) => Promise<void>;
   onOpenRun: (projectId: number, runId: number) => void;
   onLogout: () => void;
 };
@@ -18,6 +20,8 @@ export function ProjectsPage({
   runsByProject,
   onCreateProject,
   onCreateRun,
+  onDeleteProject,
+  onDeleteRun,
   onOpenRun,
   onLogout,
 }: ProjectsPageProps) {
@@ -55,6 +59,20 @@ export function ProjectsPage({
     } finally {
       setCreatingRunId(null);
     }
+  }
+
+  async function handleDeleteProject(projectId: number) {
+    if (!window.confirm("Delete this project and all of its runs?")) {
+      return;
+    }
+    await onDeleteProject(projectId);
+  }
+
+  async function handleDeleteRun(projectId: number, runId: number) {
+    if (!window.confirm("Delete this run and all of its files?")) {
+      return;
+    }
+    await onDeleteRun(projectId, runId);
   }
 
   return (
@@ -101,7 +119,16 @@ export function ProjectsPage({
                   <h2>{project.name}</h2>
                   <p className="meta-text">{project.slug}</p>
                 </div>
-                <span className="badge">{runsByProject[project.id]?.length ?? 0} runs</span>
+                <div className="project-actions">
+                  <span className="badge">{runsByProject[project.id]?.length ?? 0} runs</span>
+                  <button
+                    type="button"
+                    className="ghost-button danger-button"
+                    onClick={() => void handleDeleteProject(project.id)}
+                  >
+                    Delete project
+                  </button>
+                </div>
               </div>
               <p className="path-text">{project.root_path}</p>
 
@@ -128,18 +155,26 @@ export function ProjectsPage({
 
               <div className="run-list">
                 {(runsByProject[project.id] ?? []).map((run) => (
-                  <button
-                    key={run.id}
-                    className="run-row"
-                    onClick={() => onOpenRun(project.id, run.id)}
-                    type="button"
-                  >
-                    <div>
-                      <strong>{run.target}</strong>
-                      <p className="meta-text">{run.engagement_root}</p>
-                    </div>
-                    <span className={`status-pill status-${run.status}`}>{run.status}</span>
-                  </button>
+                  <div key={run.id} className="run-row">
+                    <button
+                      className="run-open-button"
+                      onClick={() => onOpenRun(project.id, run.id)}
+                      type="button"
+                    >
+                      <div>
+                        <strong>{run.target}</strong>
+                        <p className="meta-text">{run.engagement_root}</p>
+                      </div>
+                      <span className={`status-pill status-${run.status}`}>{run.status}</span>
+                    </button>
+                    <button
+                      type="button"
+                      className="ghost-button danger-button"
+                      onClick={() => void handleDeleteRun(project.id, run.id)}
+                    >
+                      Delete
+                    </button>
+                  </div>
                 ))}
                 {(runsByProject[project.id] ?? []).length === 0 ? (
                   <p className="empty-state">No runs yet.</p>

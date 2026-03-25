@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import shutil
 
 from fastapi import HTTPException, status
 
@@ -9,7 +10,7 @@ from ..config import settings
 from ..models.project import Project
 from ..models.run import Run
 from ..models.user import User
-from .launcher import prepare_run_runtime, start_run_runtime
+from .launcher import locate_runtime_pid, prepare_run_runtime, start_run_runtime, stop_run_runtime
 
 ALLOWED_STATUSES = {"queued", "running", "completed", "failed"}
 
@@ -37,9 +38,19 @@ def create_run_for_project(project_id: int, user: User, target: str) -> Run:
     return run
 
 
+def _reconcile_run_status(run: Run) -> Run:
+    if run.status != "running":
+        return run
+
+    if locate_runtime_pid(run) is not None:
+        return run
+
+    return db.update_run_status(run.id, "failed")
+
+
 def list_runs_for_project(project_id: int, user: User) -> list[Run]:
     project = _project_or_404(project_id, user)
-    return db.list_runs_for_project(project.id)
+    return [_reconcile_run_status(run) for run in db.list_runs_for_project(project.id)]
 
 
 def update_run_status(project_id: int, run_id: int, user: User, status_value: str) -> Run:
@@ -52,3 +63,16 @@ def update_run_status(project_id: int, run_id: int, user: User, status_value: st
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
 
     return db.update_run_status(run_id, status_value)
+
+
+def delete_run_for_project(project_id: int, run_id: int, user: User) -> None:
+    project = _project_or_404(project_id, user)
+    run = db.get_run_by_id(run_id)
+    if run is None or run.project_id != project.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
+
+    stop_run_runtime(run)
+    run_root = Path(run.engagement_root)
+    if run_root.exists():
+        shutil.rmtree(run_root, ignore_errors=True)
+    db.delete_run(run.id)
