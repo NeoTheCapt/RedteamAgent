@@ -1,19 +1,6 @@
-import sys
-from pathlib import Path
-
-repo_root = Path(__file__).resolve().parents[3]
-backend_root = repo_root / "orchestrator" / "backend"
-sys.path.insert(0, str(backend_root))
-
 from fastapi.testclient import TestClient
 
-from app.config import settings
 from app.main import app
-
-
-def configure_temp_data_dir(tmp_path: Path) -> None:
-    object.__setattr__(settings, "data_dir", tmp_path)
-
 
 def register_and_login(client: TestClient, username: str) -> str:
     client.post("/auth/register", json={"username": username, "password": "secret-password"})
@@ -45,8 +32,7 @@ def create_run(client: TestClient, token: str, project_id: int, target: str = "h
     return response.json()
 
 
-def test_persist_events_and_list_them_by_run(tmp_path):
-    configure_temp_data_dir(tmp_path)
+def test_persist_events_and_list_them_by_run():
     client = TestClient(app)
 
     token = register_and_login(client, "alice")
@@ -77,8 +63,7 @@ def test_persist_events_and_list_them_by_run(tmp_path):
     assert list_events.json()[0]["summary"] == "Recon phase started"
 
 
-def test_latest_phase_and_task_state_summary(tmp_path):
-    configure_temp_data_dir(tmp_path)
+def test_latest_phase_and_task_state_summary():
     client = TestClient(app)
 
     token = register_and_login(client, "alice")

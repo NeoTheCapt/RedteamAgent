@@ -3,11 +3,13 @@ from __future__ import annotations
 import hashlib
 import hmac
 import secrets
+from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
 from fastapi import Depends, Header, HTTPException, status
 
 from . import db
+from .config import settings
 from .models.user import User
 
 SALT_BYTES = 16
@@ -35,6 +37,18 @@ def create_session_token() -> str:
     return secrets.token_urlsafe(TOKEN_BYTES)
 
 
+def utc_now() -> datetime:
+    return datetime.now(UTC)
+
+
+def format_utc_timestamp(value: datetime) -> str:
+    return value.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def session_expiry_timestamp() -> str:
+    return format_utc_timestamp(utc_now() + timedelta(hours=settings.session_ttl_hours))
+
+
 def parse_bearer_token(authorization: str | None) -> str:
     if not authorization:
         raise HTTPException(
@@ -58,7 +72,7 @@ def get_current_user(
     authorization: Annotated[str | None, Header(alias="Authorization")] = None,
 ) -> User:
     token = parse_bearer_token(authorization)
-    user = db.get_user_by_token(token)
+    user = db.get_user_by_token(token, format_utc_timestamp(utc_now()))
     if user is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

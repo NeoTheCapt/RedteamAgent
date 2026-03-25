@@ -12,6 +12,10 @@ from .models.run import Run
 from .models.user import User
 
 
+class UsernameAlreadyExistsError(Exception):
+    pass
+
+
 def database_path() -> Path:
     return settings.data_dir / "orchestrator.sqlite3"
 
@@ -36,11 +40,20 @@ def init_db() -> None:
             CREATE TABLE IF NOT EXISTS sessions (
                 token TEXT PRIMARY KEY,
                 user_id INTEGER NOT NULL,
+                expires_at TEXT NOT NULL,
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
             )
             """
         )
+        columns = {
+            row[1]
+            for row in connection.execute("PRAGMA table_info(sessions)").fetchall()
+        }
+        if "expires_at" not in columns:
+            connection.execute(
+                "ALTER TABLE sessions ADD COLUMN expires_at TEXT NOT NULL DEFAULT '1970-01-01T00:00:00Z'"
+            )
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS projects (
@@ -102,13 +115,16 @@ def get_connection() -> Iterator[sqlite3.Connection]:
 
 def create_user(username: str, password_hash: str, salt: str) -> User:
     with get_connection() as connection:
-        cursor = connection.execute(
-            """
-            INSERT INTO users (username, password_hash, salt)
-            VALUES (?, ?, ?)
-            """,
-            (username, password_hash, salt),
-        )
+        try:
+            cursor = connection.execute(
+                """
+                INSERT INTO users (username, password_hash, salt)
+                VALUES (?, ?, ?)
+                """,
+                (username, password_hash, salt),
+            )
+        except sqlite3.IntegrityError as exc:
+            raise UsernameAlreadyExistsError(username) from exc
         row = connection.execute(
             "SELECT id, username, password_hash, salt, created_at FROM users WHERE id = ?",
             (cursor.lastrowid,),
@@ -143,27 +159,27 @@ def get_user_by_id(user_id: int) -> User | None:
     return User.from_row(row) if row else None
 
 
-def create_session(user_id: int, token: str) -> None:
+def create_session(user_id: int, token: str, expires_at: str) -> None:
     with get_connection() as connection:
         connection.execute(
             """
-            INSERT INTO sessions (token, user_id)
-            VALUES (?, ?)
+            INSERT INTO sessions (token, user_id, expires_at)
+            VALUES (?, ?, ?)
             """,
-            (token, user_id),
+            (token, user_id, expires_at),
         )
 
 
-def get_user_by_token(token: str) -> User | None:
+def get_user_by_token(token: str, now_utc: str) -> User | None:
     with get_connection() as connection:
         row = connection.execute(
             """
             SELECT u.id, u.username, u.password_hash, u.salt, u.created_at
             FROM sessions AS s
             JOIN users AS u ON u.id = s.user_id
-            WHERE s.token = ?
+            WHERE s.token = ? AND s.expires_at > ?
             """,
-            (token,),
+            (token, now_utc),
         ).fetchone()
     return User.from_row(row) if row else None
 
