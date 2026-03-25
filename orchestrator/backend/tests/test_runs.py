@@ -39,7 +39,7 @@ def test_create_run_and_list_project_runs(isolate_data_dir):
     assert run_payload["status"] == "queued"
     assert run_payload["target"] == "https://example.com"
     assert run_payload["engagement_root"] == str(
-        isolate_data_dir / "projects" / "alice" / "alpha" / "runs" / "run-0001"
+        isolate_data_dir / "projects-root" / "alice" / "alpha" / "runs" / "run-0001"
     )
 
     runs_response = client.get(

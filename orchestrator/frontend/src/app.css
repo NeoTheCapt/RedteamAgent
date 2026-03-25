@@ -327,6 +327,12 @@ input {
   font-size: 0.9rem;
 }
 
+.muted-text {
+  color: #6b685d;
+  font-size: 0.88rem;
+  margin: -0.3rem 0 0;
+}
+
 .error-text {
   color: #991b1b;
   font-size: 0.9rem;

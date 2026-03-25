@@ -64,9 +64,11 @@ export function LoginPage({ onLogin, onRegister }: LoginPageProps) {
               type="password"
               value={password}
               onChange={(event) => setPassword(event.target.value)}
+              minLength={mode === "register" ? 8 : 1}
               required
             />
           </label>
+          {mode === "register" ? <p className="muted-text">Password must be at least 8 characters.</p> : null}
           {error ? <p className="error-text">{error}</p> : null}
           <button type="submit" className="primary-button" disabled={submitting}>
             {submitting ? "Working..." : mode === "login" ? "Sign in" : "Create user"}

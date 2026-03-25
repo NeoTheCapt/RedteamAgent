@@ -33,7 +33,7 @@ def test_create_project_and_list_only_owner_projects(isolate_data_dir):
     assert created_project["id"] == 1
     assert created_project["name"] == "Alpha"
     assert created_project["slug"] == "alpha"
-    assert created_project["root_path"] == str(isolate_data_dir / "projects" / "alice" / "alpha")
+    assert created_project["root_path"] == str(isolate_data_dir / "projects-root" / "alice" / "alpha")
 
     alice_projects = client.get(
         "/projects",
@@ -69,7 +69,7 @@ def test_project_roots_are_isolated_per_user_and_slug_conflict_is_rejected(isola
         json={"name": "Demo Workspace"},
     )
     assert bob_project.status_code == 201
-    assert bob_project.json()["root_path"] == str(isolate_data_dir / "projects" / "bob" / "demo-workspace")
+    assert bob_project.json()["root_path"] == str(isolate_data_dir / "projects-root" / "bob" / "demo-workspace")
 
     duplicate_for_alice = client.post(
         "/projects",
