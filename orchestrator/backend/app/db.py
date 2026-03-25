@@ -7,6 +7,7 @@ from typing import Iterator
 
 from .config import settings
 from .models.project import Project
+from .models.run import Run
 from .models.user import User
 
 
@@ -50,6 +51,20 @@ def init_db() -> None:
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(user_id, slug),
                 FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                project_id INTEGER NOT NULL,
+                target TEXT NOT NULL,
+                status TEXT NOT NULL,
+                engagement_root TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
             )
             """
         )
@@ -183,3 +198,108 @@ def list_projects_for_user(user_id: int) -> list[Project]:
             (user_id,),
         ).fetchall()
     return [Project.from_row(row) for row in rows]
+
+
+def get_project_by_id(project_id: int) -> Project | None:
+    with get_connection() as connection:
+        row = connection.execute(
+            """
+            SELECT id, user_id, name, slug, root_path, created_at
+            FROM projects
+            WHERE id = ?
+            """,
+            (project_id,),
+        ).fetchone()
+    return Project.from_row(row) if row else None
+
+
+def create_run(project_id: int, target: str, status: str, engagement_root: str) -> Run:
+    with get_connection() as connection:
+        cursor = connection.execute(
+            """
+            INSERT INTO runs (project_id, target, status, engagement_root)
+            VALUES (?, ?, ?, ?)
+            """,
+            (project_id, target, status, engagement_root),
+        )
+        row = connection.execute(
+            """
+            SELECT id, project_id, target, status, engagement_root, created_at, updated_at
+            FROM runs
+            WHERE id = ?
+            """,
+            (cursor.lastrowid,),
+        ).fetchone()
+        assert row is not None
+        return Run.from_row(row)
+
+
+def update_run_engagement_root(run_id: int, engagement_root: str) -> Run:
+    with get_connection() as connection:
+        connection.execute(
+            """
+            UPDATE runs
+            SET engagement_root = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (engagement_root, run_id),
+        )
+        row = connection.execute(
+            """
+            SELECT id, project_id, target, status, engagement_root, created_at, updated_at
+            FROM runs
+            WHERE id = ?
+            """,
+            (run_id,),
+        ).fetchone()
+        assert row is not None
+        return Run.from_row(row)
+
+
+def list_runs_for_project(project_id: int) -> list[Run]:
+    with get_connection() as connection:
+        rows = connection.execute(
+            """
+            SELECT id, project_id, target, status, engagement_root, created_at, updated_at
+            FROM runs
+            WHERE project_id = ?
+            ORDER BY id ASC
+            """,
+            (project_id,),
+        ).fetchall()
+    return [Run.from_row(row) for row in rows]
+
+
+def get_run_by_id(run_id: int) -> Run | None:
+    with get_connection() as connection:
+        row = connection.execute(
+            """
+            SELECT id, project_id, target, status, engagement_root, created_at, updated_at
+            FROM runs
+            WHERE id = ?
+            """,
+            (run_id,),
+        ).fetchone()
+    return Run.from_row(row) if row else None
+
+
+def update_run_status(run_id: int, status: str) -> Run:
+    with get_connection() as connection:
+        connection.execute(
+            """
+            UPDATE runs
+            SET status = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (status, run_id),
+        )
+        row = connection.execute(
+            """
+            SELECT id, project_id, target, status, engagement_root, created_at, updated_at
+            FROM runs
+            WHERE id = ?
+            """,
+            (run_id,),
+        ).fetchone()
+        assert row is not None
+        return Run.from_row(row)
