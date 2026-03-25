@@ -9,7 +9,18 @@ Do not use the task tool or any general subagent for Steps 1-5. Perform initiali
 
 ## Step 1: Parse Target
 
-Extract the target URL from the user's arguments appended after this template. Identify:
+Extract the target from the user's arguments appended after this template. Use these parsing rules exactly:
+- The **first non-flag token** after `/engage` is always the target.
+- Valid examples that MUST be accepted without asking again:
+  - `/engage example.com`
+  - `/engage https://example.com`
+  - `/engage http://127.0.0.1:8000`
+  - `/engage --auto example.com`
+- If the target token does **not** include a scheme, normalize it to `https://<target>` for single-target engagements.
+- Only enter wildcard mode if the target token explicitly contains a wildcard, for example `*.example.com` or `*`.
+- Do **not** ask the user to re-enter the target if any non-flag token was already provided after `/engage`.
+
+Identify:
 - Full URL (scheme, host, port, path)
 - Hostname (for directory naming and scope derivation)
 - Port (default 80/443 if not specified)
@@ -19,7 +30,8 @@ If no target is provided in the arguments, ask the user for one before proceedin
 
 **Target type:**
 - IP address or specific subdomain → **SINGLE TARGET** → Step 2
-- Wildcard `*` or bare domain → **WILDCARD** → see Appendix A at bottom
+- Bare domain without wildcard → **SINGLE TARGET** → Step 2
+- Wildcard `*` or `*.` pattern → **WILDCARD** → see Appendix A at bottom
 
 ## Step 2: Create Engagement Directory and Files
 
