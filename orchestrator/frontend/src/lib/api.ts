@@ -43,6 +43,10 @@ export type ArtifactContent = Artifact & {
   content: string;
 };
 
+export type WebSocketTicketResponse = {
+  ticket: string;
+};
+
 const API_BASE = "";
 
 async function request<T>(path: string, init: RequestInit = {}, token?: string): Promise<T> {
@@ -69,6 +73,13 @@ async function request<T>(path: string, init: RequestInit = {}, token?: string):
 
 export function login(username: string, password: string) {
   return request<AuthResponse>("/auth/login", {
+    method: "POST",
+    body: JSON.stringify({ username, password }),
+  });
+}
+
+export function register(username: string, password: string) {
+  return request<{ id: number; username: string }>("/auth/register", {
     method: "POST",
     body: JSON.stringify({ username, password }),
   });
@@ -108,8 +119,12 @@ export function readArtifact(token: string, projectId: number, runId: number, ar
   return request<ArtifactContent>(`/projects/${projectId}/runs/${runId}/artifacts/${artifactName}`, {}, token);
 }
 
-export function runWebSocketUrl(projectId: number, runId: number, token: string) {
+export function createWebSocketTicket(token: string) {
+  return request<WebSocketTicketResponse>("/auth/ws-ticket", { method: "POST" }, token);
+}
+
+export function runWebSocketUrl(projectId: number, runId: number, ticket: string) {
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
   const host = window.location.host;
-  return `${protocol}//${host}/ws/projects/${projectId}/runs/${runId}?token=${encodeURIComponent(token)}`;
+  return `${protocol}//${host}/ws/projects/${projectId}/runs/${runId}?ticket=${encodeURIComponent(ticket)}`;
 }

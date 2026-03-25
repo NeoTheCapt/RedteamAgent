@@ -12,6 +12,7 @@ from ..security import (
     session_expiry_timestamp,
     verify_password,
 )
+from ..ws import ws_tickets
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -35,6 +36,10 @@ class LoginResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     user: UserResponse
+
+
+class WebSocketTicketResponse(BaseModel):
+    ticket: str
 
 
 def _user_response(user: User) -> UserResponse:
@@ -68,3 +73,8 @@ def login(request: LoginRequest) -> LoginResponse:
 @router.get("/me", response_model=UserResponse)
 def me(current_user: CurrentUser) -> UserResponse:
     return _user_response(current_user)
+
+
+@router.post("/ws-ticket", response_model=WebSocketTicketResponse)
+def websocket_ticket(current_user: CurrentUser) -> WebSocketTicketResponse:
+    return WebSocketTicketResponse(ticket=ws_tickets.issue(current_user.id))

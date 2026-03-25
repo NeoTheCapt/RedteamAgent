@@ -5,6 +5,7 @@ import {
   ArtifactContent,
   EventRecord,
   Run,
+  createWebSocketTicket,
   listArtifacts,
   listEvents,
   listRuns,
@@ -29,18 +30,30 @@ export function RunPage({ token, projectId, runId, onBack }: RunPageProps) {
   const [selectedName, setSelectedName] = useState<string | null>(null);
   const [selectedArtifact, setSelectedArtifact] = useState<ArtifactContent | null>(null);
 
+  function refreshArtifacts() {
+    listArtifacts(token, projectId, runId).then((nextArtifacts) => {
+      setArtifacts(nextArtifacts);
+      if (!selectedName) {
+        const firstAvailable = nextArtifacts.find((artifact) => artifact.exists);
+        if (firstAvailable) {
+          setSelectedName(firstAvailable.name);
+        }
+      }
+    });
+  }
+
+  function refreshSelectedArtifact(name: string) {
+    readArtifact(token, projectId, runId, name)
+      .then(setSelectedArtifact)
+      .catch(() => setSelectedArtifact(null));
+  }
+
   useEffect(() => {
     listRuns(token, projectId).then((runs) => {
       setRun(runs.find((candidate) => candidate.id === runId) ?? null);
     });
     listEvents(token, projectId, runId).then(setEvents);
-    listArtifacts(token, projectId, runId).then((nextArtifacts) => {
-      setArtifacts(nextArtifacts);
-      const firstAvailable = nextArtifacts.find((artifact) => artifact.exists);
-      if (firstAvailable) {
-        setSelectedName(firstAvailable.name);
-      }
-    });
+    refreshArtifacts();
   }, [projectId, runId, token]);
 
   useEffect(() => {
@@ -48,24 +61,40 @@ export function RunPage({ token, projectId, runId, onBack }: RunPageProps) {
       setSelectedArtifact(null);
       return;
     }
-    readArtifact(token, projectId, runId, selectedName)
-      .then(setSelectedArtifact)
-      .catch(() => setSelectedArtifact(null));
+    refreshSelectedArtifact(selectedName);
   }, [projectId, runId, selectedName, token]);
 
   useEffect(() => {
-    const socket = new WebSocket(runWebSocketUrl(projectId, runId, token));
-    socket.onmessage = (message) => {
-      const payload = JSON.parse(message.data);
-      if (payload.type === "event.created") {
-        setEvents((current) => [...current, payload.event as EventRecord]);
+    let socket: WebSocket | null = null;
+    let cancelled = false;
+
+    async function connect() {
+      const ticket = await createWebSocketTicket(token);
+      if (cancelled) {
+        return;
       }
-      if (payload.type === "run.status.updated") {
-        setRun(payload.run as Run);
-      }
-    };
+
+      socket = new WebSocket(runWebSocketUrl(projectId, runId, ticket.ticket));
+      socket.onmessage = (message) => {
+        const payload = JSON.parse(message.data);
+        if (payload.type === "event.created") {
+          setEvents((current) => [...current, payload.event as EventRecord]);
+        }
+        if (payload.type === "run.status.updated") {
+          setRun(payload.run as Run);
+        }
+        refreshArtifacts();
+        if (selectedName) {
+          refreshSelectedArtifact(selectedName);
+        }
+      };
+    }
+
+    void connect();
+
     return () => {
-      socket.close();
+      cancelled = true;
+      socket?.close();
     };
   }, [projectId, runId, token]);
 

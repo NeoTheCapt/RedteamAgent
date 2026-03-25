@@ -26,12 +26,16 @@ print(json.dumps({
 PY
 )"
 
-curl -fsS \
-  -H "Authorization: Bearer ${ORCHESTRATOR_TOKEN}" \
-  -H "Content-Type: application/json" \
-  -X POST \
-  --data "$payload" \
-  "${ORCHESTRATOR_BASE_URL%/}/projects/${ORCHESTRATOR_PROJECT_ID}/runs/${ORCHESTRATOR_RUN_ID}/events" >/dev/null || {
-    printf 'warning: failed to emit runtime event %s\n' "$EVENT_TYPE" >&2
-    exit 0
-  }
+(
+  curl -fsS \
+    --connect-timeout 1 \
+    --max-time 2 \
+    -H "Authorization: Bearer ${ORCHESTRATOR_TOKEN}" \
+    -H "Content-Type: application/json" \
+    -X POST \
+    --data "$payload" \
+    "${ORCHESTRATOR_BASE_URL%/}/projects/${ORCHESTRATOR_PROJECT_ID}/runs/${ORCHESTRATOR_RUN_ID}/events" >/dev/null || {
+      printf 'warning: failed to emit runtime event %s\n' "$EVENT_TYPE" >&2
+      exit 0
+    }
+) >/dev/null 2>&1 &

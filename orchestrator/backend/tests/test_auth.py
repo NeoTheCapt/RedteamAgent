@@ -92,3 +92,25 @@ def test_expired_session_token_is_rejected():
 
     expired_me = client.get("/auth/me", headers={"Authorization": f"Bearer {token}"})
     assert expired_me.status_code == 401
+
+
+def test_websocket_ticket_requires_authenticated_session():
+    client = TestClient(app)
+
+    unauthenticated = client.post("/auth/ws-ticket")
+    assert unauthenticated.status_code == 401
+
+    register_response = client.post(
+        "/auth/register",
+        json={"username": "dana", "password": "secret-password"},
+    )
+    assert register_response.status_code == 201
+    login_response = client.post(
+        "/auth/login",
+        json={"username": "dana", "password": "secret-password"},
+    )
+    token = login_response.json()["access_token"]
+
+    authenticated = client.post("/auth/ws-ticket", headers={"Authorization": f"Bearer {token}"})
+    assert authenticated.status_code == 200
+    assert authenticated.json()["ticket"]

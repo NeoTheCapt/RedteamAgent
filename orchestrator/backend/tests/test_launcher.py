@@ -1,8 +1,10 @@
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
+from app.config import settings
 from app.main import app
 
 
@@ -65,3 +67,26 @@ def test_each_run_gets_its_own_runtime_root():
     assert first_run["engagement_root"] != second_run["engagement_root"]
     assert Path(first_run["engagement_root"], "run.json").exists()
     assert Path(second_run["engagement_root"], "run.json").exists()
+
+
+def test_create_run_can_auto_launch_when_enabled(monkeypatch):
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+
+    class FakeProcess:
+        def wait(self):
+            return 0
+
+    monkeypatch.setattr("app.services.launcher.subprocess.run", lambda *args, **kwargs: None)
+    monkeypatch.setattr("app.services.launcher.subprocess.Popen", lambda *args, **kwargs: FakeProcess())
+    monkeypatch.setattr("app.services.launcher.Thread", lambda *args, **kwargs: SimpleNamespace(start=lambda: None))
+    object.__setattr__(settings, "auto_launch_runs", True)
+
+    try:
+        run = create_run(client, token, project["id"], "https://launched.example")
+    finally:
+        object.__setattr__(settings, "auto_launch_runs", False)
+
+    assert run["status"] == "running"
+    assert Path(run["engagement_root"], "runtime", "process.log").exists()

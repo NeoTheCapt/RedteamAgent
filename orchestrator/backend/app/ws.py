@@ -1,8 +1,17 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from dataclasses import dataclass
+from time import time
+import secrets
 
 from fastapi import WebSocket
+
+
+@dataclass(slots=True)
+class TicketRecord:
+    user_id: int
+    expires_at: float
 
 
 class RunBroadcaster:
@@ -32,3 +41,24 @@ class RunBroadcaster:
 
 
 broadcaster = RunBroadcaster()
+
+
+class WebSocketTicketStore:
+    def __init__(self) -> None:
+        self._tickets: dict[str, TicketRecord] = {}
+
+    def issue(self, user_id: int, ttl_seconds: int = 30) -> str:
+        token = secrets.token_urlsafe(24)
+        self._tickets[token] = TicketRecord(user_id=user_id, expires_at=time() + ttl_seconds)
+        return token
+
+    def consume(self, token: str) -> int | None:
+        record = self._tickets.pop(token, None)
+        if record is None:
+            return None
+        if record.expires_at <= time():
+            return None
+        return record.user_id
+
+
+ws_tickets = WebSocketTicketStore()
