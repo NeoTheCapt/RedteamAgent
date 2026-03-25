@@ -116,6 +116,7 @@ shells/
 # Node/TypeScript (plugin compilation)
 # ============================================
 node_modules/
+orchestrator/frontend/dist/
 *.js
 *.d.ts
 *.js.map
