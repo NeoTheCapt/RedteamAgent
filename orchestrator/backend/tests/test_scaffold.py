@@ -30,4 +30,4 @@ def test_orchestrator_backend_import_and_healthz():
         sys.path.remove(str(backend_root))
 
     assert app.title == "Redteam Orchestrator"
-    assert healthz() == {"status": "ok"}
+    assert healthz() == {"status": "ok", "app": "Redteam Orchestrator"}
