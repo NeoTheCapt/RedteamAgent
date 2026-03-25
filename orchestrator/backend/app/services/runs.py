@@ -8,6 +8,7 @@ from .. import db
 from ..models.project import Project
 from ..models.run import Run
 from ..models.user import User
+from .launcher import prepare_run_runtime
 
 ALLOWED_STATUSES = {"queued", "running", "completed", "failed"}
 
@@ -28,7 +29,9 @@ def create_run_for_project(project_id: int, user: User, target: str) -> Run:
     stub = db.create_run(project.id, target.strip(), "queued", "")
     run_root = run_root_for(project, stub.id)
     run_root.mkdir(parents=True, exist_ok=True)
-    return db.update_run_engagement_root(stub.id, str(run_root))
+    run = db.update_run_engagement_root(stub.id, str(run_root))
+    prepare_run_runtime(project, run)
+    return run
 
 
 def list_runs_for_project(project_id: int, user: User) -> list[Run]:
