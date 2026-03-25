@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Iterator
 
 from .config import settings
+from .models.project import Project
 from .models.user import User
 
 
@@ -34,6 +35,20 @@ def init_db() -> None:
                 token TEXT PRIMARY KEY,
                 user_id INTEGER NOT NULL,
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS projects (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                name TEXT NOT NULL,
+                slug TEXT NOT NULL,
+                root_path TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(user_id, slug),
                 FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
             )
             """
@@ -120,3 +135,51 @@ def get_user_by_token(token: str) -> User | None:
             (token,),
         ).fetchone()
     return User.from_row(row) if row else None
+
+
+def create_project(user_id: int, name: str, slug: str, root_path: str) -> Project:
+    with get_connection() as connection:
+        cursor = connection.execute(
+            """
+            INSERT INTO projects (user_id, name, slug, root_path)
+            VALUES (?, ?, ?, ?)
+            """,
+            (user_id, name, slug, root_path),
+        )
+        row = connection.execute(
+            """
+            SELECT id, user_id, name, slug, root_path, created_at
+            FROM projects
+            WHERE id = ?
+            """,
+            (cursor.lastrowid,),
+        ).fetchone()
+        assert row is not None
+        return Project.from_row(row)
+
+
+def get_project_by_user_and_slug(user_id: int, slug: str) -> Project | None:
+    with get_connection() as connection:
+        row = connection.execute(
+            """
+            SELECT id, user_id, name, slug, root_path, created_at
+            FROM projects
+            WHERE user_id = ? AND slug = ?
+            """,
+            (user_id, slug),
+        ).fetchone()
+    return Project.from_row(row) if row else None
+
+
+def list_projects_for_user(user_id: int) -> list[Project]:
+    with get_connection() as connection:
+        rows = connection.execute(
+            """
+            SELECT id, user_id, name, slug, root_path, created_at
+            FROM projects
+            WHERE user_id = ?
+            ORDER BY id ASC
+            """,
+            (user_id,),
+        ).fetchall()
+    return [Project.from_row(row) for row in rows]
