@@ -12,7 +12,9 @@ hard_error='{"request":{"endpoint":"https://example.test/down"},"error":"dial tc
 empty='{"foo":"bar"}'
 good_request='{"url":"https://example.test/rest/admin/application-configuration","source_ref":"https://example.test/"}'
 quoted_noise_request='{"url":"https://example.test/rest/admin/%5C%22/"}'
+robots_wildcard_noise_request='{"url":"https://example.test/*/kyc-verify$","source_ref":"https://example.test/robots.txt","tag":"file","attribute":"robotstxt","error":"hybrid: response is nil"}'
 binary_source_noise_request='{"url":"https://example.test/assets/public/images/w","source_ref":"https://example.test/assets/public/images/JuiceShop_Logo.png","tag":"html","attribute":"regex","error":"cause=\"context deadline exceeded\" chain=\"hybrid: could not get dom\""}'
+wasm_source_noise_request='{"url":"https://example.test/cdn/assets/okfe/okt/polyfill-automatic/Bun/","source_ref":"https://example.test/cdn/assets/okfe/okt/polyfill-automatic/f220424697ac3c8ba96a.wasm.br","tag":"html","attribute":"regex","error":"hybrid: response is nil"}'
 
 katana_line_should_ingest "$good"
 katana_line_should_ingest "$plain"
@@ -34,8 +36,18 @@ if katana_request_should_ingest "$quoted_noise_request"; then
   exit 1
 fi
 
+if katana_request_should_ingest "$robots_wildcard_noise_request"; then
+  echo "[FAIL] robots wildcard noise path should not be ingested" >&2
+  exit 1
+fi
+
 if katana_request_should_ingest "$binary_source_noise_request"; then
   echo "[FAIL] katana discovery from binary source should not be ingested" >&2
+  exit 1
+fi
+
+if katana_request_should_ingest "$wasm_source_noise_request"; then
+  echo "[FAIL] katana discovery from wasm source should not be ingested" >&2
   exit 1
 fi
 
