@@ -66,19 +66,25 @@ export const EngagementHooksPlugin = async ({
     }
   }
 
+  const canonicalEngagementDir = async (candidate: string | null | undefined): Promise<string | null> => {
+    if (!candidate) return null
+    const resolved = path.isAbsolute(candidate) ? candidate : path.join(root, candidate)
+    return validEngagementDir(resolved)
+  }
+
   /**
    * Resolve engagement directory using the same precedence as shell helpers:
    * ENGAGEMENT_DIR env -> engagements/.active -> most recent engagements/* directory.
    */
   const resolveEngagementDir = async (): Promise<string | null> => {
-    const envDir = await validEngagementDir(process.env.ENGAGEMENT_DIR)
+    const envDir = await canonicalEngagementDir(process.env.ENGAGEMENT_DIR)
     if (envDir) return envDir
 
     const engagementsDir = path.join(root, "engagements")
     try {
       const activePath = path.join(engagementsDir, ".active")
       const active = (await readFile(activePath, "utf8")).trim()
-      const activeDir = await validEngagementDir(active)
+      const activeDir = await canonicalEngagementDir(active)
       if (activeDir) return activeDir
     } catch {
       // no active engagement marker
