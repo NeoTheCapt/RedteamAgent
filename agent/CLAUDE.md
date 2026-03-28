@@ -206,7 +206,8 @@ No applicable skill? → check references/INDEX.md. Still nothing? → propose a
 
 On start or `/resume`:
 ```bash
-ENG_DIR=$(ls -td engagements/*/ 2>/dev/null | head -1 | sed 's|/$||')
+source scripts/lib/engagement.sh
+ENG_DIR=$(resolve_engagement_dir "$(pwd)")
 cat "$ENG_DIR/scope.json"
 ./scripts/dispatcher.sh "$ENG_DIR/cases.db" stats 2>/dev/null
 ```
