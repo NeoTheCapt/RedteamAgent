@@ -96,7 +96,7 @@ def test_run_status_transitions_require_project_ownership():
     assert completed.json()["status"] == "completed"
 
 
-def test_list_runs_marks_orphaned_running_container_as_failed(monkeypatch):
+def test_list_runs_keeps_running_container_alive_across_backend_restart(monkeypatch):
     client = TestClient(app)
     token = register_and_login(client, "alice")
     project = create_project(client, token)
@@ -140,8 +140,8 @@ def test_list_runs_marks_orphaned_running_container_as_failed(monkeypatch):
         headers={"Authorization": f"Bearer {token}"},
     )
     assert runs_response.status_code == 200
-    assert runs_response.json()[0]["status"] == "failed"
-    assert stopped == [run["id"]]
+    assert runs_response.json()[0]["status"] == "running"
+    assert stopped == []
 
 
 
