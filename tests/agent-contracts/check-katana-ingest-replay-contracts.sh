@@ -150,6 +150,39 @@ rows = [
             "source": "http://host.docker.internal:8000/assets/public/images/JuiceShop_Logo.png"
         },
         "error": "cause=\"context deadline exceeded\" chain=\"hybrid: could not get dom\""
+    },
+    {
+        "timestamp": "2026-03-28T00:02:03Z",
+        "request": {
+            "method": "GET",
+            "endpoint": "https://www.okx.com/*/kyc-verify$",
+            "tag": "file",
+            "attribute": "robotstxt",
+            "source": "https://www.okx.com/robots.txt"
+        },
+        "error": "hybrid: response is nil"
+    },
+    {
+        "timestamp": "2026-03-28T00:02:04Z",
+        "request": {
+            "method": "GET",
+            "endpoint": "https://www.okx.com/cdn/assets/okfe/util/monitor/2.6.149/scripts/lib/",
+            "tag": "html",
+            "attribute": "regex",
+            "source": "https://www.okx.com/cdn/assets/okfe/util/monitor/2.6.149/index.js"
+        },
+        "error": "hybrid: response is nil"
+    },
+    {
+        "timestamp": "2026-03-28T00:02:05Z",
+        "request": {
+            "method": "GET",
+            "endpoint": "https://www.okx.com/cdn/assets/okfe/okt/polyfill-automatic/Bun/",
+            "tag": "html",
+            "attribute": "regex",
+            "source": "https://www.okx.com/cdn/assets/okfe/okt/polyfill-automatic/f220424697ac3c8ba96a.wasm.br"
+        },
+        "error": "hybrid: response is nil"
     }
 ]
 Path(sys.argv[1]).write_text("\n".join(json.dumps(row, separators=(",", ":")) for row in rows), encoding="utf-8")
@@ -162,7 +195,7 @@ filtered_cases="$(sqlite3 "$ENG_DIR/cases.db" 'select count(*) from cases;')"
   exit 1
 }
 sqlite3 "$ENG_DIR/cases.db" 'select url from cases;' | grep -q '/rest/admin/application-configuration'
-if sqlite3 "$ENG_DIR/cases.db" 'select url from cases;' | grep -q '%5C%22\|/assets/public/images/w'; then
+if sqlite3 "$ENG_DIR/cases.db" 'select url from cases;' | grep -q '%5C%22\|/assets/public/images/w\|\*/kyc-verify\$\|/scripts/lib/\|/Bun/'; then
   echo "expected malformed katana discoveries to be filtered from replay" >&2
   exit 1
 fi
