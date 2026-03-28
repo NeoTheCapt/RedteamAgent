@@ -102,7 +102,7 @@ def test_create_run_can_auto_launch_when_enabled(monkeypatch):
     assert Path(run["engagement_root"], "runtime", "process.log").exists()
 
 
-def test_locate_runtime_pid_treats_running_container_without_matching_launcher_pid_as_orphaned(monkeypatch):
+def test_locate_runtime_pid_treats_running_container_without_matching_launcher_pid_as_live_runtime(monkeypatch):
     client = TestClient(app)
     token = register_and_login(client, "alice")
     project = create_project(client, token)
@@ -126,7 +126,7 @@ def test_locate_runtime_pid_treats_running_container_without_matching_launcher_p
 
     from app.services.launcher import locate_runtime_pid
 
-    assert locate_runtime_pid(db.get_run_by_id(run["id"])) is None
+    assert locate_runtime_pid(db.get_run_by_id(run["id"])) == -1
 
 
 
