@@ -7,7 +7,8 @@ This is a shortcut for `/engage --auto`. Run the engage workflow in fully autono
 2. NEVER stop and wait. If something fails, log it and move on.
 3. Auto-select PARALLEL for everything.
 4. Only stop when all cases are processed, processing=0, attack paths are exhausted, collection health passes, and surface coverage is resolved, OR user types `/stop`.
-5. If stopping for any non-completion reason, emit an explicit stop reason in the format:
+5. Never emit a standalone initialization/update message and then stop. After initialization, the same turn must continue into real work (todowrite, recon dispatches, queue work, or another concrete tool action).
+6. If stopping for any non-completion reason, emit an explicit stop reason in the format:
    `Stop reason: <code> — <reason>`
 
 ## Execute

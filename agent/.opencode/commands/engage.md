@@ -237,7 +237,7 @@ TUI progress panel is driven by the todo list.
    - **recon-specialist**: HTTP fingerprinting, directory fuzzing, port scanning
    - **source-analyzer**: HTML/JS/CSS analysis for hidden routes, API endpoints, secrets
 3. **INTERACTIVE MODE**: wait for user approval before sending traffic.
-   **AUTONOMOUS MODE**: announce recon start, then send traffic immediately.
+   **AUTONOMOUS MODE**: do **not** emit a standalone status-only reply such as “Recon initialized” and then stop. In the same assistant turn, immediately send traffic by dispatching BOTH recon agents with the task tool. A text announcement is optional, but if you include one it MUST be combined with the actual recon-specialist and source-analyzer task dispatches in that same turn.
 4. After recon completes, record ALL findings to `findings.md`.
 5. At every later phase transition, append one concise operator timeline entry via `./scripts/append_log_entry.sh`.
 

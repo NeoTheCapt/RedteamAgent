@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import signal
 import sqlite3
 import subprocess
@@ -301,11 +302,30 @@ def _terminal_reason(
     return ("runtime_exit_failure", f"Runtime exited with non-zero status {return_code}.", "Runtime exited with failure.")
 
 
+def _sync_agent_source_into_workspace(run: Run) -> None:
+    source_root = Path(settings.agent_source_dir)
+    workspace_root = workspace_root_for(run)
+    excluded_children = {"engagements", "wal"}
+    if workspace_root.exists():
+        shutil.rmtree(workspace_root, ignore_errors=True)
+    workspace_root.mkdir(parents=True, exist_ok=True)
+
+    for child in source_root.iterdir():
+        if child.name in excluded_children:
+            continue
+        destination = workspace_root / child.name
+        if child.is_dir():
+            shutil.copytree(child, destination, dirs_exist_ok=True)
+        else:
+            shutil.copy2(child, destination)
+
+
+
 def prepare_run_runtime(project: Project, run: Run) -> None:
     run_root = Path(run.engagement_root)
     run_root.mkdir(parents=True, exist_ok=True)
     runtime_root_for(run).mkdir(parents=True, exist_ok=True)
-    workspace_root_for(run).mkdir(parents=True, exist_ok=True)
+    _sync_agent_source_into_workspace(run)
     opencode_home_root_for(run).mkdir(parents=True, exist_ok=True)
     seed_root_for(run).mkdir(parents=True, exist_ok=True)
 
