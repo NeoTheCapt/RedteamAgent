@@ -39,16 +39,31 @@ ARTIFACT_SPECS = {
 
 
 def _active_engagement_root(run_root: Path) -> Path:
+    engagements_root = run_root / "workspace" / "engagements"
     active_file = run_root / "workspace" / "engagements" / ".active"
     if not active_file.exists():
+        candidates = sorted([path for path in engagements_root.iterdir() if path.is_dir()], reverse=True) if engagements_root.exists() else []
+        if candidates:
+            active_file.write_text(f"engagements/{candidates[0].name}", encoding="utf-8")
+            return candidates[0]
         return run_root
 
     active_name = active_file.read_text(encoding="utf-8").strip()
     if not active_name:
         return run_root
 
-    engagement_root = run_root / "workspace" / "engagements" / active_name
-    return engagement_root if engagement_root.exists() else run_root
+    active_relative = active_name.removeprefix("./").removeprefix("/")
+    if active_relative.startswith("engagements/"):
+        engagement_root = run_root / "workspace" / active_relative
+    else:
+        engagement_root = run_root / "workspace" / "engagements" / active_relative
+    if engagement_root.exists():
+        return engagement_root
+    candidates = sorted([path for path in engagements_root.iterdir() if path.is_dir()], reverse=True) if engagements_root.exists() else []
+    if candidates:
+        active_file.write_text(f"engagements/{candidates[0].name}", encoding="utf-8")
+        return candidates[0]
+    return run_root
 
 
 def _run_or_404(project_id: int, run_id: int, user: User) -> Run:

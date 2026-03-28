@@ -9,6 +9,7 @@
 /LOCAL_REVIEW_WORKFLOW.md
 /opencode.json
 /tools/
+/local-openclaw/
 /tests/
 /orchestrator/backend/data/
 docs/**

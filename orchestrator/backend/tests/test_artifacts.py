@@ -45,7 +45,7 @@ def write_engagement_artifact(run: dict, name: str, content: str) -> Path:
     active_name = "2026-03-25-000000-example"
     active_dir = engagements / active_name
     active_dir.mkdir(parents=True, exist_ok=True)
-    (engagements / ".active").write_text(active_name, encoding="utf-8")
+    (engagements / ".active").write_text(f"engagements/{active_name}", encoding="utf-8")
     artifact_path = active_dir / name
     artifact_path.write_text(content, encoding="utf-8")
     return artifact_path
@@ -135,3 +135,22 @@ def test_read_active_engagement_artifact_from_workspace():
     )
     assert response.status_code == 200
     assert response.json()["content"] == "# Engagement Log\n"
+
+
+def test_read_latest_engagement_artifact_without_active_marker():
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"])
+
+    workspace = Path(run["engagement_root"], "workspace")
+    active_dir = workspace / "engagements" / "2026-03-25-000000-example"
+    active_dir.mkdir(parents=True, exist_ok=True)
+    (active_dir / "log.md").write_text("# Latest Engagement Log\n", encoding="utf-8")
+
+    response = client.get(
+        f"/projects/{project['id']}/runs/{run['id']}/artifacts/log.md",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    assert response.json()["content"] == "# Latest Engagement Log\n"

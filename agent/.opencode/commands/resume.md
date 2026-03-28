@@ -76,8 +76,6 @@ stop_katana 2>/dev/null
 
 # Restart Katana if there's a previous output file (was running before)
 if [ -f "$ENG_DIR/scans/katana_output.jsonl" ]; then
-    start_katana "$TARGET"
-    # Also restart the ingest pipeline
     ./scripts/katana_ingest.sh "$ENG_DIR" > "$ENG_DIR/scans/katana_ingest.log" 2>&1 &
 fi
 ```

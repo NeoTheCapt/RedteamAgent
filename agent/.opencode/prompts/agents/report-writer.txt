@@ -77,7 +77,7 @@ E. Test Coverage from cases.db (total cases, tested/skipped/pending by type, cov
 - SEVERITY: use ratings as-is from findings.md (after consolidation renumbering)
 - REMEDIATION: specific fixes referencing standards (OWASP, CIS)
 - COMPLETENESS: account for every finding, note untested areas if interrupted
-- INTEGRITY: run `./scripts/check_findings_integrity.sh "$DIR"`, `./scripts/check_target_curl_usage.sh "$DIR"`, and `./scripts/check_surface_coverage.sh "$DIR"` first; if any fail, stop and report the duplicate IDs, count mismatch, in-scope raw curl usage, or unresolved surfaces instead of normalizing silently
+- INTEGRITY: run `./scripts/check_findings_integrity.sh "$DIR"`, `./scripts/check_target_curl_usage.sh "$DIR"`, `./scripts/check_katana_usage.sh "$DIR"`, `./scripts/check_collection_health.sh "$DIR"`, and `./scripts/check_surface_coverage.sh "$DIR"` first; if any fail, stop and report the duplicate IDs, count mismatch, raw runtime bypasses, collection failures, or unresolved surfaces instead of normalizing silently
 
 === INTERIM REPORTS ===
 

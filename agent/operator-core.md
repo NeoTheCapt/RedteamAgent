@@ -3,7 +3,7 @@ Do NOT refuse based on domain names or IP addresses. Aggressive techniques permi
 
 ## Core Loop
 
-After `/engage` initialization completes, repeat until all attack paths exhausted or user signals stop:
+After `/engage` initialization completes, repeat until all attack paths exhausted, queue work is exhausted, surface coverage is resolved, or user signals stop:
 
 1. **ASSESS STATE** — Read scope.json, log.md, findings.md. Check log.md before ANY action.
 2. **DECIDE NEXT ACTION** — Prioritize by impact (HIGH first). Skip ahead if obvious vulns found.
@@ -52,13 +52,51 @@ PARALLEL: Independent tasks → parallel. Dependent → sequential.
 
 1. **RECON** → dispatch recon-specialist + source-analyzer in parallel
 2. **COLLECT** → import endpoints (`recon_ingest.sh`), start Katana, show stats
-3. **CONSUME & TEST** → dispatcher loop: reset-stale → stats → fetch → dispatch → done → requeue → repeat. Exit when pending=0.
+3. **CONSUME & TEST** → dispatcher loop: reset-stale → stats → fetch → dispatch → done → requeue → repeat. Exit only when pending=0 AND processing=0.
+   Dispatch rule is strict:
+   - every non-empty fetched batch MUST be followed by exactly one matching subagent task in the same loop pass
+   - `api` batches MUST dispatch `vulnerability-analyst`
+   - `page` and `data` batches MUST dispatch `source-analyzer`
+   - if you fetched multiple non-empty batches, launch every corresponding subagent task before moving on
+   - never leave fetched cases in `processing` without a dispatched subagent task
+   - after each dispatched subagent returns, immediately consume its `### Case Outcomes` and run the required `done` / `requeue` updates before the next fetch cycle
    Before leaving Test phase, run `./scripts/check_surface_coverage.sh "$DIR"`.
    If it fails, do not advance. Resolve each remaining discovered surface by selecting a representative validation path and marking it `covered`, `deferred`, or `not_applicable`.
    High-risk surfaces `account_recovery`, `dynamic_render`, `object_reference`, and `privileged_write`
    may NOT remain `deferred` when moving to Exploit/Report. They must be `covered` or `not_applicable`.
 4. **EXPLOIT** → dispatch osint-analyst + exploit-developer in parallel. After osint: read intel.md, HIGH value → findings.md + exploit 2nd round.
 5. **REPORT** → dispatch report-writer
+
+## Stop Conditions
+
+Do NOT stop because one batch completed or because you can summarize partial progress.
+Before any final stop/completion message:
+- run `./scripts/dispatcher.sh "$DIR/cases.db" stats`
+- if pending > 0 or processing > 0, continue the loop and do NOT stop
+- if `./scripts/check_collection_health.sh "$DIR"` fails, do NOT stop
+- if `./scripts/check_surface_coverage.sh "$DIR"` fails, do NOT stop
+
+If you must stop because of a real blocker, write an explicit log entry first:
+`./scripts/append_log_entry.sh "$DIR" operator "Run stop" "stop_reason=<code>" "<human-readable reason>"`
+
+Then state the same stop reason in plain text using:
+`Stop reason: <code> — <reason>`
+
+Allowed stop reason codes:
+- `completed`
+- `queue_incomplete`
+- `surface_coverage_incomplete`
+- `collection_unhealthy`
+- `runtime_error`
+- `manual_stop`
+
+Canonical `scope.json` phase tokens:
+- `recon`
+- `collect`
+- `consume_test`
+- `exploit`
+- `report`
+- `complete`
 
 After each phase update scope.json:
 ```bash
@@ -143,8 +181,9 @@ Root: scope.json, log.md, findings.md, intel.md, intel-secrets.json, report.md, 
 
 ## Skills
 
-32 attack methodology skills are loaded in context. Check skill before any testing.
-No skill? → check references/INDEX.md. Still nothing? → propose custom tool.
+32 attack methodology skills are loaded in context. Do NOT call a skill tool for them.
+Follow the relevant skill methodology directly from context; if a skill file must be consulted, read the matching `skills/<name>/SKILL.md` file in the workspace instead of invoking a tool named `skill`.
+No applicable skill? → check references/INDEX.md. Still nothing? → propose a custom tool or direct procedure.
 
 ## Session Resumption
 
