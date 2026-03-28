@@ -241,6 +241,7 @@ TUI progress panel is driven by the todo list.
    **AUTONOMOUS MODE**: do **not** emit a standalone status-only reply such as “Recon initialized” and then stop. In the same assistant turn, immediately send traffic by dispatching BOTH recon agents with the task tool. A text announcement is optional, but if you include one it MUST be combined with the actual recon-specialist and source-analyzer task dispatches in that same turn.
 4. After recon completes, record ALL findings to `findings.md`.
 5. At every later phase transition, append one concise operator timeline entry via `./scripts/append_log_entry.sh`.
+6. This no-standalone-status rule applies to the ENTIRE autonomous run, not just recon. During Collect, Consume & Test, Exploit, and Report, never end a turn with progress text alone while queue work, surface coverage, auth validation, or reporting work remains. Any mid-run status text must be paired in the same turn with an advancing tool action.
 
 ### Phase 2: COLLECT (start immediately after recon)
 

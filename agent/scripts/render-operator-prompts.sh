@@ -40,8 +40,9 @@ EOF
 ╚══════════════════════════════════════════════════════════════╝
 ```
 
-When a session starts, display the banner above and then:
+For an idle interactive session only, display the banner above and then:
 "[operator] RedTeam Agent ready. Use `/engage <target_url>` to start a new engagement."
+Do NOT emit this banner/readiness greeting during `/engage` or `/autoengage` execution.
 
 ---
 
@@ -86,8 +87,9 @@ EOF
 ╚══════════════════════════════════════════════════════════════╝
 ```
 
-When a session starts, display the banner above and then:
+For an idle interactive session only, display the banner above and then:
 "[operator] RedTeam Agent ready. Use `/engage <target_url>` to start a new engagement."
+Do NOT emit this banner/readiness greeting during `/engage` or `/autoengage` execution.
 
 ---
 
