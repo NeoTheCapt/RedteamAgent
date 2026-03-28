@@ -102,6 +102,34 @@ def test_create_run_can_auto_launch_when_enabled(monkeypatch):
     assert Path(run["engagement_root"], "runtime", "process.log").exists()
 
 
+def test_locate_runtime_pid_treats_running_container_without_matching_launcher_pid_as_orphaned(monkeypatch):
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "https://orphaned.example")
+
+    metadata_path = Path(run["engagement_root"]) / "runtime" / "process.json"
+    metadata_path.parent.mkdir(parents=True, exist_ok=True)
+    metadata_path.write_text(
+        json.dumps(
+            {
+                "run_id": run["id"],
+                "container_name": f"redteam-orch-run-{run['id']:04d}",
+                "launcher_pid": 999999,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr("app.services.launcher._container_status", lambda _name: "running")
+
+    from app.services.launcher import locate_runtime_pid
+
+    assert locate_runtime_pid(db.get_run_by_id(run["id"])) is None
+
+
+
 def test_auto_launch_emits_runtime_heartbeat_when_process_is_still_running(monkeypatch):
     client = TestClient(app)
     token = register_and_login(client, "alice")

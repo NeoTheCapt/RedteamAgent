@@ -96,6 +96,55 @@ def test_run_status_transitions_require_project_ownership():
     assert completed.json()["status"] == "completed"
 
 
+def test_list_runs_marks_orphaned_running_container_as_failed(monkeypatch):
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+
+    create_run = client.post(
+        f"/projects/{project['id']}/runs",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"target": "https://example.com"},
+    )
+    assert create_run.status_code == 201
+    run = create_run.json()
+    db.update_run_status(run["id"], "running")
+
+    run_root = Path(run["engagement_root"])
+    runtime_dir = run_root / "runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    (runtime_dir / "process.json").write_text(
+        json.dumps(
+            {
+                "run_id": run["id"],
+                "container_name": f"redteam-orch-run-{run['id']:04d}",
+                "launcher_pid": 999999,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    with sqlite3.connect(database_path()) as connection:
+        connection.execute(
+            "UPDATE runs SET updated_at = '2026-03-25 00:00:00' WHERE id = ?",
+            (run["id"],),
+        )
+        connection.commit()
+
+    monkeypatch.setattr("app.services.launcher._container_status", lambda _name: "running")
+    stopped: list[int] = []
+    monkeypatch.setattr("app.services.runs.stop_run_runtime", lambda reconciled_run: stopped.append(reconciled_run.id))
+
+    runs_response = client.get(
+        f"/projects/{project['id']}/runs",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert runs_response.status_code == 200
+    assert runs_response.json()[0]["status"] == "failed"
+    assert stopped == [run["id"]]
+
+
+
 def test_list_runs_marks_stale_running_process_as_failed():
     client = TestClient(app)
     token = register_and_login(client, "alice")
