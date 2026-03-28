@@ -7,6 +7,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.services import run_summary
 
 
 def register_and_login(client: TestClient, username: str) -> str:
@@ -157,6 +158,66 @@ def test_run_summary_combines_target_coverage_and_agent_state():
     )
     assert len(payload["agents"]) == 7
     assert any(item["phase"] == "collect" and item["state"] == "active" for item in payload["phases"])
+
+
+def test_run_summary_uses_readonly_cases_fallback_when_live_sqlite_is_locked(monkeypatch):
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "https://target.example")
+    active_dir = setup_active_engagement(run)
+
+    (active_dir / "scope.json").write_text(
+        json.dumps(
+            {
+                "target": "https://target.example",
+                "hostname": "target.example",
+                "status": "in_progress",
+                "phases_completed": ["recon"],
+                "current_phase": "consume_test",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    cases_db = active_dir / "cases.db"
+    with sqlite3.connect(cases_db) as connection:
+        connection.execute(
+            "CREATE TABLE cases (type TEXT NOT NULL, status TEXT NOT NULL, assigned_agent TEXT, method TEXT, url TEXT, source TEXT)"
+        )
+        connection.executemany(
+            "INSERT INTO cases (type, status, assigned_agent, method, url, source) VALUES (?, ?, ?, ?, ?, ?)",
+            [
+                ("api", "done", None, "GET", "https://target.example/api/version", "katana"),
+                ("api", "pending", None, "GET", "https://target.example/api/users", "katana-xhr"),
+                ("javascript", "processing", "source-analyzer", "GET", "https://target.example/main.js", "katana"),
+            ],
+        )
+        connection.commit()
+
+    real_connect = sqlite3.connect
+
+    def flaky_connect(database, *args, **kwargs):
+        target = str(cases_db)
+        if str(database) == target and not kwargs.get("uri", False):
+            raise sqlite3.OperationalError("database is locked")
+        return real_connect(database, *args, **kwargs)
+
+    monkeypatch.setattr(run_summary.sqlite3, "connect", flaky_connect)
+
+    response = client.get(
+        f"/projects/{project['id']}/runs/{run['id']}/summary",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+
+    assert payload["coverage"]["total_cases"] == 3
+    assert payload["coverage"]["completed_cases"] == 1
+    assert payload["coverage"]["pending_cases"] == 1
+    assert payload["coverage"]["processing_cases"] == 1
+    assert any(item["type"] == "api" and item["total"] == 2 for item in payload["coverage"]["case_types"])
+    assert payload["overview"]["current_phase"] == "consume-test"
 
 
 def test_run_summary_falls_back_to_latest_engagement_without_active_file():
