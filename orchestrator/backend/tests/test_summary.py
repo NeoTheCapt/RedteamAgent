@@ -489,3 +489,85 @@ def test_observed_paths_returns_complete_case_list():
     assert payload[0]["method"] == "POST"
     assert payload[0]["assigned_agent"] == "vulnerability-analyst"
     assert any(item["url"] == "https://target.example/api/v1/users" and item["type"] == "api" for item in payload)
+
+
+def test_run_summary_prefers_populated_cases_db_when_workspace_db_is_empty():
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "http://127.0.0.1:8000")
+    active_dir = setup_active_engagement(run)
+
+    (active_dir / "scope.json").write_text(
+        json.dumps({"hostname": "127.0.0.1", "status": "in_progress", "current_phase": "consume_test"}),
+        encoding="utf-8",
+    )
+
+    workspace_db = Path(run["engagement_root"], "workspace", "cases.db")
+    with sqlite3.connect(workspace_db) as connection:
+        connection.execute("CREATE TABLE cases (type TEXT NOT NULL, status TEXT NOT NULL, assigned_agent TEXT)")
+        connection.commit()
+
+    active_db = active_dir / "cases.db"
+    with sqlite3.connect(active_db) as connection:
+        connection.execute("CREATE TABLE cases (method TEXT, url TEXT, type TEXT NOT NULL, status TEXT NOT NULL, assigned_agent TEXT, source TEXT)")
+        connection.executemany(
+            "INSERT INTO cases (method, url, type, status, assigned_agent, source) VALUES (?, ?, ?, ?, ?, ?)",
+            [
+                ("GET", "http://127.0.0.1:8000/api/products", "api", "done", "", "katana"),
+                ("GET", "http://127.0.0.1:8000/rest/products", "api", "processing", "vulnerability-analyst", "katana"),
+            ],
+        )
+        connection.commit()
+
+    response = client.get(
+        f"/projects/{project['id']}/runs/{run['id']}/summary",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["coverage"]["total_cases"] == 2
+    assert payload["coverage"]["processing_cases"] == 1
+    assert any(item["type"] == "api" and item["total"] == 2 for item in payload["coverage"]["case_types"])
+
+
+def test_observed_paths_prefers_populated_cases_db_when_workspace_db_is_empty():
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "http://127.0.0.1:8000")
+    active_dir = setup_active_engagement(run)
+
+    (active_dir / "scope.json").write_text(
+        json.dumps({"hostname": "127.0.0.1", "status": "in_progress", "current_phase": "collect"}),
+        encoding="utf-8",
+    )
+
+    workspace_db = Path(run["engagement_root"], "workspace", "cases.db")
+    with sqlite3.connect(workspace_db) as connection:
+        connection.execute("CREATE TABLE cases (method TEXT, url TEXT, type TEXT NOT NULL, status TEXT NOT NULL, assigned_agent TEXT, source TEXT)")
+        connection.commit()
+
+    active_db = active_dir / "cases.db"
+    with sqlite3.connect(active_db) as connection:
+        connection.execute("CREATE TABLE cases (method TEXT, url TEXT, type TEXT NOT NULL, status TEXT NOT NULL, assigned_agent TEXT, source TEXT)")
+        connection.executemany(
+            "INSERT INTO cases (method, url, type, status, assigned_agent, source) VALUES (?, ?, ?, ?, ?, ?)",
+            [
+                ("POST", "http://127.0.0.1:8000/rest/user/login", "api", "processing", "vulnerability-analyst", "katana-xhr"),
+                ("GET", "http://127.0.0.1:8000/robots.txt", "data", "pending", "", "recon-specialist"),
+            ],
+        )
+        connection.commit()
+
+    response = client.get(
+        f"/projects/{project['id']}/runs/{run['id']}/observed-paths",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+
+    assert len(payload) == 2
+    assert payload[0]["url"] == "http://127.0.0.1:8000/rest/user/login"
+    assert payload[0]["status"] == "processing"
+    assert any(item["url"] == "http://127.0.0.1:8000/robots.txt" for item in payload)

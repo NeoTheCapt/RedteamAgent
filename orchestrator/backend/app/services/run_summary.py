@@ -96,6 +96,72 @@ def _active_engagement_root(run_root: Path) -> Path:
     return run_root
 
 
+def _cases_db_candidates(run_root: Path, active_root: Path) -> list[Path]:
+    candidates: list[Path] = []
+    seen: set[Path] = set()
+
+    def add(path: Path) -> None:
+        resolved = path.resolve()
+        if resolved in seen:
+            return
+        seen.add(resolved)
+        candidates.append(path)
+
+    add(active_root / "cases.db")
+    add(run_root / "workspace" / "cases.db")
+
+    engagements_root = run_root / "workspace" / "engagements"
+    if engagements_root.exists():
+        for path in sorted(engagements_root.glob("*/cases.db"), reverse=True):
+            add(path)
+
+    return candidates
+
+
+def _count_cases_for_db(path: Path) -> int:
+    if not path.exists():
+        return -1
+
+    rows = None
+    for _ in range(5):
+        try:
+            with sqlite3.connect(path, timeout=1.0) as connection:
+                connection.execute("PRAGMA busy_timeout = 1000")
+                rows = connection.execute("SELECT COUNT(*) FROM cases").fetchone()
+            break
+        except sqlite3.OperationalError as exc:
+            if "locked" not in str(exc).lower():
+                return -1
+            time.sleep(0.1)
+        except sqlite3.Error:
+            return -1
+
+    if not rows:
+        return -1
+    return int(rows[0] or 0)
+
+
+def _resolve_cases_db(run_root: Path, active_root: Path) -> Path:
+    candidates = _cases_db_candidates(run_root, active_root)
+    if not candidates:
+        return active_root / "cases.db"
+
+    preferred = candidates[0]
+    preferred_count = _count_cases_for_db(preferred)
+    if preferred_count > 0:
+        return preferred
+
+    ranked = sorted(
+        ((path, _count_cases_for_db(path)) for path in candidates),
+        key=lambda item: (item[1], 1 if item[0] == preferred else 0, item[0].as_posix()),
+        reverse=True,
+    )
+    best_path, best_count = ranked[0]
+    if best_count >= 0:
+        return best_path
+    return preferred
+
+
 def _normalize_phase(phase: str | None) -> str:
     if not phase:
         return "unknown"
@@ -590,9 +656,10 @@ def summarize_run(project_id: int, run_id: int, user: User) -> RunSummary:
     project = _project_or_404(project_id, user)
     run_root = Path(run.engagement_root)
     active_root = _active_engagement_root(run_root)
+    cases_db = _resolve_cases_db(run_root, active_root)
     scope = _load_json(active_root / "scope.json")
     run_metadata = _load_json(run_root / "run.json")
-    cases = _load_cases_metrics(active_root / "cases.db")
+    cases = _load_cases_metrics(cases_db)
     surfaces = _load_surface_metrics(active_root / "surfaces.jsonl")
     findings_count = _count_findings(active_root / "findings.md")
     events = list_events_for_run(project_id, run_id, user)
@@ -627,4 +694,4 @@ def list_observed_paths(project_id: int, run_id: int, user: User) -> list[Observ
     run = _run_or_404(project_id, run_id, user)
     run_root = Path(run.engagement_root)
     active_root = _active_engagement_root(run_root)
-    return _load_observed_paths(active_root / "cases.db")
+    return _load_observed_paths(_resolve_cases_db(run_root, active_root))

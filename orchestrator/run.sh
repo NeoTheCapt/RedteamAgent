@@ -13,8 +13,23 @@ PORT="${PORT:-18000}"
 FOREGROUND=0
 REBUILD_IMAGE=0
 
+resolve_lsof() {
+  if command -v lsof >/dev/null 2>&1; then
+    command -v lsof
+    return 0
+  fi
+  if [[ -x /usr/sbin/lsof ]]; then
+    printf '%s\n' /usr/sbin/lsof
+    return 0
+  fi
+  return 1
+}
+
 find_listening_pid() {
-  lsof -tiTCP:"$PORT" -sTCP:LISTEN 2>/dev/null | head -n 1
+  local lsof_bin
+  lsof_bin="$(resolve_lsof || true)"
+  [[ -n "$lsof_bin" ]] || return 0
+  "$lsof_bin" -tiTCP:"$PORT" -sTCP:LISTEN 2>/dev/null | head -n 1
 }
 
 usage() {
