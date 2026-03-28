@@ -25,19 +25,13 @@ Before reading findings, validate them:
 ```bash
 ./scripts/check_findings_integrity.sh "$ENG_DIR"
 ./scripts/check_target_curl_usage.sh "$ENG_DIR"
+./scripts/check_katana_usage.sh "$ENG_DIR"
+./scripts/check_collection_health.sh "$ENG_DIR"
 ./scripts/check_surface_coverage.sh "$ENG_DIR"
 ```
 
-If any check fails, stop and report the duplicate IDs, count mismatch, in-scope raw curl usage, or unresolved high-risk surfaces instead of generating a misleading report.
-
-If `scope.json` has `"mode": "ctf"`, prepare challenge coverage context first:
-
-```bash
-./scripts/capture_ctf_challenges.sh "$ENG_DIR"
-```
-
-If `challenge-summary.md` exists after this step, read it and include the challenge coverage
-section in the final report.
+If any check fails, stop and report the duplicate IDs, count mismatch, raw runtime bypasses,
+collection failures, or unresolved high-risk surfaces instead of generating a misleading report.
 
 ## Step 3: Generate Report
 

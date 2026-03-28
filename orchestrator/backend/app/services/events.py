@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+import json
+import re
+from datetime import datetime
+from pathlib import Path
+
 from fastapi import HTTPException, status
 
 from .. import db
@@ -114,9 +119,160 @@ def _project_timeline_events(events: list[Event]) -> list[Event]:
     return merged
 
 
+def _normalize_phase_name(phase: str | None) -> str:
+    if not phase:
+        return "unknown"
+    normalized = phase.strip().lower().replace("_", "-").replace("&", "and")
+    mapping = {
+        "recon": "recon",
+        "collect": "collect",
+        "consume-test": "consume-test",
+        "consume-and-test": "consume-test",
+        "test": "consume-test",
+        "exploit": "exploit",
+        "report": "report",
+    }
+    return mapping.get(normalized, "unknown")
+
+
+def _active_engagement_root(run_root: Path) -> Path | None:
+    workspace = run_root / "workspace"
+    engagements_root = workspace / "engagements"
+    active_file = engagements_root / ".active"
+    if active_file.exists():
+        active_name = active_file.read_text(encoding="utf-8").strip()
+        if active_name:
+            active_relative = active_name.removeprefix("./").removeprefix("/")
+            candidate = workspace / active_relative if active_relative.startswith("engagements/") else engagements_root / active_relative
+            if candidate.exists():
+                return candidate
+    candidates = sorted([path for path in engagements_root.iterdir() if path.is_dir()], reverse=True) if engagements_root.exists() else []
+    return candidates[0] if candidates else None
+
+
+def _scope_phase_for_run(run_root: Path) -> str:
+    engagement_root = _active_engagement_root(run_root)
+    if engagement_root is None:
+        return "unknown"
+    scope_path = engagement_root / "scope.json"
+    if not scope_path.exists():
+        return "unknown"
+    try:
+        scope = json.loads(scope_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return "unknown"
+    return _normalize_phase_name(scope.get("current_phase"))
+
+
+def _project_process_log_events(run_id: int, run_root: Path, events: list[Event]) -> list[Event]:
+    process_log = run_root / "runtime" / "process.log"
+    if not process_log.exists():
+        return events
+
+    projected: list[Event] = []
+    next_id = -100000
+    scope_phase = _scope_phase_for_run(run_root)
+    seen = {
+        (event.event_type, event.agent_name, event.summary, event.created_at)
+        for event in events
+        if event.agent_name and event.event_type.startswith("task.")
+    }
+
+    for line in process_log.read_text(encoding="utf-8", errors="replace").splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("{"):
+            continue
+        try:
+            payload = json.loads(stripped)
+        except json.JSONDecodeError:
+            continue
+        if payload.get("type") != "tool_use":
+            continue
+
+        part = payload.get("part") or {}
+        tool_name = part.get("tool")
+        state = part.get("state") or {}
+        created_at = datetime.fromtimestamp((payload.get("timestamp") or 0) / 1000).strftime("%Y-%m-%d %H:%M:%S")
+
+        if tool_name != "task":
+            summary = (
+                state.get("input", {}).get("description")
+                or part.get("title")
+                or f"{tool_name} activity"
+            )
+            operator_key = ("task.started", "operator", summary, created_at)
+            if operator_key not in seen:
+                projected.append(
+                    Event(
+                        id=next_id,
+                        run_id=run_id,
+                        event_type="task.started",
+                        phase=scope_phase,
+                        task_name=tool_name or "tool",
+                        agent_name="operator",
+                        summary=summary,
+                        created_at=created_at,
+                    )
+                )
+                seen.add(operator_key)
+                next_id -= 1
+            continue
+
+        task_input = state.get("input") or {}
+        agent_name = task_input.get("subagent_type")
+        if not agent_name:
+            continue
+
+        prompt = task_input.get("prompt") or ""
+        phase_match = re.search(r"\*\*Phase\*\*:\s*([A-Za-z& -]+)", prompt)
+        phase = _normalize_phase_name(phase_match.group(1) if phase_match else None)
+        summary = task_input.get("description") or f"{agent_name} task"
+
+        started_key = ("task.started", agent_name, summary, created_at)
+        if started_key not in seen:
+            projected.append(
+                Event(
+                    id=next_id,
+                    run_id=run_id,
+                    event_type="task.started",
+                    phase=phase,
+                    task_name=agent_name,
+                    agent_name=agent_name,
+                    summary=summary,
+                    created_at=created_at,
+                )
+            )
+            seen.add(started_key)
+            next_id -= 1
+
+        completed_summary = f"{summary} completed"
+        completed_key = ("task.completed", agent_name, completed_summary, created_at)
+        if completed_key not in seen:
+            projected.append(
+                Event(
+                    id=next_id,
+                    run_id=run_id,
+                    event_type="task.completed",
+                    phase=phase,
+                    task_name=agent_name,
+                    agent_name=agent_name,
+                    summary=completed_summary,
+                    created_at=created_at,
+                )
+            )
+            seen.add(completed_key)
+            next_id -= 1
+
+    if not projected:
+        return events
+    return sorted([*events, *projected], key=lambda item: (item.created_at, item.id))
+
+
 def list_events_for_run(project_id: int, run_id: int, user: User) -> list[Event]:
     run = _run_or_404(project_id, run_id, user)
-    return _project_timeline_events(db.list_events_for_run(run.id))
+    run_root = Path(run.engagement_root)
+    events = _project_timeline_events(db.list_events_for_run(run.id))
+    return _project_process_log_events(run.id, run_root, events)
 
 
 def summarize_events_for_run(project_id: int, run_id: int, user: User) -> dict[str, dict[str, str] | None]:

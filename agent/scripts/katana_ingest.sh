@@ -9,6 +9,7 @@ source "$SCRIPT_DIR/lib/params.sh"
 source "$SCRIPT_DIR/lib/classify.sh"
 source "$SCRIPT_DIR/lib/db.sh"
 source "$SCRIPT_DIR/lib/container.sh"
+source "$SCRIPT_DIR/lib/katana.sh"
 source "$SCRIPT_DIR/lib/noise.sh"
 
 # --- Validate arguments ---
@@ -60,68 +61,124 @@ mkdir -p "$ENGAGEMENT_DIR/scans"
 KATANA_OUTPUT="$ENGAGEMENT_DIR/scans/katana_output.jsonl"
 touch "$KATANA_OUTPUT"
 
-# --- Start Katana container ---
-start_katana "$TARGET" "${EXTRA_FLAGS[@]+"${EXTRA_FLAGS[@]}"}"
-
-# --- Monitor output and ingest ---
-echo "[katana_ingest] Monitoring $KATANA_OUTPUT for new crawl results..."
 count=0
 
-# tail -f the output file, process each new JSONL line
-# Use process substitution to avoid subshell (so count increments correctly)
-while IFS= read -r line; do
-    # Skip empty lines
-    [[ -z "$line" ]] && continue
+ingest_request() {
+    local method="${1:-GET}"
+    local url="${2:-}"
+    local content_type="${3:-}"
+    local resp_status="${4:-0}"
+    local source_name="${5:-katana}"
+    local body_params="{}"
+    local cookie_params="{}"
+    local query_params path_params url_path case_type params_sig
 
-    # Extract URL — try request.endpoint first, then request.url, then bare string
-    url=$(echo "$line" | jq -r '.request.endpoint // .request.url // .url // empty' 2>/dev/null)
-    if [[ -z "$url" ]]; then
-        # Maybe line is a plain URL
-        if echo "$line" | grep -qE '^https?://'; then
-            url="$line"
-        else
-            continue
-        fi
-    fi
-
-    # Extract method (default GET)
-    method=$(echo "$line" | jq -r '.request.method // "GET"' 2>/dev/null || echo "GET")
+    [[ -n "$url" ]] || return 0
     method=$(printf '%s' "$method" | tr '[:lower:]' '[:upper:]')
 
-    # Extract content type from response if available
-    content_type=$(echo "$line" | jq -r '.response.headers["content-type"] // .response.headers["Content-Type"] // ""' 2>/dev/null || true)
-
-    # Extract response status
-    resp_status=$(echo "$line" | jq -r '.response.status_code // 0' 2>/dev/null || echo "0")
-
-    # Run through parameter extraction pipeline
     url_path=$(extract_url_path "$url")
+    [[ -n "$url_path" ]] || return 0
     if is_katana_noise_path "$url_path"; then
-        continue
+        return 0
     fi
+
     query_params=$(extract_query_params "$url")
     path_params=$(extract_path_params "$url_path")
-    body_params="{}"
-    cookie_params="{}"
-
-    # Classify type
     case_type=$(classify_type "$method" "$url_path" "$content_type" "")
-
-    # Generate dedup signature
     params_sig=$(generate_params_sig "$query_params" "$body_params")
 
-    # Insert into DB
     db_insert_case "$DB_PATH" \
         "$method" "$url" "$url_path" \
         "$query_params" "$body_params" "$path_params" "$cookie_params" \
         "" "" "$content_type" "0" \
         "$resp_status" "" "0" "" \
-        "$case_type" "katana" "$params_sig"
+        "$case_type" "$source_name" "$params_sig"
 
     count=$((count + 1))
     if (( count % 50 == 0 )); then
         echo "[katana_ingest] Ingested $count cases so far..."
     fi
-done < <(tail -f "$KATANA_OUTPUT" 2>/dev/null)
+}
+
+ingest_katana_line() {
+    local line="${1:-}"
+    local url method content_type resp_status request_json
+
+    [[ -n "$line" ]] || return 0
+
+    if ! katana_line_should_ingest "$line"; then
+        return 0
+    fi
+
+    if printf '%s' "$line" | grep -qE '^https?://'; then
+        ingest_request "GET" "$line" "" "0" "katana"
+        return 0
+    fi
+
+    while IFS= read -r request_json; do
+        [[ -n "$request_json" ]] || continue
+        url=$(printf '%s' "$request_json" | jq -r '.url // empty' 2>/dev/null || true)
+        [[ -n "$url" ]] || continue
+        method=$(printf '%s' "$request_json" | jq -r '.method // "GET"' 2>/dev/null || echo "GET")
+        content_type=$(printf '%s' "$request_json" | jq -r '.content_type // ""' 2>/dev/null || true)
+        resp_status=$(printf '%s' "$request_json" | jq -r '.response_status // 0' 2>/dev/null || echo "0")
+        ingest_request "$method" "$url" "$content_type" "$resp_status" "$(printf '%s' "$request_json" | jq -r '.source // "katana"' 2>/dev/null || echo "katana")"
+    done < <(
+        printf '%s' "$line" | jq -c '
+            [
+              {
+                method: (.request.method // "GET"),
+                url: (.request.endpoint // .request.url // .url // empty),
+                content_type: (.response.headers["content-type"] // .response.headers["Content-Type"] // ""),
+                response_status: (.response.status_code // 0),
+                source: "katana"
+              },
+              (.response.xhr_requests[]? | {
+                method: (.method // "GET"),
+                url: (.endpoint // .url // empty),
+                content_type: (.headers["content-type"] // .headers["Content-Type"] // ""),
+                response_status: 0,
+                source: "katana-xhr"
+              })
+            ]
+            | .[]
+            | select((.url // "") != "")
+        ' 2>/dev/null || true
+    )
+}
+
+ingest_output_snapshot() {
+    local output_file="$1"
+    local line
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        ingest_katana_line "$line"
+    done < "$output_file"
+}
+
+# --- Start Katana container unless explicitly skipped for re-ingest/verification ---
+if [[ "${KATANA_INGEST_SKIP_START:-0}" != "1" ]]; then
+    start_katana "$TARGET" "${EXTRA_FLAGS[@]}"
+fi
+
+# --- Monitor output and ingest ---
+echo "[katana_ingest] Monitoring $KATANA_OUTPUT for crawl results..."
+
+if [[ "${KATANA_INGEST_ONESHOT:-0}" == "1" ]]; then
+    ingest_output_snapshot "$KATANA_OUTPUT"
+else
+    # Katana may leave the newest JSON row unterminated for long stretches. Re-scan the file
+    # whenever its size changes so already-written crawl results are ingested without waiting
+    # for a trailing newline.
+    last_size=""
+    poll_seconds="${KATANA_INGEST_POLL_SECONDS:-2}"
+    while true; do
+        current_size="$(stat -f '%z' "$KATANA_OUTPUT" 2>/dev/null || echo 0)"
+        if [[ "$current_size" != "$last_size" ]]; then
+            ingest_output_snapshot "$KATANA_OUTPUT"
+            last_size="$current_size"
+        fi
+        sleep "$poll_seconds"
+    done
+fi
 
 echo "[katana_ingest] Ingested $count total cases from $TARGET"

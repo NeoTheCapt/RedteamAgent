@@ -79,6 +79,13 @@ case "$TOOL_NAME" in
       if command_hits_in_scope_target_with_raw_curl "$ENG_DIR" "$COMMAND"; then
         printf '**Warning**: In-scope raw curl bypassed `run_tool curl`; switch to `run_tool curl`/`rtcurl`.\n'
       fi
+      if printf '%s' "$COMMAND" | rg -q '(^|[;&|(<[:space:]])(run_tool[[:space:]]+)?katana([[:space:]]|$)' && \
+         [[ "$COMMAND" != *"start_katana"* ]] && \
+         [[ "$COMMAND" != *"katana_ingest.sh"* ]] && \
+         [[ "$COMMAND" != *"command -v katana"* ]] && \
+         [[ "$COMMAND" != *"katana -version"* ]]; then
+        printf '**Warning**: Raw katana launch bypassed `start_katana`/`katana_ingest.sh`; use the supported wrappers only.\n'
+      fi
     } >> "$ENG_DIR/log.md"
     ;;
 

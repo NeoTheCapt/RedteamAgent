@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
@@ -62,12 +63,37 @@ def init_db() -> None:
                 name TEXT NOT NULL,
                 slug TEXT NOT NULL,
                 root_path TEXT NOT NULL,
+                provider_id TEXT NOT NULL DEFAULT '',
+                model_id TEXT NOT NULL DEFAULT '',
+                small_model_id TEXT NOT NULL DEFAULT '',
+                api_key TEXT NOT NULL DEFAULT '',
+                base_url TEXT NOT NULL DEFAULT '',
+                auth_json TEXT NOT NULL DEFAULT '',
+                env_json TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(user_id, slug),
                 FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
             )
             """
         )
+        project_columns = {
+            row[1]
+            for row in connection.execute("PRAGMA table_info(projects)").fetchall()
+        }
+        if "provider_id" not in project_columns:
+            connection.execute("ALTER TABLE projects ADD COLUMN provider_id TEXT NOT NULL DEFAULT ''")
+        if "model_id" not in project_columns:
+            connection.execute("ALTER TABLE projects ADD COLUMN model_id TEXT NOT NULL DEFAULT ''")
+        if "small_model_id" not in project_columns:
+            connection.execute("ALTER TABLE projects ADD COLUMN small_model_id TEXT NOT NULL DEFAULT ''")
+        if "api_key" not in project_columns:
+            connection.execute("ALTER TABLE projects ADD COLUMN api_key TEXT NOT NULL DEFAULT ''")
+        if "base_url" not in project_columns:
+            connection.execute("ALTER TABLE projects ADD COLUMN base_url TEXT NOT NULL DEFAULT ''")
+        if "auth_json" not in project_columns:
+            connection.execute("ALTER TABLE projects ADD COLUMN auth_json TEXT NOT NULL DEFAULT ''")
+        if "env_json" not in project_columns:
+            connection.execute("ALTER TABLE projects ADD COLUMN env_json TEXT NOT NULL DEFAULT ''")
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS runs (
@@ -184,18 +210,31 @@ def get_user_by_token(token: str, now_utc: str) -> User | None:
     return User.from_row(row) if row else None
 
 
-def create_project(user_id: int, name: str, slug: str, root_path: str) -> Project:
+def create_project(
+    user_id: int,
+    name: str,
+    slug: str,
+    root_path: str,
+    *,
+    provider_id: str = "",
+    model_id: str = "",
+    small_model_id: str = "",
+    api_key: str = "",
+    base_url: str = "",
+    auth_json: str = "",
+    env_json: str = "",
+) -> Project:
     with get_connection() as connection:
         cursor = connection.execute(
             """
-            INSERT INTO projects (user_id, name, slug, root_path)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO projects (user_id, name, slug, root_path, provider_id, model_id, small_model_id, api_key, base_url, auth_json, env_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (user_id, name, slug, root_path),
+            (user_id, name, slug, root_path, provider_id, model_id, small_model_id, api_key, base_url, auth_json, env_json),
         )
         row = connection.execute(
             """
-            SELECT id, user_id, name, slug, root_path, created_at
+            SELECT id, user_id, name, slug, root_path, provider_id, model_id, small_model_id, api_key, base_url, auth_json, env_json, created_at
             FROM projects
             WHERE id = ?
             """,
@@ -209,7 +248,7 @@ def get_project_by_user_and_slug(user_id: int, slug: str) -> Project | None:
     with get_connection() as connection:
         row = connection.execute(
             """
-            SELECT id, user_id, name, slug, root_path, created_at
+            SELECT id, user_id, name, slug, root_path, provider_id, model_id, small_model_id, api_key, base_url, auth_json, env_json, created_at
             FROM projects
             WHERE user_id = ? AND slug = ?
             """,
@@ -222,7 +261,7 @@ def list_projects_for_user(user_id: int) -> list[Project]:
     with get_connection() as connection:
         rows = connection.execute(
             """
-            SELECT id, user_id, name, slug, root_path, created_at
+            SELECT id, user_id, name, slug, root_path, provider_id, model_id, small_model_id, api_key, base_url, auth_json, env_json, created_at
             FROM projects
             WHERE user_id = ?
             ORDER BY id ASC
@@ -236,13 +275,45 @@ def get_project_by_id(project_id: int) -> Project | None:
     with get_connection() as connection:
         row = connection.execute(
             """
-            SELECT id, user_id, name, slug, root_path, created_at
+            SELECT id, user_id, name, slug, root_path, provider_id, model_id, small_model_id, api_key, base_url, auth_json, env_json, created_at
             FROM projects
             WHERE id = ?
             """,
             (project_id,),
         ).fetchone()
     return Project.from_row(row) if row else None
+
+
+def update_project_config(
+    project_id: int,
+    *,
+    provider_id: str,
+    model_id: str,
+    small_model_id: str,
+    api_key: str,
+    base_url: str,
+    auth_json: str,
+    env_json: str,
+) -> Project:
+    with get_connection() as connection:
+        connection.execute(
+            """
+            UPDATE projects
+            SET provider_id = ?, model_id = ?, small_model_id = ?, api_key = ?, base_url = ?, auth_json = ?, env_json = ?
+            WHERE id = ?
+            """,
+            (provider_id, model_id, small_model_id, api_key, base_url, auth_json, env_json, project_id),
+        )
+        row = connection.execute(
+            """
+            SELECT id, user_id, name, slug, root_path, provider_id, model_id, small_model_id, api_key, base_url, auth_json, env_json, created_at
+            FROM projects
+            WHERE id = ?
+            """,
+            (project_id,),
+        ).fetchone()
+    assert row is not None
+    return Project.from_row(row)
 
 
 def delete_project(project_id: int) -> None:
@@ -356,7 +427,27 @@ def update_run_status(run_id: int, status: str) -> Run:
             (run_id,),
         ).fetchone()
         assert row is not None
-        return Run.from_row(row)
+        run = Run.from_row(row)
+
+    _write_run_metadata(run)
+    return run
+
+
+def _write_run_metadata(run: Run) -> None:
+    metadata_path = Path(run.engagement_root) / "run.json"
+    if not metadata_path.exists():
+        return
+    try:
+        payload = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        payload = {}
+    payload["run_id"] = run.id
+    payload["project_id"] = run.project_id
+    payload["target"] = run.target
+    payload["status"] = run.status
+    payload["engagement_root"] = run.engagement_root
+    payload["updated_at"] = run.updated_at
+    metadata_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
 def create_event(
@@ -368,6 +459,14 @@ def create_event(
     summary: str,
 ) -> Event:
     with get_connection() as connection:
+        connection.execute(
+            """
+            UPDATE runs
+            SET updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (run_id,),
+        )
         cursor = connection.execute(
             """
             INSERT INTO events (run_id, event_type, phase, task_name, agent_name, summary)
@@ -383,7 +482,17 @@ def create_event(
             """,
             (cursor.lastrowid,),
         ).fetchone()
+        run_row = connection.execute(
+            """
+            SELECT id, project_id, target, status, engagement_root, created_at, updated_at
+            FROM runs
+            WHERE id = ?
+            """,
+            (run_id,),
+        ).fetchone()
         assert row is not None
+        assert run_row is not None
+        _write_run_metadata(Run.from_row(run_row))
         return Event.from_row(row)
 
 

@@ -30,7 +30,14 @@ def test_create_project_and_list_only_owner_projects(isolate_data_dir):
     create_response = client.post(
         "/projects",
         headers={"Authorization": f"Bearer {alice_token}"},
-        json={"name": "Alpha"},
+        json={
+            "name": "Alpha",
+            "provider_id": "openai",
+            "model_id": "gpt-5.4",
+            "small_model_id": "gpt-5.4-mini",
+            "api_key": "sk-test",
+            "base_url": "https://api.openai.com/v1",
+        },
     )
     assert create_response.status_code == 201
     created_project = create_response.json()
@@ -38,6 +45,13 @@ def test_create_project_and_list_only_owner_projects(isolate_data_dir):
     assert created_project["name"] == "Alpha"
     assert created_project["slug"] == "alpha"
     assert created_project["root_path"] == str(isolate_data_dir / "projects-root" / "alice" / "alpha")
+    assert created_project["provider_id"] == "openai"
+    assert created_project["model_id"] == "gpt-5.4"
+    assert created_project["small_model_id"] == "gpt-5.4-mini"
+    assert created_project["base_url"] == "https://api.openai.com/v1"
+    assert created_project["api_key_configured"] is True
+    assert created_project["auth_configured"] is False
+    assert created_project["env_configured"] is False
 
     alice_projects = client.get(
         "/projects",
@@ -81,6 +95,73 @@ def test_project_roots_are_isolated_per_user_and_slug_conflict_is_rejected(isola
         json={"name": "Demo Workspace"},
     )
     assert duplicate_for_alice.status_code == 400
+
+
+def test_update_project_model_settings_preserves_or_clears_api_key():
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+
+    project_response = client.post(
+        "/projects",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Configurable", "provider_id": "openai", "model_id": "gpt-5.4", "api_key": "sk-test"},
+    )
+    assert project_response.status_code == 201
+    project = project_response.json()
+    assert project["api_key_configured"] is True
+
+    update_response = client.patch(
+        f"/projects/{project['id']}",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"provider_id": "anthropic", "model_id": "claude-sonnet-4-5", "small_model_id": "claude-3-5-haiku", "base_url": "https://api.anthropic.com"},
+    )
+    assert update_response.status_code == 200
+    updated = update_response.json()
+    assert updated["provider_id"] == "anthropic"
+    assert updated["model_id"] == "claude-sonnet-4-5"
+    assert updated["small_model_id"] == "claude-3-5-haiku"
+    assert updated["base_url"] == "https://api.anthropic.com"
+    assert updated["api_key_configured"] is True
+    assert updated["auth_configured"] is False
+    assert updated["env_configured"] is False
+
+    clear_response = client.patch(
+        f"/projects/{project['id']}",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"provider_id": "anthropic", "model_id": "claude-sonnet-4-5", "small_model_id": "", "clear_api_key": True, "base_url": ""},
+    )
+    assert clear_response.status_code == 200
+    cleared = clear_response.json()
+    assert cleared["api_key_configured"] is False
+
+
+def test_update_project_auth_and_env_settings():
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project_response = client.post(
+        "/projects",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Auth Env"},
+    )
+    assert project_response.status_code == 201
+    project = project_response.json()
+
+    update_response = client.patch(
+        f"/projects/{project['id']}",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "provider_id": "",
+            "model_id": "",
+            "small_model_id": "",
+            "base_url": "",
+            "auth_json": '{"headers":{"Authorization":"Bearer test"}}',
+            "env_json": '{"HTTP_PROXY":"http://proxy:8080"}',
+        },
+    )
+    assert update_response.status_code == 200
+    updated = update_response.json()
+    assert updated["auth_configured"] is True
+    assert updated["env_configured"] is True
 
 
 def test_delete_project_cascades_runs_and_removes_project_root():

@@ -1,4 +1,5 @@
 from fastapi.testclient import TestClient
+from pathlib import Path
 
 from app.main import app
 
@@ -189,5 +190,86 @@ def test_log_artifact_events_are_projected_into_phase_and_task_timeline():
         event["event_type"] == "task.completed"
         and event["phase"] == "recon"
         and event["task_name"] == "source-analyzer"
+        for event in events
+    )
+
+
+def test_process_log_task_tool_is_projected_into_task_timeline():
+    client = TestClient(app)
+
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"])
+
+    runtime_dir = Path(run["engagement_root"]) / "runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    (runtime_dir / "process.log").write_text(
+        (
+            '{"type":"tool_use","timestamp":1774418514213,'
+            '"part":{"tool":"task","state":{"status":"completed","input":'
+            '{"description":"Recon - fingerprint target","subagent_type":"recon-specialist",'
+            '"prompt":"**Target**: https://example.com\\n**Phase**: Recon\\n"}'
+            '}}}\n'
+        ),
+        encoding="utf-8",
+    )
+
+    response = client.get(
+        f"/projects/{project['id']}/runs/{run['id']}/events",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    events = response.json()
+
+    assert any(
+        event["event_type"] == "task.started"
+        and event["phase"] == "recon"
+        and event["agent_name"] == "recon-specialist"
+        for event in events
+    )
+    assert any(
+        event["event_type"] == "task.completed"
+        and event["phase"] == "recon"
+        and event["agent_name"] == "recon-specialist"
+        for event in events
+    )
+
+
+def test_process_log_regular_tool_use_is_projected_into_operator_timeline():
+    client = TestClient(app)
+
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"])
+
+    workspace = Path(run["engagement_root"]) / "workspace"
+    active_dir = workspace / "engagements" / "2026-03-25-000000-example"
+    active_dir.mkdir(parents=True, exist_ok=True)
+    (active_dir / "scope.json").write_text('{"current_phase":"recon"}', encoding="utf-8")
+
+    runtime_dir = Path(run["engagement_root"]) / "runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    (runtime_dir / "process.log").write_text(
+        (
+            '{"type":"tool_use","timestamp":1774420227850,'
+            '"part":{"tool":"bash","title":"Check workspace contents","state":{"status":"completed","input":'
+            '{"description":"Check workspace contents","command":"ls -la"}'
+            '}}}\n'
+        ),
+        encoding="utf-8",
+    )
+
+    response = client.get(
+        f"/projects/{project['id']}/runs/{run['id']}/events",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    events = response.json()
+
+    assert any(
+        event["event_type"] == "task.started"
+        and event["phase"] == "recon"
+        and event["agent_name"] == "operator"
+        and event["task_name"] == "bash"
         for event in events
     )

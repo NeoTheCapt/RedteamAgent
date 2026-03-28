@@ -1,47 +1,43 @@
-import type { EventRecord } from "../lib/api";
-
-const PHASES = ["recon", "collect", "consume-test", "exploit", "report"];
+import type { RunSummary } from "../lib/api";
 
 type PhaseWaterfallProps = {
-  events: EventRecord[];
+  summary: RunSummary | null;
 };
 
-function phaseLabel(phase: string) {
-  switch (phase) {
-    case "consume-test":
-      return "Consume & Test";
-    default:
-      return phase.charAt(0).toUpperCase() + phase.slice(1);
-  }
-}
+const PHASE_DESCRIPTIONS: Record<string, string> = {
+  recon: "Fingerprint hosts, services, domains, and initial attack surface.",
+  collect: "Harvest source artifacts, routes, secrets, and actionable endpoints.",
+  "consume-test": "Validate cases, test hypotheses, and escalate likely weaknesses.",
+  exploit: "Confirm practical impact and attempt bounded exploit chains.",
+  report: "Synthesize evidence, findings, and remediation guidance.",
+};
 
-function phaseState(events: EventRecord[], phase: string) {
-  const relevant = events.filter((event) => event.phase === phase);
-  if (relevant.some((event) => event.event_type === "phase.completed")) {
-    return "completed";
-  }
-  if (relevant.some((event) => event.event_type === "phase.started")) {
-    return "active";
-  }
-  return "pending";
-}
-
-export function PhaseWaterfall({ events }: PhaseWaterfallProps) {
+export function PhaseWaterfall({ summary }: PhaseWaterfallProps) {
   return (
-    <section className="panel">
+    <section className="panel waterfall-panel">
       <div className="panel-header">
         <h2>Phase waterfall</h2>
-        <p className="meta-text">Five-phase autonomous workflow</p>
+        <p className="meta-text">Five-phase autonomous workflow with live phase state</p>
       </div>
       <div className="waterfall">
-        {PHASES.map((phase) => {
-          const state = phaseState(events, phase);
-          const taskCount = events.filter((event) => event.phase === phase && event.event_type.startsWith("task.")).length;
+        {(summary?.phases ?? []).map((phase) => {
+          const state = phase.state;
+          const displayState =
+            phase.phase === "recon" && phase.task_events === 0 && phase.active_agents === 0 && !phase.latest_summary
+              ? "initializing"
+              : state;
           return (
-            <article key={phase} className={`phase-card phase-${state}`}>
-              <p className="eyebrow">{state}</p>
-              <h3>{phaseLabel(phase)}</h3>
-              <p className="meta-text">{taskCount} task events</p>
+            <article key={phase.phase} className={`phase-card phase-${state} ${state === "active" ? "phase-pulse" : ""}`}>
+              <div className="phase-card-header">
+                <p className="eyebrow">{displayState}</p>
+                <span className={`phase-state-dot phase-state-${state}`} />
+              </div>
+              <h3>{phase.label}</h3>
+              <p className="muted-text">{PHASE_DESCRIPTIONS[phase.phase] ?? "No description available."}</p>
+              <p className="meta-text">
+                {phase.task_events} task events, {phase.active_agents} active agents
+              </p>
+              <p className="muted-text">{phase.latest_summary || "No phase summary yet"}</p>
             </article>
           );
         })}

@@ -109,7 +109,11 @@ EOF
 : > "$DIR/surfaces.jsonl"
 printf '[]\n' > "$DIR/intel-secrets.json"
 
-echo "{}" > "$DIR/auth.json"
+if [ -f ".redteam-seed/auth.json" ]; then
+  cp ".redteam-seed/auth.json" "$DIR/auth.json"
+else
+  echo "{}" > "$DIR/auth.json"
+fi
 
 sqlite3 "$DIR/cases.db" < scripts/schema.sql
 
@@ -138,6 +142,8 @@ Keep each heredoc as a standalone command:
 Then start the next command on a new line. Do not write `EOF && next_command`.
 When writing Markdown via unquoted heredoc, do not include raw backticks like `` `cmd` `` inside the body.
 Either escape them as `\`cmd\`` or write plain text, otherwise shell command substitution may run unexpectedly.
+Never pass raw JSONL directly to `append_surface.sh`. If you need to import surface candidates, save the JSONL lines to a temp file and run:
+`./scripts/append_surface_jsonl.sh "$DIR" < "$TMP_JSONL"`
 
 ## Step 3: Environment Check (Docker)
 
@@ -202,7 +208,9 @@ surface. The user can configure auth later at any time with `/auth`.
 Start the pipeline regardless of auth choice (skip or configured):
 
 1. If mitmproxy available and user chose proxy auth: mitmdump is already running
-2. Start Katana crawler (if installed): `./scripts/katana_ingest.sh "$DIR" > "$DIR/scans/katana_ingest.log" 2>&1 < /dev/null &`
+2. Start Katana crawler through the single supported wrapper path:
+   `./scripts/katana_ingest.sh "$DIR" > "$DIR/scans/katana_ingest.log" 2>&1 < /dev/null &`
+   Never launch `katana` directly from bash. Only `./scripts/katana_ingest.sh` or `start_katana` may start crawling.
    (Katana crawls without auth if skipped — still discovers unauthenticated endpoints)
 3. ALL subsequent phases (Recon → Collect → Consume & Test → Exploit → Report) proceed normally
 
@@ -255,10 +263,6 @@ After approval:
    without real parameters belong in `Surface Candidates`, not `cases.db`.
 2. Start Katana container + ingest pipeline:
    ```bash
-   source scripts/lib/container.sh
-   export ENGAGEMENT_DIR="$DIR"
-   start_katana "TARGET_URL"
-   # Start ingest in background — monitors katana output and feeds cases.db
    ./scripts/katana_ingest.sh "$DIR" > "$DIR/scans/katana_ingest.log" 2>&1 < /dev/null &
    echo "[katana] Crawler + ingest running in background"
    ```
@@ -273,10 +277,11 @@ Follow the case-dispatching skill methodology. For each cycle:
 4. Continue until queue empty + producers stopped
 
 Before leaving Test phase, run:
+`./scripts/check_collection_health.sh "$DIR"`
 `./scripts/check_surface_coverage.sh "$DIR"`
 
-If it fails, do not advance yet. Resolve each remaining discovered surface by marking it
-`covered`, `deferred`, or `not_applicable`.
+If either check fails, do not advance yet. Restore collection health first, then resolve each
+remaining discovered surface by marking it `covered`, `deferred`, or `not_applicable`.
 
 ### Phase 4: EXPLOIT
 

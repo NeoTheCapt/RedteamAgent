@@ -1,7 +1,17 @@
 import { useEffect, useMemo, useState } from "react";
 
-import { createProject, createRun, deleteProject, deleteRun, listProjects, listRuns, login, register } from "./lib/api";
-import type { Project, Run } from "./lib/api";
+import {
+  createProject,
+  createRun,
+  deleteProject,
+  deleteRun,
+  listProjects,
+  listRuns,
+  login,
+  register,
+  updateProject,
+} from "./lib/api";
+import type { Project, ProjectConfigInput, Run } from "./lib/api";
 import { LoginPage } from "./routes/LoginPage";
 import { ProjectsPage } from "./routes/ProjectsPage";
 import { RunPage } from "./routes/RunPage";
@@ -99,11 +109,17 @@ export default function App() {
     await handleLogin(username, password);
   }
 
-  async function handleCreateProject(name: string) {
+  async function handleCreateProject(name: string, config: ProjectConfigInput) {
     if (!session) return;
-    const project = await createProject(session.token, name);
+    const project = await createProject(session.token, name, config);
     setProjects((current) => [...current, project]);
     setRunsByProject((current) => ({ ...current, [project.id]: [] }));
+  }
+
+  async function handleUpdateProject(projectId: number, config: ProjectConfigInput) {
+    if (!session) return;
+    const project = await updateProject(session.token, projectId, config);
+    setProjects((current) => current.map((item) => (item.id === project.id ? project : item)));
   }
 
   async function handleCreateRun(projectId: number, target: string) {
@@ -166,6 +182,7 @@ export default function App() {
       projects={projects}
       runsByProject={runsByProject}
       onCreateProject={handleCreateProject}
+      onUpdateProject={handleUpdateProject}
       onCreateRun={handleCreateRun}
       onDeleteProject={handleDeleteProject}
       onDeleteRun={handleDeleteRun}

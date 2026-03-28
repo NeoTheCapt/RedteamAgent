@@ -1,4 +1,6 @@
 import type { Artifact, ArtifactContent } from "../lib/api";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 type ArtifactViewerProps = {
   artifacts: Artifact[];
@@ -13,11 +15,46 @@ export function ArtifactViewer({
   selectedArtifact,
   onSelect,
 }: ArtifactViewerProps) {
+  function isMarkdownArtifact(artifact: ArtifactContent) {
+    return artifact.media_type === "text/markdown" || artifact.name.toLowerCase().endsWith(".md");
+  }
+
+  function renderArtifactContent() {
+    if (!selectedArtifact) {
+      return <p className="empty-state">Select an available artifact to inspect it.</p>;
+    }
+
+    if (selectedArtifact.name === "log.md") {
+      const sections = selectedArtifact.content
+        .split(/\n(?=## \[\d{2}:\d{2}\])/)
+        .map((section) => section.trim())
+        .filter(Boolean)
+        .reverse();
+      return (
+        <div className="log-stack">
+          {sections.map((section, index) => (
+            <pre key={`${index}-${section.slice(0, 24)}`}>{section}</pre>
+          ))}
+        </div>
+      );
+    }
+
+    if (isMarkdownArtifact(selectedArtifact)) {
+      return (
+        <div className="markdown-document">
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>{selectedArtifact.content}</ReactMarkdown>
+        </div>
+      );
+    }
+
+    return <pre>{selectedArtifact.content}</pre>;
+  }
+
   return (
-    <section className="panel artifact-panel">
+    <section className="panel artifact-panel document-panel">
       <div className="panel-header">
-        <h2>Artifacts</h2>
-        <p className="meta-text">Documents and engagement outputs</p>
+        <h2>Documents</h2>
+        <p className="meta-text">Evidence, findings, notes, and generated outputs.</p>
       </div>
       <div className="artifact-layout">
         <aside className="artifact-list">
@@ -47,11 +84,9 @@ export function ArtifactViewer({
                 <strong>{selectedArtifact.name}</strong>
                 <span className="meta-text">{selectedArtifact.media_type}</span>
               </div>
-              <pre>{selectedArtifact.content}</pre>
+              {renderArtifactContent()}
             </>
-          ) : (
-            <p className="empty-state">Select an available artifact to inspect it.</p>
-          )}
+          ) : renderArtifactContent()}
         </article>
       </div>
     </section>

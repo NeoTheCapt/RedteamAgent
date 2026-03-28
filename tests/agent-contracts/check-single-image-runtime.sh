@@ -44,7 +44,7 @@ for _ in $(seq 1 20); do
   curl -sf http://127.0.0.1:8124/ >/dev/null && break
   sleep 0.2
 done
-katana -u http://127.0.0.1:8124/ -hl -jc -system-chrome -system-chrome-path /usr/bin/chromium -headless-options --no-sandbox,--disable-dev-shm-usage,--disable-gpu -d 1 -jsonl -silent -o /tmp/katana.jsonl >/tmp/katana-run.log 2>&1
+katana -u http://127.0.0.1:8124/ -hh -jc -xhr -xhr-extraction -fx -td -tlsi -duc -system-chrome -system-chrome-path /usr/bin/chromium -headless-options --no-sandbox,--disable-dev-shm-usage,--disable-gpu -kf all -iqp -fsu -pc -ns -s breadth-first -cs "^https?://127\\.0\\.0\\.1:8124([/:?#]|$)" -d 2 -ct 60s -timeout 20 -time-stable 5 -retry 3 -mfc 20 -c 5 -p 2 -rl 30 -mrs 16777216 -or -ob -jsonl -silent -o /tmp/katana.jsonl >/tmp/katana-run.log 2>&1
 test -s /tmp/katana.jsonl
 grep -Eq "127\\.0\\.0\\.1:8124|/about" /tmp/katana.jsonl
 '

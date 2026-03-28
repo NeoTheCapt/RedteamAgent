@@ -12,6 +12,13 @@ export type Project = {
   name: string;
   slug: string;
   root_path: string;
+  provider_id: string;
+  model_id: string;
+  small_model_id: string;
+  base_url: string;
+  api_key_configured: boolean;
+  auth_configured: boolean;
+  env_configured: boolean;
 };
 
 export type Run = {
@@ -19,6 +26,81 @@ export type Run = {
   target: string;
   status: string;
   engagement_root: string;
+};
+
+export type RunSummary = {
+  target: {
+    target: string;
+    hostname: string;
+    scheme: string;
+    path: string;
+    port: number;
+    scope_entries: string[];
+    engagement_dir: string;
+    started_at: string;
+    status: string;
+  };
+  overview: {
+    findings_count: number;
+    active_agents: number;
+    available_agents: number;
+    current_phase: string;
+    updated_at: string;
+  };
+  runtime_model: {
+    configured_provider: string;
+    configured_model: string;
+    configured_small_model: string;
+    observed_provider: string;
+    observed_model: string;
+    status: string;
+    summary: string;
+  };
+  coverage: {
+    total_cases: number;
+    completed_cases: number;
+    pending_cases: number;
+    processing_cases: number;
+    error_cases: number;
+    case_types: Array<{
+      type: string;
+      total?: number;
+      done?: number;
+      pending?: number;
+      processing?: number;
+      error?: number;
+    }>;
+    total_surfaces: number;
+    remaining_surfaces: number;
+    high_risk_remaining: number;
+    surface_statuses: Record<string, number>;
+    surface_types: Array<{
+      type: string;
+      count?: number;
+    }>;
+  };
+  current: {
+    phase: string;
+    task_name: string;
+    agent_name: string;
+    summary: string;
+  };
+  phases: Array<{
+    phase: string;
+    label: string;
+    state: string;
+    task_events: number;
+    active_agents: number;
+    latest_summary: string;
+  }>;
+  agents: Array<{
+    agent_name: string;
+    phase: string;
+    status: string;
+    task_name: string;
+    summary: string;
+    updated_at: string;
+  }>;
 };
 
 export type EventRecord = {
@@ -46,6 +128,25 @@ export type ArtifactContent = Artifact & {
 export type WebSocketTicketResponse = {
   ticket: string;
 };
+
+export type ObservedPathRecord = {
+  method: string;
+  url: string;
+  type: string;
+  status: string;
+  assigned_agent: string;
+  source: string;
+};
+
+export class ApiError extends Error {
+  status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+  }
+}
 
 function appBaseUrl(): URL {
   const pathname = window.location.pathname.endsWith("/")
@@ -102,10 +203,19 @@ async function request<T>(path: string, init: RequestInit = {}, token?: string):
   });
 
   if (!response.ok) {
-    throw new Error(await readError(response));
+    throw new ApiError(response.status, await readError(response));
   }
 
-  return response.json() as Promise<T>;
+  if (response.status === 204) {
+    return undefined as T;
+  }
+
+  const text = await response.text();
+  if (!text) {
+    return undefined as T;
+  }
+
+  return JSON.parse(text) as T;
 }
 
 export function login(username: string, password: string) {
@@ -126,10 +236,30 @@ export function listProjects(token: string) {
   return request<Project[]>("/projects", {}, token);
 }
 
-export function createProject(token: string, name: string) {
+export type ProjectConfigInput = {
+  provider_id?: string;
+  model_id?: string;
+  small_model_id?: string;
+  api_key?: string;
+  clear_api_key?: boolean;
+  base_url?: string;
+  auth_json?: string;
+  clear_auth_json?: boolean;
+  env_json?: string;
+  clear_env_json?: boolean;
+};
+
+export function createProject(token: string, name: string, config: ProjectConfigInput = {}) {
   return request<Project>("/projects", {
     method: "POST",
-    body: JSON.stringify({ name }),
+    body: JSON.stringify({ name, ...config }),
+  }, token);
+}
+
+export function updateProject(token: string, projectId: number, config: ProjectConfigInput) {
+  return request<Project>(`/projects/${projectId}`, {
+    method: "PATCH",
+    body: JSON.stringify(config),
   }, token);
 }
 
@@ -158,6 +288,14 @@ export function deleteRun(token: string, projectId: number, runId: number) {
 
 export function listEvents(token: string, projectId: number, runId: number) {
   return request<EventRecord[]>(`/projects/${projectId}/runs/${runId}/events`, {}, token);
+}
+
+export function getRunSummary(token: string, projectId: number, runId: number) {
+  return request<RunSummary>(`/projects/${projectId}/runs/${runId}/summary`, {}, token);
+}
+
+export function listObservedPaths(token: string, projectId: number, runId: number) {
+  return request<ObservedPathRecord[]>(`/projects/${projectId}/runs/${runId}/observed-paths`, {}, token);
 }
 
 export function listArtifacts(token: string, projectId: number, runId: number) {
