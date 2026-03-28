@@ -553,6 +553,9 @@ def test_list_runs_marks_completed_scope_as_completed_even_if_runtime_is_still_a
     )
     assert runs_response.status_code == 200
     assert runs_response.json()[0]["status"] == "completed"
+    metadata = json.loads((run_root / "run.json").read_text(encoding="utf-8"))
+    assert metadata["stop_reason_code"] == "completed"
+    assert metadata["stop_reason_text"] == "Run completed successfully."
     assert stopped == [run["id"]]
 
 
@@ -612,6 +615,76 @@ def test_list_runs_marks_completed_scope_as_completed_when_runtime_has_already_e
     )
     assert runs_response.status_code == 200
     assert runs_response.json()[0]["status"] == "completed"
+    metadata = json.loads((run_root / "run.json").read_text(encoding="utf-8"))
+    assert metadata["stop_reason_code"] == "completed"
+    assert metadata["stop_reason_text"] == "Run completed successfully."
+
+
+def test_list_runs_rewrites_stale_terminal_reason_when_completed_scope_is_already_final(monkeypatch):
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+
+    create_run = client.post(
+        f"/projects/{project['id']}/runs",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"target": "https://example.com"},
+    )
+    assert create_run.status_code == 201
+    run = create_run.json()
+    db.update_run_status(run["id"], "completed")
+
+    run_root = Path(run["engagement_root"])
+    workspace = run_root / "workspace"
+    engagement_dir = workspace / "engagements" / "2026-03-28-000000-example-final"
+    engagement_dir.mkdir(parents=True, exist_ok=True)
+    (workspace / "engagements" / ".active").write_text(
+        "engagements/2026-03-28-000000-example-final\n",
+        encoding="utf-8",
+    )
+    (engagement_dir / "scope.json").write_text(
+        json.dumps(
+            {
+                "status": "complete",
+                "current_phase": "complete",
+                "phases_completed": ["recon", "collect", "consume_test", "exploit", "report"],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (engagement_dir / "report.md").write_text("# Report\n", encoding="utf-8")
+    (engagement_dir / "surfaces.jsonl").write_text(
+        json.dumps({"surface_type": "api_documentation", "target": "GET /api-docs/", "status": "covered"}) + "\n",
+        encoding="utf-8",
+    )
+    with sqlite3.connect(engagement_dir / "cases.db") as connection:
+        connection.execute(
+            "CREATE TABLE cases (id INTEGER PRIMARY KEY AUTOINCREMENT, status TEXT NOT NULL)"
+        )
+        connection.executemany(
+            "INSERT INTO cases(status) VALUES (?)",
+            [("done",), ("error",)],
+        )
+        connection.commit()
+
+    metadata_path = run_root / "run.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata["stop_reason_code"] = "runtime_disappeared"
+    metadata["stop_reason_text"] = "Runtime supervisor disappeared before the engagement reached a terminal state."
+    metadata_path.write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
+
+    monkeypatch.setattr("app.services.runs.locate_runtime_pid", lambda _run: None)
+
+    runs_response = client.get(
+        f"/projects/{project['id']}/runs",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert runs_response.status_code == 200
+    assert runs_response.json()[0]["status"] == "completed"
+    refreshed = json.loads(metadata_path.read_text(encoding="utf-8"))
+    assert refreshed["stop_reason_code"] == "completed"
+    assert refreshed["stop_reason_text"] == "Run completed successfully."
 
 
 def test_list_runs_normalizes_scope_phase_aliases(monkeypatch):

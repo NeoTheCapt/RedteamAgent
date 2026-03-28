@@ -175,13 +175,15 @@ def _reconcile_run_status(run: Run) -> Run:
     pid = locate_runtime_pid(run)
     completion_ok, completion_reason = engagement_completion_state(run)
     if completion_ok:
+        completed = run if run.status == "completed" else db.update_run_status(run.id, "completed")
+        _write_run_terminal_reason(
+            completed,
+            reason_code="completed",
+            reason_text="Run completed successfully.",
+        )
         if pid is not None:
-            completed = db.update_run_status(run.id, "completed")
             stop_run_runtime(completed)
-            return completed
-        if run.status != "completed":
-            return db.update_run_status(run.id, "completed")
-        return run
+        return completed
 
     if pid is not None:
         scope_path = _active_scope_path(run)
