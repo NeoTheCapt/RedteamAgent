@@ -152,12 +152,17 @@ General:
 - For directory/path discovery, prefer `ffuf` over manual curl loops when testing >10 paths.
 
 **Cache downloaded files — do NOT re-download the same resource:**
-- When analyzing JS/CSS/HTML files, download once to /tmp and analyze locally:
+- When analyzing JS/CSS/HTML files, download once into the engagement workspace and analyze locally.
+  Never use `/tmp` or any other path outside the workspace/engagement tree for temp files during
+  unattended runs — OpenCode treats those as `external_directory` and may pause for approval.
+  Prefer `downloads/`, `scans/`, or an engagement-local temp dir such as:
   ```bash
-  run_tool curl -sL "https://target/path/to/file.js" -o /engagement/downloads/target_file.js
+  TMP_LOCAL_DIR="$(mktemp -d "$ENGAGEMENT_DIR/tmp.analysis.XXXXXX")"
+  run_tool curl -sL "https://target/path/to/file.js" -o "$ENGAGEMENT_DIR/downloads/target_file.js"
   # Then analyze locally — no more network requests for the same file
   grep -oE 'pattern' "$ENGAGEMENT_DIR/downloads/target_file.js"
   rg 'pattern' "$ENGAGEMENT_DIR/downloads/target_file.js"
+  rm -rf "$TMP_LOCAL_DIR"
   ```
 - NEVER curl the same URL more than once. If you already fetched it, use the local copy.
 - At the start of source analysis, download ALL JS files in one batch, then analyze locally.
