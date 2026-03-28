@@ -337,6 +337,60 @@ def test_run_summary_current_activity_prefers_scope_phase_for_unknown_task_event
     assert payload["current"]["phase"] == "consume-test"
 
 
+def test_run_summary_prefers_live_exploit_phase_over_stale_scope_phase():
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "http://127.0.0.1:8000")
+    active_dir = setup_active_engagement(run)
+    (active_dir / "scope.json").write_text(
+        json.dumps(
+            {
+                "hostname": "127.0.0.1",
+                "status": "in_progress",
+                "phases_completed": [],
+                "current_phase": "recon",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    client.post(
+        f"/projects/{project['id']}/runs/{run['id']}/events",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "event_type": "phase.started",
+            "phase": "exploit",
+            "task_name": "phase-transition",
+            "agent_name": "operator",
+            "summary": "Credential follow-up moved the run into exploit",
+        },
+    )
+    client.post(
+        f"/projects/{project['id']}/runs/{run['id']}/events",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "event_type": "task.started",
+            "phase": "exploit",
+            "task_name": "exploit-developer",
+            "agent_name": "exploit-developer",
+            "summary": "Authenticated exploit verification",
+        },
+    )
+
+    response = client.get(
+        f"/projects/{project['id']}/runs/{run['id']}/summary",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+
+    assert payload["overview"]["current_phase"] == "exploit"
+    assert payload["current"]["phase"] == "exploit"
+    assert any(item["phase"] == "exploit" and item["state"] == "active" for item in payload["phases"])
+    assert all(not (item["phase"] == "recon" and item["state"] == "active") for item in payload["phases"])
+
+
 def test_run_summary_event_creation_updates_run_metadata_timestamp():
     client = TestClient(app)
     token = register_and_login(client, "alice")

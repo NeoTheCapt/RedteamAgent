@@ -399,12 +399,65 @@ def _load_surface_metrics(path: Path) -> dict:
     return metrics
 
 
-def _build_phase_cards(scope: dict, events: list, agents: list[dict], run_status: str) -> list[dict]:
+def _latest_active_task_phase(events: list, scope_phase: str) -> str:
+    active_tasks: dict[str, object] = {}
+    for event in events:
+        if not getattr(event, "event_type", "").startswith("task."):
+            continue
+        key = getattr(event, "agent_name", "")
+        if not key:
+            continue
+        if event.event_type == "task.started":
+            active_tasks[key] = event
+        elif event.event_type == "task.completed":
+            active_tasks.pop(key, None)
+
+    if not active_tasks:
+        return "unknown"
+
+    latest_active = max(active_tasks.values(), key=lambda item: (item.created_at, item.id))
+    return _resolved_event_phase(latest_active, scope_phase)
+
+
+def _effective_current_phase(scope: dict, events: list, run_status: str) -> str:
+    scope_phase = _normalize_phase(scope.get("current_phase")) if scope else "unknown"
+    if _is_terminal_run_status(run_status):
+        return scope_phase
+
+    active_task_phase = _latest_active_task_phase(events, scope_phase)
+    if active_task_phase != "unknown":
+        return active_task_phase
+
+    latest_runtime_phase = next(
+        (
+            _event_phase(event)
+            for event in reversed(events)
+            if getattr(event, "event_type", "") in {"phase.started", "phase.completed"} and _event_phase(event) != "unknown"
+        ),
+        "unknown",
+    )
+    if latest_runtime_phase != "unknown":
+        return latest_runtime_phase
+
+    latest_task_phase = next(
+        (
+            _resolved_event_phase(event, scope_phase)
+            for event in reversed(events)
+            if getattr(event, "event_type", "").startswith("task.")
+            and _resolved_event_phase(event, scope_phase) != "unknown"
+        ),
+        "unknown",
+    )
+    if latest_task_phase != "unknown":
+        return latest_task_phase
+
+    return scope_phase
+
+
+def _build_phase_cards(scope: dict, events: list, agents: list[dict], run_status: str, effective_current_phase: str) -> list[dict]:
     completed = {_normalize_phase(item) for item in scope.get("phases_completed", [])}
-    current_phase = _normalize_phase(scope.get("current_phase"))
     task_counts: Counter = Counter()
     latest_summary: dict[str, str] = {}
-    phase_started: set[str] = set()
     terminal = _is_terminal_run_status(run_status)
 
     for event in events:
@@ -414,13 +467,10 @@ def _build_phase_cards(scope: dict, events: list, agents: list[dict], run_status
         if getattr(event, "event_type", "").startswith("task."):
             task_counts[phase] += 1
             latest_summary[phase] = getattr(event, "summary", "")
-            phase_started.add(phase)
         elif getattr(event, "event_type", "") == "phase.completed":
             latest_summary[phase] = getattr(event, "summary", "")
-            phase_started.add(phase)
         elif getattr(event, "event_type", "") == "phase.started":
             latest_summary.setdefault(phase, getattr(event, "summary", ""))
-            phase_started.add(phase)
 
     active_agents_by_phase: Counter = Counter()
     if not terminal:
@@ -434,9 +484,7 @@ def _build_phase_cards(scope: dict, events: list, agents: list[dict], run_status
             state = "completed"
         elif terminal:
             state = "pending"
-        elif phase == current_phase:
-            state = "active"
-        elif phase in phase_started:
+        elif phase == effective_current_phase:
             state = "active"
         else:
             state = "pending"
@@ -687,8 +735,9 @@ def summarize_run(project_id: int, run_id: int, user: User) -> RunSummary:
     surfaces = _load_surface_metrics(active_root / "surfaces.jsonl")
     findings_count = _count_findings(active_root / "findings.md")
     events = list_events_for_run(project_id, run_id, user)
+    effective_current_phase = _effective_current_phase(scope, events, run.status)
     agents = _build_agent_cards(events, scope, cases.get("processing_agents", []), run.status)
-    phases = _build_phase_cards(scope, events, agents, run.status)
+    phases = _build_phase_cards(scope, events, agents, run.status, effective_current_phase)
 
     latest_task = next((event for event in reversed(events) if event.event_type.startswith("task.")), None)
     latest_phase = next((event for event in reversed(events) if event.event_type.startswith("phase.")), None)
@@ -700,7 +749,7 @@ def summarize_run(project_id: int, run_id: int, user: User) -> RunSummary:
             "findings_count": findings_count,
             "active_agents": 0 if _is_terminal_run_status(run.status) else sum(1 for agent in agents if agent["status"] == "active"),
             "available_agents": len(agents),
-            "current_phase": _normalize_phase(scope.get("current_phase")) if scope else _normalize_phase(getattr(latest_phase, "phase", "unknown")),
+            "current_phase": effective_current_phase,
             "updated_at": run.updated_at if _is_terminal_run_status(run.status) else getattr(latest_task or latest_phase, "created_at", run.updated_at),
         },
         runtime_model=_load_runtime_model_verification(run_root, project),
