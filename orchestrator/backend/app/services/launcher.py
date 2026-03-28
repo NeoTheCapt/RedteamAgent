@@ -469,6 +469,7 @@ def _write_container_metadata(run: Run, container_id: str, command: list[str]) -
         "container_id": container_id,
         "command": _redact_command(command),
         "started_at": db.get_run_by_id(run.id).updated_at if db.get_run_by_id(run.id) else None,
+        "launcher_pid": os.getpid(),
     }
     process_metadata_path_for(run).write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
@@ -566,23 +567,39 @@ def _container_exit_code(container_name: str) -> int | None:
 
 
 def locate_runtime_pid(run: Run) -> int | None:
-    container_name = _container_name_from_metadata(run)
+    metadata_path = process_metadata_path_for(run)
+    payload: dict[str, object] = {}
+    if metadata_path.exists():
+        try:
+            loaded = json.loads(metadata_path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                payload = loaded
+        except json.JSONDecodeError:
+            payload = {}
+
+    if int(payload.get("run_id", -1)) == run.id:
+        try:
+            pid = int(payload.get("pid"))
+            if _pid_alive(pid):
+                return pid
+        except (ValueError, TypeError):
+            pass
+
+    container_name = payload.get("container_name")
+    if not isinstance(container_name, str) or not container_name:
+        container_name = _container_name_from_metadata(run)
     if container_name:
         status = _container_status(container_name)
         if status in {"running", "created", "restarting"}:
-            return -1
+            try:
+                launcher_pid = int(payload.get("launcher_pid"))
+            except (ValueError, TypeError):
+                launcher_pid = None
+            if launcher_pid == os.getpid():
+                return -1
+            return None
         if status is not None:
             return None
-
-    metadata_path = process_metadata_path_for(run)
-    if metadata_path.exists():
-        try:
-            payload = json.loads(metadata_path.read_text(encoding="utf-8"))
-            pid = int(payload.get("pid"))
-            if int(payload.get("run_id", -1)) == run.id and _pid_alive(pid):
-                return pid
-        except (ValueError, TypeError, json.JSONDecodeError):
-            pass
 
     try:
         output = subprocess.check_output(["ps", "eww", "-axo", "pid=,command="], text=True)
