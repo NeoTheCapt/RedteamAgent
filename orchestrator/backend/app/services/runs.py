@@ -131,12 +131,13 @@ def _latest_workflow_activity_at(run: Run, scope_path: Path | None) -> datetime 
     return latest
 
 
-def _load_queue_state(scope_path: Path | None) -> tuple[str, int, int]:
+def _load_queue_state(scope_path: Path | None) -> tuple[str, int, int, int]:
     current_phase = "unknown"
     total_cases = 0
+    pending_cases = 0
     processing_cases = 0
     if scope_path is None or not scope_path.exists():
-        return (current_phase, total_cases, processing_cases)
+        return (current_phase, total_cases, pending_cases, processing_cases)
 
     try:
         scope_payload = json.loads(scope_path.read_text(encoding="utf-8"))
@@ -146,30 +147,45 @@ def _load_queue_state(scope_path: Path | None) -> tuple[str, int, int]:
 
     cases_db = scope_path.parent / "cases.db"
     if not cases_db.exists():
-        return (current_phase, total_cases, processing_cases)
+        return (current_phase, total_cases, pending_cases, processing_cases)
 
     try:
         with sqlite3.connect(cases_db, timeout=1.0) as connection:
             connection.execute("PRAGMA busy_timeout = 1000")
             total_row = connection.execute("SELECT COUNT(*) FROM cases").fetchone()
+            pending_row = connection.execute(
+                "SELECT COUNT(*) FROM cases WHERE status = 'pending'"
+            ).fetchone()
             processing_row = connection.execute(
                 "SELECT COUNT(*) FROM cases WHERE status = 'processing'"
             ).fetchone()
             total_cases = int(total_row[0] or 0)
+            pending_cases = int(pending_row[0] or 0)
             processing_cases = int(processing_row[0] or 0)
     except sqlite3.Error:
         total_cases = 0
+        pending_cases = 0
         processing_cases = 0
 
-    return (current_phase, total_cases, processing_cases)
+    return (current_phase, total_cases, pending_cases, processing_cases)
 
 
 def _reconcile_run_status(run: Run) -> Run:
     normalize_active_scope(run)
     pid = locate_runtime_pid(run)
+    completion_ok, completion_reason = engagement_completion_state(run)
+    if completion_ok:
+        if pid is not None:
+            completed = db.update_run_status(run.id, "completed")
+            stop_run_runtime(completed)
+            return completed
+        if run.status != "completed":
+            return db.update_run_status(run.id, "completed")
+        return run
+
     if pid is not None:
         scope_path = _active_scope_path(run)
-        current_phase, total_cases, processing_cases = _load_queue_state(scope_path)
+        current_phase, total_cases, pending_cases, processing_cases = _load_queue_state(scope_path)
         workflow_activity_at = _latest_workflow_activity_at(run, scope_path)
         if workflow_activity_at is not None:
             workflow_age = datetime.now() - workflow_activity_at
@@ -185,6 +201,24 @@ def _reconcile_run_status(run: Run) -> Run:
                     reason_text=(
                         "Workflow produced no new process/log progress before stall timeout elapsed "
                         "while queue items remained in processing."
+                    ),
+                )
+                stop_run_runtime(failed)
+                return failed
+
+            if (
+                current_phase.replace("_", "-") not in EARLY_PHASE_STALL_PHASES
+                and pending_cases > 0
+                and processing_cases == 0
+                and workflow_age >= timedelta(seconds=RUN_STALL_TIMEOUT_SECONDS)
+            ):
+                failed = db.update_run_status(run.id, "failed")
+                _write_run_terminal_reason(
+                    failed,
+                    reason_code="queue_stalled",
+                    reason_text=(
+                        "Workflow produced no new dispatch/log progress before stall timeout elapsed "
+                        "while pending queue items remained undispatched."
                     ),
                 )
                 stop_run_runtime(failed)
@@ -221,12 +255,14 @@ def _reconcile_run_status(run: Run) -> Run:
         return run
 
     if run.status == "completed":
-        completion_ok, _ = engagement_completion_state(run)
-        if not completion_ok:
-            failed = db.update_run_status(run.id, "failed")
-            stop_run_runtime(failed)
-            return failed
-        return run
+        failed = db.update_run_status(run.id, "failed")
+        _write_run_terminal_reason(
+            failed,
+            reason_code="incomplete_terminal_state",
+            reason_text=completion_reason,
+        )
+        stop_run_runtime(failed)
+        return failed
 
     # New runs can briefly lack visible runtime metadata while the container and
     # docker client process are still bootstrapping. Do not immediately mark
@@ -237,6 +273,11 @@ def _reconcile_run_status(run: Run) -> Run:
 
     if run.status == "running":
         failed = db.update_run_status(run.id, "failed")
+        _write_run_terminal_reason(
+            failed,
+            reason_code="runtime_disappeared",
+            reason_text="Runtime supervisor disappeared before the engagement reached a terminal state.",
+        )
         stop_run_runtime(failed)
         return failed
     return run
