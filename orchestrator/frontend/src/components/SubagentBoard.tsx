@@ -19,7 +19,7 @@ const AGENT_DESCRIPTIONS: Record<string, string> = {
 const AGENT_PHASES: Record<string, string> = {
   operator: "coordination",
   "recon-specialist": "recon",
-  "source-analyzer": "recon",
+  "source-analyzer": "unassigned",
   "vulnerability-analyst": "consume-test",
   "exploit-developer": "exploit",
   "osint-analyst": "exploit",
