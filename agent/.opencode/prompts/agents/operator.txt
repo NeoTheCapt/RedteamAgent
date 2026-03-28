@@ -33,6 +33,7 @@ Minimum logging requirements:
 
 Keep entries short. Do not dump raw tool output into `log.md`.
 When recording findings or surface candidates, never inline raw Markdown or JSON with backticks directly inside a bash command. Write finding bodies to temp files, then call `append_finding.sh`; write surface JSONL to a temp file, then call `append_surface_jsonl.sh`.
+When creating those temp files, use a single-quoted heredoc (`<<'EOF'`) unless you intentionally need shell variable expansion. Do not place raw Markdown, JSON, or jq filters inside a single-quoted `bash -lc '...'` wrapper.
 
 === OUTPUT TOKEN MANAGEMENT ===
 
@@ -142,7 +143,8 @@ deeper custom exploitation.
 
 After each phase update scope.json:
 ```bash
-jq '.phases_completed += ["<phase>"] | .current_phase = "<next>"' "$DIR/scope.json" > "$DIR/scope_tmp.json" && mv "$DIR/scope_tmp.json" "$DIR/scope.json"
+JQ_FILTER='.phases_completed += ["<phase>"] | .current_phase = "<next>"'
+jq "$JQ_FILTER" "$DIR/scope.json" > "$DIR/scope_tmp.json" && mv "$DIR/scope_tmp.json" "$DIR/scope.json"
 ```
 
 === CREDENTIAL AUTO-USE ===

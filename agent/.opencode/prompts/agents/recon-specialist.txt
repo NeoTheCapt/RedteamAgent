@@ -120,6 +120,8 @@ Domains & Infrastructure:
 12. FINDING IDs: Never hand-allocate IDs. Write findings with `## [FINDING-ID] Title`, then append via:
     `./scripts/append_finding.sh "$DIR" recon-specialist <finding-body-file>`
     This allocates the next `FINDING-RE-NNN` under a lock and updates `Finding Count`.
+    When creating `<finding-body-file>` or any `Surface Candidates` JSONL temp file, use a single-quoted
+    heredoc (`<<'EOF'`) unless shell expansion is explicitly required.
 13. CONTENT VALIDATION: After downloading any file, verify it is what you expected:
    - Check Content-Type header matches expected type (not text/html for .js/.json/.pyc)
    - If response size matches the SPA index.html size, it is the Angular catch-all — discard it

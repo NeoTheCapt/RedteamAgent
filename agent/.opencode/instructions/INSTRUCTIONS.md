@@ -123,9 +123,17 @@ Grep:
 - For complex regex, use `rg` (ripgrep) which supports Perl regex natively
 
 Heredoc:
-- When writing files with `cat > file << EOF` containing `$VARIABLES`:
-  Use UNQUOTED delimiter (`<< EOF`), NOT single-quoted (`<< 'EOF'`)
-  Single-quoted heredoc prevents variable expansion — writes literal `$VAR`
+- When writing files with `cat > file << EOF` containing `$VARIABLES` that MUST expand:
+  use UNQUOTED delimiter (`<< EOF`), NOT single-quoted (`<< 'EOF'`).
+- When writing arbitrary Markdown, JSON, JSONL, jq filters, curl payloads, or other literal text
+  to a temp file, prefer a SINGLE-QUOTED heredoc (`<<'EOF'`). This prevents shell expansion,
+  command substitution, and backtick execution from corrupting the content.
+- Never paste raw Markdown with backticks, JSON, or jq programs directly inside a single-quoted
+  `bash -lc '...'` block. Write the content to a temp file with `<<'EOF'`, then pass the file path
+  to the helper script.
+- For `jq` updates, keep the filter out of shell-quoted inline code when possible:
+  `JQ_FILTER='.phases_completed += ["recon"] | .current_phase = "collect"'`
+  `jq "$JQ_FILTER" "$DIR/scope.json" > "$DIR/scope_tmp.json" && mv "$DIR/scope_tmp.json" "$DIR/scope.json"`
 
 General:
 - Always test loop scripts with a simple case before running large batches
