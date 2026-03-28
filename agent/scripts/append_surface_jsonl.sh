@@ -67,7 +67,7 @@ infer_surface_type() {
         return 0
     fi
 
-    if [[ "$haystack" == *"swagger"* || "$haystack" == *"openapi"* || "$haystack" == *"api doc"* || "$haystack" == *"documented"* || "$haystack" == *"/api-docs"* || "$haystack" == *"/okx-api"* ]]; then
+    if [[ "$haystack" == *"swagger"* || "$haystack" == *"openapi"* || "$haystack" == *"api doc"* || "$haystack" == *"documented"* || "$haystack" == *"/api-docs"* || "$haystack" == *"/okx-api"* || "$haystack" == *"docs-v5"* ]]; then
         printf '%s\n' "api_documentation"
         return 0
     fi
@@ -105,6 +105,13 @@ infer_surface_type() {
     if [[ "$item_type" == "page" ]]; then
         printf '%s\n' "dynamic_render"
         return 0
+    fi
+
+    if [[ -z "$item_type" && "$method" == "GET" && "$target" == GET\ /* ]]; then
+        if [[ "$target" != GET\ /api* && "$target" != GET\ /v[0-9]* && "$target" != GET\ /priapi* && "$target" != GET\ /rest/* && "$target" != GET\ /*.* ]]; then
+            printf '%s\n' "dynamic_render"
+            return 0
+        fi
     fi
 
     return 1
