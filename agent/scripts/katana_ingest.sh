@@ -172,7 +172,7 @@ else
     last_size=""
     poll_seconds="${KATANA_INGEST_POLL_SECONDS:-2}"
     while true; do
-        current_size="$(stat -f '%z' "$KATANA_OUTPUT" 2>/dev/null || echo 0)"
+        current_size="$(wc -c < "$KATANA_OUTPUT" | tr -d '[:space:]')"
         if [[ "$current_size" != "$last_size" ]]; then
             ingest_output_snapshot "$KATANA_OUTPUT"
             last_size="$current_size"
