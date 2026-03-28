@@ -104,4 +104,67 @@ recoverable_cases="$(sqlite3 "$ENG_DIR/cases.db" 'select count(*) from cases;')"
 }
 sqlite3 "$ENG_DIR/cases.db" 'select url from cases;' | grep -q '/recoverable'
 
+python3 - <<'PY' "$ENG_DIR/scans/katana_output.jsonl"
+from pathlib import Path
+import json
+import sys
+
+rows = [
+    {
+        "timestamp": "2026-03-28T00:02:00Z",
+        "request": {
+            "method": "GET",
+            "endpoint": "http://host.docker.internal:8000/rest/admin/application-configuration",
+            "source": "http://host.docker.internal:8000/"
+        },
+        "response": {
+            "status_code": 200,
+            "headers": {
+                "Content-Type": "application/json; charset=UTF-8"
+            }
+        }
+    },
+    {
+        "timestamp": "2026-03-28T00:02:01Z",
+        "request": {
+            "method": "GET",
+            "endpoint": "http://host.docker.internal:8000/rest/admin/%5C%22/",
+            "tag": "a",
+            "attribute": "href",
+            "source": "http://host.docker.internal:8000/rest/admin/application-configuration"
+        },
+        "response": {
+            "status_code": 500,
+            "headers": {
+                "Content-Type": "text/html; charset=UTF-8"
+            }
+        }
+    },
+    {
+        "timestamp": "2026-03-28T00:02:02Z",
+        "request": {
+            "method": "GET",
+            "endpoint": "http://host.docker.internal:8000/assets/public/images/w",
+            "tag": "html",
+            "attribute": "regex",
+            "source": "http://host.docker.internal:8000/assets/public/images/JuiceShop_Logo.png"
+        },
+        "error": "cause=\"context deadline exceeded\" chain=\"hybrid: could not get dom\""
+    }
+]
+Path(sys.argv[1]).write_text("\n".join(json.dumps(row, separators=(",", ":")) for row in rows), encoding="utf-8")
+PY
+sqlite3 "$ENG_DIR/cases.db" 'delete from cases;'
+KATANA_INGEST_SKIP_START=1 KATANA_INGEST_ONESHOT=1 "$ROOT/agent/scripts/katana_ingest.sh" "$ENG_DIR" >/dev/null
+filtered_cases="$(sqlite3 "$ENG_DIR/cases.db" 'select count(*) from cases;')"
+[[ "$filtered_cases" == "1" ]] || {
+  echo "expected noise-filter replay to keep only 1 real case, got $filtered_cases cases" >&2
+  exit 1
+}
+sqlite3 "$ENG_DIR/cases.db" 'select url from cases;' | grep -q '/rest/admin/application-configuration'
+if sqlite3 "$ENG_DIR/cases.db" 'select url from cases;' | grep -q '%5C%22\|/assets/public/images/w'; then
+  echo "expected malformed katana discoveries to be filtered from replay" >&2
+  exit 1
+fi
+
 echo "katana ingest replay contracts: ok"
