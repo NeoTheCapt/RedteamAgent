@@ -190,6 +190,22 @@ def _surface_completion_ok(surface_file: Path) -> bool:
     return True
 
 
+def _last_logged_stop_reason(log_path: Path) -> str:
+    if not log_path.exists():
+        return ""
+    content = log_path.read_text(encoding="utf-8", errors="replace")
+    matches = list(
+        re.finditer(
+            r"^## \[[^\]]+\] Run stop — operator\s*$.*?^\*\*Result\*\*: (.+)$",
+            content,
+            flags=re.MULTILINE | re.DOTALL,
+        )
+    )
+    if not matches:
+        return ""
+    return matches[-1].group(1).strip()
+
+
 def engagement_completion_state(run: Run) -> tuple[bool, str]:
     engagement_dir = _active_engagement_dir(run)
     if engagement_dir is None:
@@ -199,6 +215,7 @@ def engagement_completion_state(run: Run) -> tuple[bool, str]:
     report_path = engagement_dir / "report.md"
     cases_db = engagement_dir / "cases.db"
     surfaces_path = engagement_dir / "surfaces.jsonl"
+    log_path = engagement_dir / "log.md"
 
     if not scope_path.exists():
         return (False, "scope.json is missing.")
@@ -212,6 +229,9 @@ def engagement_completion_state(run: Run) -> tuple[bool, str]:
     completed_phases = {_canonical_phase_name(item) for item in scope.get("phases_completed", [])}
 
     if status_name != "complete":
+        logged_reason = _last_logged_stop_reason(log_path)
+        if logged_reason:
+            return (False, logged_reason)
         return (False, f"Engagement status is {status_name or 'unknown'}.")
     if current_phase != "complete":
         return (False, f"Current phase is {current_phase or 'unknown'}.")
