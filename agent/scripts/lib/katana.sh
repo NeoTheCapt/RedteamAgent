@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 
+KATANA_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=/dev/null
+source "$KATANA_LIB_DIR/noise.sh"
+
 katana_error_is_recoverable_discovery() {
     local error_text="${1:-}"
     [[ -n "$error_text" ]] || return 1
@@ -31,4 +35,30 @@ katana_line_should_ingest() {
     fi
 
     [[ -n "$url" ]] || printf '%s' "$line" | grep -qE '^https?://'
+}
+
+katana_request_should_ingest() {
+    local request_json="${1:-}"
+    [[ -n "$request_json" ]] || return 1
+
+    local url url_path source_ref tag attribute content_type error_text
+    url="$(printf '%s' "$request_json" | jq -r '.url // empty' 2>/dev/null || true)"
+    [[ -n "$url" ]] || return 1
+
+    url_path="$(_katana_urlish_path "$url")"
+    if is_katana_noise_path "$url_path"; then
+        return 1
+    fi
+
+    source_ref="$(printf '%s' "$request_json" | jq -r '.source_ref // empty' 2>/dev/null || true)"
+    tag="$(printf '%s' "$request_json" | jq -r '.tag // empty' 2>/dev/null || true)"
+    attribute="$(printf '%s' "$request_json" | jq -r '.attribute // empty' 2>/dev/null || true)"
+    content_type="$(printf '%s' "$request_json" | jq -r '.content_type // empty' 2>/dev/null || true)"
+    error_text="$(printf '%s' "$request_json" | jq -r '.error // empty' 2>/dev/null || true)"
+
+    if is_katana_noise_source "$source_ref" "$tag" "$attribute" "$content_type" "$error_text"; then
+        return 1
+    fi
+
+    return 0
 }

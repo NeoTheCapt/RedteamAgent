@@ -117,6 +117,9 @@ ingest_katana_line() {
 
     while IFS= read -r request_json; do
         [[ -n "$request_json" ]] || continue
+        if ! katana_request_should_ingest "$request_json"; then
+            continue
+        fi
         url=$(printf '%s' "$request_json" | jq -r '.url // empty' 2>/dev/null || true)
         [[ -n "$url" ]] || continue
         method=$(printf '%s' "$request_json" | jq -r '.method // "GET"' 2>/dev/null || echo "GET")
@@ -131,14 +134,22 @@ ingest_katana_line() {
                 url: (.request.endpoint // .request.url // .url // empty),
                 content_type: (.response.headers["content-type"] // .response.headers["Content-Type"] // ""),
                 response_status: (.response.status_code // 0),
-                source: "katana"
+                source: "katana",
+                source_ref: (.request.source // ""),
+                tag: (.request.tag // ""),
+                attribute: (.request.attribute // ""),
+                error: (.error // "")
               },
               (.response.xhr_requests[]? | {
                 method: (.method // "GET"),
                 url: (.endpoint // .url // empty),
                 content_type: (.headers["content-type"] // .headers["Content-Type"] // ""),
                 response_status: 0,
-                source: "katana-xhr"
+                source: "katana-xhr",
+                source_ref: (.source // .request.source // ""),
+                tag: (.tag // ""),
+                attribute: (.attribute // ""),
+                error: (.error // "")
               })
             ]
             | .[]
