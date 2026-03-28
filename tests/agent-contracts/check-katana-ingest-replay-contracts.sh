@@ -80,4 +80,28 @@ root_path="$(sqlite3 "$ENG_DIR/cases.db" "select url_path from cases where sourc
   exit 1
 }
 
+python3 - <<'PY' "$ENG_DIR/scans/katana_output.jsonl"
+from pathlib import Path
+import json
+import sys
+
+payload = {
+    "timestamp": "2026-03-28T00:01:00Z",
+    "request": {
+        "method": "GET",
+        "endpoint": "http://host.docker.internal:8000/recoverable"
+    },
+    "error": "hybrid: response is nil"
+}
+Path(sys.argv[1]).write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
+PY
+sqlite3 "$ENG_DIR/cases.db" 'delete from cases;'
+KATANA_INGEST_SKIP_START=1 KATANA_INGEST_ONESHOT=1 "$ROOT/agent/scripts/katana_ingest.sh" "$ENG_DIR" >/dev/null
+recoverable_cases="$(sqlite3 "$ENG_DIR/cases.db" 'select count(*) from cases;')"
+[[ "$recoverable_cases" -ge 1 ]] || {
+  echo "expected recoverable katana error rows to be ingested, got $recoverable_cases cases" >&2
+  exit 1
+}
+sqlite3 "$ENG_DIR/cases.db" 'select url from cases;' | grep -q '/recoverable'
+
 echo "katana ingest replay contracts: ok"
