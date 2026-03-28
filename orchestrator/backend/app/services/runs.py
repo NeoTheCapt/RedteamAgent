@@ -84,12 +84,17 @@ def _active_scope_path(run: Run) -> Path | None:
     return engagement_dir / active_name / "scope.json"
 
 
-def _latest_runtime_activity_at(run: Run) -> datetime | None:
-    latest: datetime | None = None
+def _path_mtime(path: Path) -> datetime | None:
+    if not path.exists() or not path.is_file():
+        return None
+    try:
+        return datetime.fromtimestamp(path.stat().st_mtime)
+    except OSError:
+        return None
 
-    process_log = process_log_path_for(run)
-    if process_log.exists():
-        latest = datetime.fromtimestamp(process_log.stat().st_mtime)
+
+def _latest_runtime_activity_at(run: Run) -> datetime | None:
+    latest = _path_mtime(process_log_path_for(run))
 
     scope_path = _active_scope_path(run)
     if scope_path is None or not scope_path.exists():
@@ -99,19 +104,92 @@ def _latest_runtime_activity_at(run: Run) -> datetime | None:
     for path in active_dir.rglob("*"):
         if not path.is_file():
             continue
-        try:
-            candidate = datetime.fromtimestamp(path.stat().st_mtime)
-        except OSError:
+        candidate = _path_mtime(path)
+        if candidate is None:
             continue
         if latest is None or candidate > latest:
             latest = candidate
     return latest
 
 
+def _latest_workflow_activity_at(run: Run, scope_path: Path | None) -> datetime | None:
+    latest = _path_mtime(process_log_path_for(run))
+    if scope_path is None or not scope_path.exists():
+        return latest
+
+    for path in (
+        scope_path,
+        scope_path.parent / "log.md",
+        scope_path.parent / "findings.md",
+        scope_path.parent / "report.md",
+    ):
+        candidate = _path_mtime(path)
+        if candidate is None:
+            continue
+        if latest is None or candidate > latest:
+            latest = candidate
+    return latest
+
+
+def _load_queue_state(scope_path: Path | None) -> tuple[str, int, int]:
+    current_phase = "unknown"
+    total_cases = 0
+    processing_cases = 0
+    if scope_path is None or not scope_path.exists():
+        return (current_phase, total_cases, processing_cases)
+
+    try:
+        scope_payload = json.loads(scope_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        scope_payload = {}
+    current_phase = str(scope_payload.get("current_phase") or "unknown").strip().lower().replace("-", "_")
+
+    cases_db = scope_path.parent / "cases.db"
+    if not cases_db.exists():
+        return (current_phase, total_cases, processing_cases)
+
+    try:
+        with sqlite3.connect(cases_db, timeout=1.0) as connection:
+            connection.execute("PRAGMA busy_timeout = 1000")
+            total_row = connection.execute("SELECT COUNT(*) FROM cases").fetchone()
+            processing_row = connection.execute(
+                "SELECT COUNT(*) FROM cases WHERE status = 'processing'"
+            ).fetchone()
+            total_cases = int(total_row[0] or 0)
+            processing_cases = int(processing_row[0] or 0)
+    except sqlite3.Error:
+        total_cases = 0
+        processing_cases = 0
+
+    return (current_phase, total_cases, processing_cases)
+
+
 def _reconcile_run_status(run: Run) -> Run:
     normalize_active_scope(run)
     pid = locate_runtime_pid(run)
     if pid is not None:
+        scope_path = _active_scope_path(run)
+        current_phase, total_cases, processing_cases = _load_queue_state(scope_path)
+        workflow_activity_at = _latest_workflow_activity_at(run, scope_path)
+        if workflow_activity_at is not None:
+            workflow_age = datetime.now() - workflow_activity_at
+            if (
+                current_phase.replace("_", "-") not in EARLY_PHASE_STALL_PHASES
+                and processing_cases > 0
+                and workflow_age >= timedelta(seconds=RUN_STALL_TIMEOUT_SECONDS)
+            ):
+                failed = db.update_run_status(run.id, "failed")
+                _write_run_terminal_reason(
+                    failed,
+                    reason_code="queue_stalled",
+                    reason_text=(
+                        "Workflow produced no new process/log progress before stall timeout elapsed "
+                        "while queue items remained in processing."
+                    ),
+                )
+                stop_run_runtime(failed)
+                return failed
+
         last_activity_at = _latest_runtime_activity_at(run)
         if last_activity_at is not None:
             log_age = datetime.now() - last_activity_at
@@ -124,22 +202,6 @@ def _reconcile_run_status(run: Run) -> Run:
                 )
                 stop_run_runtime(failed)
                 return failed
-
-            scope_path = _active_scope_path(run)
-            current_phase = "unknown"
-            total_cases = 0
-            if scope_path is not None and scope_path.exists():
-                scope_payload = json.loads(scope_path.read_text(encoding="utf-8"))
-                current_phase = str(scope_payload.get("current_phase") or "unknown").strip().lower().replace("-", "_")
-                cases_db = scope_path.parent / "cases.db"
-                if cases_db.exists():
-                    try:
-                        with sqlite3.connect(cases_db, timeout=1.0) as connection:
-                            connection.execute("PRAGMA busy_timeout = 1000")
-                            row = connection.execute("SELECT COUNT(*) FROM cases").fetchone()
-                            total_cases = int(row[0] or 0)
-                    except sqlite3.Error:
-                        total_cases = 0
 
             if (
                 current_phase.replace("_", "-") in EARLY_PHASE_STALL_PHASES
