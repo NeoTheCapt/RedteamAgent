@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import sqlite3
+import tempfile
 import time
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 from fastapi import HTTPException, status
 
@@ -118,24 +120,65 @@ def _cases_db_candidates(run_root: Path, active_root: Path) -> list[Path]:
     return candidates
 
 
-def _count_cases_for_db(path: Path) -> int:
-    if not path.exists():
-        return -1
+def _is_sqlite_transient_error(exc: sqlite3.Error) -> bool:
+    message = str(exc).lower()
+    return any(token in message for token in ("locked", "busy", "database schema is locked"))
 
-    rows = None
+
+def _connect_sqlite_readonly(path: Path) -> sqlite3.Connection:
+    uri = f"file:{quote(str(path))}?mode=ro"
+    connection = sqlite3.connect(uri, uri=True, timeout=1.0)
+    connection.execute("PRAGMA busy_timeout = 1000")
+    return connection
+
+
+def _copy_sqlite_snapshot(path: Path, snapshot_dir: Path) -> Path:
+    snapshot_path = snapshot_dir / path.name
+    shutil.copy2(path, snapshot_path)
+    for suffix in ("-wal", "-shm"):
+        sidecar = Path(f"{path}{suffix}")
+        if sidecar.exists():
+            shutil.copy2(sidecar, snapshot_dir / sidecar.name)
+    return snapshot_path
+
+
+def _read_sqlite_with_fallback(path: Path, reader, default):
+    if not path.exists():
+        return default
+
     for _ in range(5):
         try:
             with sqlite3.connect(path, timeout=1.0) as connection:
                 connection.execute("PRAGMA busy_timeout = 1000")
-                rows = connection.execute("SELECT COUNT(*) FROM cases").fetchone()
-            break
+                return reader(connection)
         except sqlite3.OperationalError as exc:
-            if "locked" not in str(exc).lower():
-                return -1
-            time.sleep(0.1)
+            if not _is_sqlite_transient_error(exc):
+                return default
         except sqlite3.Error:
-            return -1
+            return default
 
+        try:
+            with _connect_sqlite_readonly(path) as connection:
+                return reader(connection)
+        except sqlite3.OperationalError as exc:
+            if not _is_sqlite_transient_error(exc):
+                return default
+        except sqlite3.Error:
+            return default
+
+        time.sleep(0.1)
+
+    try:
+        with tempfile.TemporaryDirectory(prefix="run-summary-sqlite-") as temp_dir:
+            snapshot_path = _copy_sqlite_snapshot(path, Path(temp_dir))
+            with _connect_sqlite_readonly(snapshot_path) as connection:
+                return reader(connection)
+    except (OSError, sqlite3.Error):
+        return default
+
+
+def _count_cases_for_db(path: Path) -> int:
+    rows = _read_sqlite_with_fallback(path, lambda connection: connection.execute("SELECT COUNT(*) FROM cases").fetchone(), None)
     if not rows:
         return -1
     return int(rows[0] or 0)
@@ -215,25 +258,26 @@ def _load_cases_metrics(path: Path) -> dict:
     if not path.exists():
         return metrics
 
-    type_rows: dict[str, Counter] = defaultdict(Counter)
-    rows = None
-    for _ in range(5):
-        try:
-            with sqlite3.connect(path, timeout=1.0) as connection:
-                connection.execute("PRAGMA busy_timeout = 1000")
-                rows = connection.execute(
-                    "SELECT type, status, COUNT(*) AS count FROM cases GROUP BY type, status"
-                ).fetchall()
-            break
-        except sqlite3.OperationalError as exc:
-            if "locked" not in str(exc).lower():
-                return metrics
-            time.sleep(0.1)
-        except sqlite3.Error:
-            return metrics
-    if rows is None:
+    def _reader(connection: sqlite3.Connection):
+        type_rows = connection.execute(
+            "SELECT type, status, COUNT(*) AS count FROM cases GROUP BY type, status"
+        ).fetchall()
+        column_rows = connection.execute("PRAGMA table_info(cases)").fetchall()
+        column_names = {str(row[1]) for row in column_rows}
+        if "assigned_agent" in column_names:
+            processing_rows = connection.execute(
+                "SELECT assigned_agent, COUNT(*) AS count FROM cases WHERE status = 'processing' AND assigned_agent IS NOT NULL AND assigned_agent != '' GROUP BY assigned_agent"
+            ).fetchall()
+        else:
+            processing_rows = []
+        return type_rows, processing_rows
+
+    payload = _read_sqlite_with_fallback(path, _reader, None)
+    if payload is None:
         return metrics
 
+    rows, processing_rows = payload
+    type_rows: dict[str, Counter] = defaultdict(Counter)
     for case_type, status_name, count in rows:
         type_rows[case_type][status_name] += count
         metrics["total_cases"] += count
@@ -257,16 +301,6 @@ def _load_cases_metrics(path: Path) -> dict:
         }
         for case_type, counter in sorted(type_rows.items(), key=lambda item: (-sum(item[1].values()), item[0]))
     ]
-
-    try:
-        with sqlite3.connect(path, timeout=1.0) as connection:
-            connection.execute("PRAGMA busy_timeout = 1000")
-            processing_rows = connection.execute(
-                "SELECT assigned_agent, COUNT(*) AS count FROM cases WHERE status = 'processing' AND assigned_agent IS NOT NULL AND assigned_agent != '' GROUP BY assigned_agent"
-            ).fetchall()
-    except sqlite3.Error:
-        processing_rows = []
-
     metrics["processing_agents"] = [
         {"agent_name": agent_name, "count": count}
         for agent_name, count in processing_rows
@@ -278,42 +312,32 @@ def _load_observed_paths(path: Path) -> list[ObservedPathRecord]:
     if not path.exists():
         return []
 
-    column_names: list[str] = []
-    rows = None
-    for _ in range(5):
-        try:
-            with sqlite3.connect(path, timeout=1.0) as connection:
-                connection.execute("PRAGMA busy_timeout = 1000")
-                column_rows = connection.execute("PRAGMA table_info(cases)").fetchall()
-                column_names = [str(row[1]) for row in column_rows]
-                if not column_names:
-                    return []
+    def _reader(connection: sqlite3.Connection):
+        column_rows = connection.execute("PRAGMA table_info(cases)").fetchall()
+        column_names = [str(row[1]) for row in column_rows]
+        if not column_names:
+            return [], []
 
-                selected = [name for name in ("method", "url", "type", "status", "assigned_agent", "source") if name in column_names]
-                if not selected:
-                    return []
+        selected = [name for name in ("method", "url", "type", "status", "assigned_agent", "source") if name in column_names]
+        if not selected:
+            return [], []
 
-                query = (
-                    f"SELECT {', '.join(selected)} "
-                    "FROM cases "
-                    "ORDER BY "
-                    "CASE WHEN status = 'processing' THEN 0 WHEN status = 'pending' THEN 1 WHEN status = 'done' THEN 2 ELSE 3 END, "
-                    "type, "
-                    "url"
-                )
-                rows = connection.execute(query).fetchall()
-            break
-        except sqlite3.OperationalError as exc:
-            if "locked" not in str(exc).lower():
-                return []
-            time.sleep(0.1)
-        except sqlite3.Error:
-            return []
+        query = (
+            f"SELECT {', '.join(selected)} "
+            "FROM cases "
+            "ORDER BY "
+            "CASE WHEN status = 'processing' THEN 0 WHEN status = 'pending' THEN 1 WHEN status = 'done' THEN 2 ELSE 3 END, "
+            "type, "
+            "url"
+        )
+        rows = connection.execute(query).fetchall()
+        return selected, rows
 
-    if rows is None:
+    payload = _read_sqlite_with_fallback(path, _reader, None)
+    if payload is None:
         return []
 
-    selected = [name for name in ("method", "url", "type", "status", "assigned_agent", "source") if name in column_names]
+    selected, rows = payload
     records: list[ObservedPathRecord] = []
     for row in rows:
         payload = dict(zip(selected, row, strict=False))
