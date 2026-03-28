@@ -590,7 +590,9 @@ def locate_runtime_pid(run: Run) -> int | None:
         container_name = _container_name_from_metadata(run)
     if container_name:
         status = _container_status(container_name)
-        if status in {"running", "created", "restarting"}:
+        if status in {"running", "restarting"}:
+            return -1
+        if status == "created":
             try:
                 launcher_pid = int(payload.get("launcher_pid"))
             except (ValueError, TypeError):
