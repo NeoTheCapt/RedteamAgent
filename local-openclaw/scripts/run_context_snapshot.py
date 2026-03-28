@@ -158,7 +158,9 @@ def _artifact_snapshot(engagement_dir: Path) -> dict[str, Any]:
     ]
 
     for row in observed_rows:
-        payload = dict(zip(selected_columns, row, strict=False))
+        # `zip(..., strict=False)` requires Python 3.10+, but this loop also runs on
+        # the macOS host's system Python 3.9 during unattended optimizer cycles.
+        payload = dict(zip(selected_columns, row))
         url = str(payload.get("url") or "").strip()
         if not url:
             continue
