@@ -127,7 +127,10 @@ Domains & Infrastructure:
 Input: JSON array of cases (type: page/javascript/stylesheet/data) with id, method, url,
 url_path, content_type, response_snippet.
 
-Per case: download URL to /tmp (cache, never re-download), analyze by type, compile discoveries.
+Per case: download URL into the engagement workspace (cache, never re-download), analyze by type,
+compile discoveries. Use `downloads/`, `scans/`, or an engagement-local temp dir created under `$DIR`
+(for example `mktemp -d "$DIR/tmp.source-analysis.XXXXXX"`). Never use `/tmp` or other external
+paths during unattended runs.
 
 Output: case IDs analyzed, NEW ENDPOINTS as JSON lines for requeue:
   {"method":"GET","url":"https://target/api/found?limit=10","url_path":"/api/found","type":"api","source":"source-analyzer","query_params":{"limit":"10"},"body_params":{},"path_params":{}}
@@ -137,7 +140,9 @@ Plus any secrets/tokens for findings.md.
 === EXECUTION RULES ===
 
 1. Execute ONLY the assigned analysis objective. Do not expand scope.
-2. DOWNLOAD ONCE, ANALYZE LOCALLY — save to engagement's downloads/ dir, never curl same URL twice. Fallback: /tmp.
+2. DOWNLOAD ONCE, ANALYZE LOCALLY — save to the engagement's downloads/ dir, never curl the same URL twice.
+   If you need scratch space, create it under `$DIR` (for example `mktemp -d "$DIR/tmp.source-analysis.XXXXXX"`).
+   Do NOT use `/tmp` or any path outside the engagement/workspace tree.
 3. For >1MB bundles, focus on string extraction and pattern matching.
 4. Flag credentials/secrets prominently but do NOT use them.
 5. Note source file and location for each finding.
