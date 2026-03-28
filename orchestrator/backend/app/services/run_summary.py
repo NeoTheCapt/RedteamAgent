@@ -222,7 +222,16 @@ def _event_phase(event) -> str:
     phase = _normalize_phase(getattr(event, "phase", "unknown"))
     if phase != "unknown":
         return phase
-    return AGENT_PHASES.get(getattr(event, "agent_name", ""), "unknown")
+    agent_name = getattr(event, "agent_name", "")
+    if agent_name == "source-analyzer":
+        return "unknown"
+    return AGENT_PHASES.get(agent_name, "unknown")
+
+
+def _fallback_agent_phase(agent_name: str, scope_phase: str) -> str:
+    if agent_name == "source-analyzer" and scope_phase != "unknown":
+        return scope_phase
+    return AGENT_PHASES.get(agent_name, "unknown")
 
 
 def _is_terminal_run_status(run_status: str) -> bool:
@@ -524,6 +533,8 @@ def _build_agent_cards(
         agent_name = getattr(event, "agent_name", "")
         if not agent_name or agent_name == "launcher":
             continue
+        if getattr(event, "event_type", "") == "artifact.updated" and getattr(event, "task_name", "") == "log.md":
+            continue
         latest_by_agent[agent_name] = event
 
     cards: list[dict] = []
@@ -560,7 +571,7 @@ def _build_agent_cards(
                 continue
             payload = {
                 "agent_name": agent_name,
-                "phase": AGENT_PHASES.get(agent_name, "unknown"),
+                "phase": _fallback_agent_phase(agent_name, scope_phase),
                 "status": "active",
                 "task_name": agent_name,
                 "summary": f"Processing {processing['count']} queued case(s)",
@@ -578,7 +589,7 @@ def _build_agent_cards(
         cards.append(
             {
                 "agent_name": agent_name,
-                "phase": AGENT_PHASES.get(agent_name, "unknown"),
+                "phase": _fallback_agent_phase(agent_name, scope_phase),
                 "status": "idle",
                 "task_name": "",
                 "summary": "No activity yet.",

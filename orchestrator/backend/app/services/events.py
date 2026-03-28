@@ -36,13 +36,17 @@ def create_event_for_run(
     return db.create_event(run.id, event_type, phase, task_name, agent_name, summary)
 
 
-def _phase_for_event(event: Event) -> str:
+def _phase_for_event(event: Event, current_phase: str = "unknown") -> str:
     if event.phase != "unknown":
         return event.phase
 
+    if event.agent_name == "operator" and event.summary == "Engagement start":
+        return "recon"
+    if current_phase != "unknown":
+        return current_phase
+
     agent_phase = {
         "recon-specialist": "recon",
-        "source-analyzer": "recon",
         "vulnerability-analyst": "consume-test",
         "exploit-developer": "exploit",
         "osint-analyst": "exploit",
@@ -50,8 +54,6 @@ def _phase_for_event(event: Event) -> str:
     }
     if event.agent_name in agent_phase:
         return agent_phase[event.agent_name]
-    if event.agent_name == "operator" and event.summary == "Engagement start":
-        return "recon"
     return "unknown"
 
 
@@ -61,12 +63,15 @@ def _project_timeline_events(events: list[Event]) -> list[Event]:
     seen_phase_started: set[str] = {
         event.phase for event in events if event.event_type == "phase.started" and event.phase != "unknown"
     }
+    current_phase = "unknown"
 
     for event in events:
+        phase = _phase_for_event(event, current_phase)
+        if phase != "unknown":
+            current_phase = phase
+
         if event.event_type != "artifact.updated" or event.task_name != "log.md":
             continue
-
-        phase = _phase_for_event(event)
         if phase != "unknown" and phase not in seen_phase_started:
             projected.append(
                 Event(

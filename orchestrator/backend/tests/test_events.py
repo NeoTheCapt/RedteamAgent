@@ -197,6 +197,60 @@ def test_log_artifact_events_are_projected_into_phase_and_task_timeline():
     )
 
 
+def test_log_artifact_projection_uses_latest_known_phase_for_later_source_analyzer_batches():
+    client = TestClient(app)
+
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"])
+
+    raw_events = [
+        {
+            "event_type": "artifact.updated",
+            "phase": "unknown",
+            "task_name": "log.md",
+            "agent_name": "operator",
+            "summary": "Engagement start",
+        },
+        {
+            "event_type": "task.started",
+            "phase": "consume-test",
+            "task_name": "bash",
+            "agent_name": "operator",
+            "summary": "Dispatch page batch",
+        },
+        {
+            "event_type": "artifact.updated",
+            "phase": "unknown",
+            "task_name": "log.md",
+            "agent_name": "source-analyzer",
+            "summary": "Source analysis start",
+        },
+    ]
+
+    for event in raw_events:
+        response = client.post(
+            f"/projects/{project['id']}/runs/{run['id']}/events",
+            headers={"Authorization": f"Bearer {token}"},
+            json=event,
+        )
+        assert response.status_code == 201
+
+    response = client.get(
+        f"/projects/{project['id']}/runs/{run['id']}/events",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    events = response.json()
+
+    assert any(
+        event["event_type"] == "task.started"
+        and event["phase"] == "consume-test"
+        and event["task_name"] == "source-analyzer"
+        for event in events
+    )
+
+
 def test_process_log_task_tool_is_projected_into_task_timeline():
     client = TestClient(app)
 
