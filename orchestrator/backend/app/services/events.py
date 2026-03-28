@@ -183,6 +183,26 @@ def _project_process_log_events(run_id: int, run_root: Path, events: list[Event]
         if event.agent_name and event.event_type.startswith("task.")
     }
 
+    def add_projected(event_type: str, phase: str, task_name: str, agent_name: str, summary: str, created_at: str) -> None:
+        nonlocal next_id
+        key = (event_type, agent_name, summary, created_at)
+        if key in seen:
+            return
+        projected.append(
+            Event(
+                id=next_id,
+                run_id=run_id,
+                event_type=event_type,
+                phase=phase,
+                task_name=task_name,
+                agent_name=agent_name,
+                summary=summary,
+                created_at=created_at,
+            )
+        )
+        seen.add(key)
+        next_id += 1
+
     for line in process_log.read_text(encoding="utf-8", errors="replace").splitlines():
         stripped = line.strip()
         if not stripped.startswith("{"):
@@ -208,22 +228,16 @@ def _project_process_log_events(run_id: int, run_root: Path, events: list[Event]
                 or part.get("title")
                 or f"{tool_name} activity"
             )
-            operator_key = ("task.started", "operator", summary, created_at)
-            if operator_key not in seen:
-                projected.append(
-                    Event(
-                        id=next_id,
-                        run_id=run_id,
-                        event_type="task.started",
-                        phase=scope_phase,
-                        task_name=tool_name or "tool",
-                        agent_name="operator",
-                        summary=summary,
-                        created_at=created_at,
-                    )
-                )
-                seen.add(operator_key)
-                next_id -= 1
+            task_name = tool_name or "tool"
+            add_projected("task.started", scope_phase, task_name, "operator", summary, created_at)
+            add_projected(
+                "task.completed",
+                scope_phase,
+                task_name,
+                "operator",
+                f"{summary} completed",
+                created_at,
+            )
             continue
 
         task_input = state.get("input") or {}
@@ -236,40 +250,15 @@ def _project_process_log_events(run_id: int, run_root: Path, events: list[Event]
         phase = _normalize_phase_name(phase_match.group(1) if phase_match else None)
         summary = task_input.get("description") or f"{agent_name} task"
 
-        started_key = ("task.started", agent_name, summary, created_at)
-        if started_key not in seen:
-            projected.append(
-                Event(
-                    id=next_id,
-                    run_id=run_id,
-                    event_type="task.started",
-                    phase=phase,
-                    task_name=agent_name,
-                    agent_name=agent_name,
-                    summary=summary,
-                    created_at=created_at,
-                )
-            )
-            seen.add(started_key)
-            next_id -= 1
-
-        completed_summary = f"{summary} completed"
-        completed_key = ("task.completed", agent_name, completed_summary, created_at)
-        if completed_key not in seen:
-            projected.append(
-                Event(
-                    id=next_id,
-                    run_id=run_id,
-                    event_type="task.completed",
-                    phase=phase,
-                    task_name=agent_name,
-                    agent_name=agent_name,
-                    summary=completed_summary,
-                    created_at=created_at,
-                )
-            )
-            seen.add(completed_key)
-            next_id -= 1
+        add_projected("task.started", phase, agent_name, agent_name, summary, created_at)
+        add_projected(
+            "task.completed",
+            phase,
+            agent_name,
+            agent_name,
+            f"{summary} completed",
+            created_at,
+        )
 
     if not projected:
         return events
