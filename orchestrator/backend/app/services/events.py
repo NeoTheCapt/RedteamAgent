@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import HTTPException, status
@@ -192,7 +192,10 @@ def _project_process_log_events(run_id: int, run_root: Path, events: list[Event]
         part = payload.get("part") or {}
         tool_name = part.get("tool")
         state = part.get("state") or {}
-        created_at = datetime.fromtimestamp((payload.get("timestamp") or 0) / 1000).strftime("%Y-%m-%d %H:%M:%S")
+        created_at = datetime.fromtimestamp(
+            (payload.get("timestamp") or 0) / 1000,
+            tz=timezone.utc,
+        ).strftime("%Y-%m-%d %H:%M:%S")
 
         if tool_name != "task":
             summary = (
