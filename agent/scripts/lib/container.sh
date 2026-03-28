@@ -22,6 +22,7 @@ KATANA_PARALLELISM="${KATANA_PARALLELISM:-4}"
 KATANA_RATE_LIMIT="${KATANA_RATE_LIMIT:-60}"
 KATANA_STRATEGY="${KATANA_STRATEGY:-breadth-first}"
 KATANA_ENABLE_JSLUICE="${KATANA_ENABLE_JSLUICE:-0}"
+KATANA_ENABLE_PATH_CLIMB="${KATANA_ENABLE_PATH_CLIMB:-0}"
 HOST_GATEWAY_ALIAS="${HOST_GATEWAY_ALIAS:-host.docker.internal}"
 
 runtime_mode() {
@@ -405,7 +406,6 @@ start_katana() {
         -kf all
         -iqp
         -fsu
-        -pc
         -ns
         -s "$KATANA_STRATEGY"
         -d "$KATANA_CRAWL_DEPTH"
@@ -425,6 +425,9 @@ start_katana() {
     )
     if [[ "${KATANA_ENABLE_JSLUICE}" == "1" ]]; then
         katana_args+=(-jsl)
+    fi
+    if [[ "${KATANA_ENABLE_PATH_CLIMB}" == "1" ]]; then
+        katana_args+=(-pc)
     fi
     if [ "$(runtime_mode)" = "local" ]; then
         if [ -z "$target" ]; then
