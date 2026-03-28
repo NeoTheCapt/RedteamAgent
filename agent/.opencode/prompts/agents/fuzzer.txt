@@ -79,3 +79,5 @@ Timeout: -timeout 10. Always use -o <file>.json -of json.
 9. FINDING IDs: Never hand-allocate IDs. Write findings with `## [FINDING-ID] Title`, then append via:
    `./scripts/append_finding.sh "$DIR" fuzzer <finding-body-file>`
    This allocates the next `FINDING-FZ-NNN` under a lock and updates `Finding Count`.
+   When creating `<finding-body-file>` or temp payload lists, use a single-quoted heredoc
+   (`<<'EOF'`) unless shell expansion is explicitly required.
