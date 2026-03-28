@@ -1,5 +1,8 @@
-from fastapi.testclient import TestClient
+import os
+import time
 from pathlib import Path
+
+from fastapi.testclient import TestClient
 
 from app.main import app
 
@@ -273,3 +276,54 @@ def test_process_log_regular_tool_use_is_projected_into_operator_timeline():
         and event["task_name"] == "bash"
         for event in events
     )
+
+
+def test_process_log_projection_keeps_utc_ordering_even_when_local_timezone_is_not_utc():
+    client = TestClient(app)
+
+    token = register_and_login(client, "bob")
+    project = create_project(client, token, name="Timezone Check")
+    run = create_run(client, token, project["id"])
+
+    workspace = Path(run["engagement_root"]) / "workspace"
+    active_dir = workspace / "engagements" / "2026-03-25-000000-example"
+    active_dir.mkdir(parents=True, exist_ok=True)
+    (workspace / "engagements" / ".active").write_text("engagements/2026-03-25-000000-example", encoding="utf-8")
+    (active_dir / "scope.json").write_text('{"current_phase":"recon"}', encoding="utf-8")
+
+    runtime_dir = Path(run["engagement_root"]) / "runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    (runtime_dir / "process.log").write_text(
+        (
+            '{"type":"tool_use","timestamp":1774418514213,'
+            '"part":{"tool":"task","state":{"status":"completed","input":'
+            '{"description":"Recon - fingerprint target","subagent_type":"recon-specialist",'
+            '"prompt":"**Target**: https://example.com\\n**Phase**: Recon\\n"}'
+            '}}}\n'
+        ),
+        encoding="utf-8",
+    )
+
+    old_tz = os.environ.get("TZ")
+    try:
+        os.environ["TZ"] = "Asia/Singapore"
+        time.tzset()
+
+        response = client.get(
+            f"/projects/{project['id']}/runs/{run['id']}/events",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert response.status_code == 200
+        events = response.json()
+        projected = [
+            event for event in events
+            if event["event_type"] == "task.started" and event["agent_name"] == "recon-specialist"
+        ]
+        assert projected
+        assert projected[0]["created_at"] == "2026-03-25 06:01:54"
+    finally:
+        if old_tz is None:
+            os.environ.pop("TZ", None)
+        else:
+            os.environ["TZ"] = old_tz
+        time.tzset()
