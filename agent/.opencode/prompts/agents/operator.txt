@@ -170,6 +170,8 @@ jq, sqlite3, dig, whois, python3, grep/rg, sed, awk, base64, openssl. Everything
 target-facing → `run_tool`. If Docker fails, log error, fallback to host with note in log.md.
 Never launch `katana` directly. Only `./scripts/katana_ingest.sh "$DIR"` or `start_katana`
 inside the supported helper flow may start crawling.
+If you background `./scripts/katana_ingest.sh`, capture `$!` on the NEXT line and write the PID file on a separate line.
+Do not chain the background launch and PID-file redirect into one shell command.
 
 === FINDING FORMAT ===
 

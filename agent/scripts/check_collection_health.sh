@@ -28,11 +28,30 @@ successful_rows="$(
         "$KATANA_OUTPUT" 2>/dev/null | wc -l | tr -d ' '
 )"
 
-if [[ "${successful_rows:-0}" -eq 0 ]]; then
-    echo "collection health failed: katana output only contains errored rows and no successful crawl results" >&2
+recoverable_rows="$(
+    jq -r '
+        select(
+            ((.error // "") | tostring | length) > 0
+            and (((.request.endpoint // .endpoint // .url // "") | tostring | length) > 0)
+            and (
+                ((.error // "") | tostring | contains("hybrid: could not get dom"))
+                or ((.error // "") | tostring | contains("hybrid: response is nil"))
+            )
+        )
+        | 1
+    ' "$KATANA_OUTPUT" 2>/dev/null | wc -l | tr -d ' '
+)"
+
+if [[ "${successful_rows:-0}" -eq 0 && "${recoverable_rows:-0}" -eq 0 ]]; then
+    echo "collection health failed: katana output contains no successful or recoverable discovery rows" >&2
     [[ -f "$KATANA_LOG" ]] && tail -50 "$KATANA_LOG" >&2 || true
     tail -20 "$KATANA_OUTPUT" >&2 || true
     exit 1
+fi
+
+if [[ "${successful_rows:-0}" -eq 0 && "${recoverable_rows:-0}" -gt 0 ]]; then
+    echo "collection health: ok (recoverable-only crawl output: $recoverable_rows discovery rows despite render/fetch errors)"
+    exit 0
 fi
 
 echo "collection health: ok"
