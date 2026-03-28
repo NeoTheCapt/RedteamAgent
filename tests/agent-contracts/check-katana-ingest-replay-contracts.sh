@@ -74,5 +74,10 @@ sqlite3 "$ENG_DIR/cases.db" 'select source from cases order by source;' | grep -
 sqlite3 "$ENG_DIR/cases.db" 'select source from cases order by source;' | grep -qx 'katana-xhr'
 sqlite3 "$ENG_DIR/cases.db" 'select url from cases order by url;' | grep -q '/rest/admin/application-version'
 sqlite3 "$ENG_DIR/cases.db" 'select url from cases order by url;' | grep -q '/socket.io/'
+root_path="$(sqlite3 "$ENG_DIR/cases.db" "select url_path from cases where source='katana' order by id limit 1;")"
+[[ "$root_path" == "/" ]] || {
+  echo "expected top-level katana request to normalize to /, got: $root_path" >&2
+  exit 1
+}
 
 echo "katana ingest replay contracts: ok"
