@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import json
+import sqlite3
 from pathlib import Path
 import shutil
+from datetime import UTC, datetime, timedelta
 
 from fastapi import HTTPException, status
 
@@ -10,9 +13,22 @@ from ..config import settings
 from ..models.project import Project
 from ..models.run import Run
 from ..models.user import User
-from .launcher import locate_runtime_pid, prepare_run_runtime, start_run_runtime, stop_run_runtime
+from .launcher import (
+    _write_run_terminal_reason,
+    engagement_completion_state,
+    locate_runtime_pid,
+    normalize_active_scope,
+    prepare_run_runtime,
+    process_log_path_for,
+    start_run_runtime,
+    stop_run_runtime,
+)
 
 ALLOWED_STATUSES = {"queued", "running", "completed", "failed"}
+RUN_STARTUP_GRACE_SECONDS = 90
+RUN_STALL_TIMEOUT_SECONDS = 600
+EARLY_PHASE_STALL_TIMEOUT_SECONDS = 180
+EARLY_PHASE_STALL_PHASES = {"unknown", "recon", "collect"}
 
 
 def _project_or_404(project_id: int, user: User) -> Project:
@@ -38,14 +54,130 @@ def create_run_for_project(project_id: int, user: User, target: str) -> Run:
     return run
 
 
+def _parse_db_timestamp(value: str) -> datetime | None:
+    if not value:
+        return None
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%SZ"):
+        try:
+            return datetime.strptime(value, fmt)
+        except (TypeError, ValueError):
+            continue
+    try:
+        normalized = str(value).replace("Z", "+00:00")
+        parsed = datetime.fromisoformat(normalized)
+        return parsed.replace(tzinfo=None) if parsed.tzinfo else parsed
+    except (TypeError, ValueError):
+        return None
+
+
+def _active_scope_path(run: Run) -> Path | None:
+    engagement_dir = Path(run.engagement_root) / "workspace" / "engagements"
+    active_file = engagement_dir / ".active"
+    if not active_file.exists():
+        return None
+
+    active_name = active_file.read_text(encoding="utf-8").strip().removeprefix("./").removeprefix("/")
+    if not active_name:
+        return None
+    if active_name.startswith("engagements/"):
+        return Path(run.engagement_root) / "workspace" / active_name / "scope.json"
+    return engagement_dir / active_name / "scope.json"
+
+
+def _latest_runtime_activity_at(run: Run) -> datetime | None:
+    latest: datetime | None = None
+
+    process_log = process_log_path_for(run)
+    if process_log.exists():
+        latest = datetime.fromtimestamp(process_log.stat().st_mtime)
+
+    scope_path = _active_scope_path(run)
+    if scope_path is None or not scope_path.exists():
+        return latest
+
+    active_dir = scope_path.parent
+    for path in active_dir.rglob("*"):
+        if not path.is_file():
+            continue
+        try:
+            candidate = datetime.fromtimestamp(path.stat().st_mtime)
+        except OSError:
+            continue
+        if latest is None or candidate > latest:
+            latest = candidate
+    return latest
+
+
 def _reconcile_run_status(run: Run) -> Run:
-    if run.status != "running":
+    normalize_active_scope(run)
+    pid = locate_runtime_pid(run)
+    if pid is not None:
+        last_activity_at = _latest_runtime_activity_at(run)
+        if last_activity_at is not None:
+            log_age = datetime.now() - last_activity_at
+            if log_age >= timedelta(seconds=RUN_STALL_TIMEOUT_SECONDS):
+                failed = db.update_run_status(run.id, "failed")
+                _write_run_terminal_reason(
+                    failed,
+                    reason_code="queue_stalled",
+                    reason_text="Runtime produced no new output before stall timeout elapsed.",
+                )
+                stop_run_runtime(failed)
+                return failed
+
+            scope_path = _active_scope_path(run)
+            current_phase = "unknown"
+            total_cases = 0
+            if scope_path is not None and scope_path.exists():
+                scope_payload = json.loads(scope_path.read_text(encoding="utf-8"))
+                current_phase = str(scope_payload.get("current_phase") or "unknown").strip().lower().replace("-", "_")
+                cases_db = scope_path.parent / "cases.db"
+                if cases_db.exists():
+                    try:
+                        with sqlite3.connect(cases_db, timeout=1.0) as connection:
+                            connection.execute("PRAGMA busy_timeout = 1000")
+                            row = connection.execute("SELECT COUNT(*) FROM cases").fetchone()
+                            total_cases = int(row[0] or 0)
+                    except sqlite3.Error:
+                        total_cases = 0
+
+            if (
+                current_phase.replace("_", "-") in EARLY_PHASE_STALL_PHASES
+                and total_cases == 0
+                and log_age >= timedelta(seconds=EARLY_PHASE_STALL_TIMEOUT_SECONDS)
+            ):
+                failed = db.update_run_status(run.id, "failed")
+                _write_run_terminal_reason(
+                    failed,
+                    reason_code="recon_stalled",
+                    reason_text="Runtime stalled in early recon/collect without producing any observed paths.",
+                )
+                stop_run_runtime(failed)
+                return failed
+        if run.status != "running":
+            return db.update_run_status(run.id, "running")
         return run
 
-    if locate_runtime_pid(run) is not None:
+    if run.status == "completed":
+        completion_ok, _ = engagement_completion_state(run)
+        if not completion_ok:
+            failed = db.update_run_status(run.id, "failed")
+            stop_run_runtime(failed)
+            return failed
         return run
 
-    return db.update_run_status(run.id, "failed")
+    # New runs can briefly lack visible runtime metadata while the container and
+    # docker client process are still bootstrapping. Do not immediately mark
+    # them failed during that startup window.
+    updated_at = _parse_db_timestamp(run.updated_at) or _parse_db_timestamp(run.created_at)
+    if updated_at is not None and datetime.now(UTC).replace(tzinfo=None) - updated_at < timedelta(seconds=RUN_STARTUP_GRACE_SECONDS):
+        return run
+
+    if run.status == "running":
+        failed = db.update_run_status(run.id, "failed")
+        stop_run_runtime(failed)
+        return failed
+    return run
 
 
 def list_runs_for_project(project_id: int, user: User) -> list[Run]:
