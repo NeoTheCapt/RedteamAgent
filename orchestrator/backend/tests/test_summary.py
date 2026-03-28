@@ -711,6 +711,91 @@ def test_run_summary_prefers_populated_cases_db_when_workspace_db_is_empty():
     assert any(item["type"] == "api" and item["total"] == 2 for item in payload["coverage"]["case_types"])
 
 
+def test_run_summary_process_log_projection_keeps_finished_tasks_out_of_active_state():
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "https://target.example")
+    active_dir = setup_active_engagement(run)
+
+    (active_dir / "scope.json").write_text(
+        json.dumps(
+            {
+                "target": "https://target.example",
+                "hostname": "target.example",
+                "port": 443,
+                "scope": ["target.example"],
+                "status": "in_progress",
+                "start_time": "2026-03-25T08:00:00Z",
+                "phases_completed": ["recon", "collect"],
+                "current_phase": "consume_test",
+            }
+        ),
+        encoding="utf-8",
+    )
+    with sqlite3.connect(active_dir / "cases.db") as connection:
+        connection.execute("CREATE TABLE cases (type TEXT NOT NULL, status TEXT NOT NULL)")
+        connection.execute("INSERT INTO cases (type, status) VALUES ('api', 'done')")
+        connection.commit()
+
+    runtime_dir = Path(run["engagement_root"]) / "runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    (runtime_dir / "process.log").write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "type": "tool_use",
+                        "timestamp": 1774737501655,
+                        "part": {
+                            "tool": "bash",
+                            "title": "Logs exploit validation dispatch",
+                            "state": {
+                                "status": "completed",
+                                "input": {"description": "Logs exploit validation dispatch"},
+                            },
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "tool_use",
+                        "timestamp": 1774737501707,
+                        "part": {
+                            "tool": "task",
+                            "state": {
+                                "status": "completed",
+                                "input": {
+                                    "description": "Validate medium IDOR finding",
+                                    "subagent_type": "exploit-developer",
+                                    "prompt": "**Phase**: consume_test\n",
+                                },
+                            },
+                        },
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    response = client.get(
+        f"/projects/{project['id']}/runs/{run['id']}/summary",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+
+    assert payload["overview"]["active_agents"] == 0
+    exploit_card = next(card for card in payload["agents"] if card["agent_name"] == "exploit-developer")
+    operator_card = next(card for card in payload["agents"] if card["agent_name"] == "operator")
+    assert exploit_card["status"] == "completed"
+    assert operator_card["status"] == "completed"
+    assert payload["current"]["agent_name"] == "exploit-developer"
+    assert payload["current"]["summary"] == "Validate medium IDOR finding completed"
+
+
 def test_observed_paths_prefers_populated_cases_db_when_workspace_db_is_empty():
     client = TestClient(app)
     token = register_and_login(client, "alice")
