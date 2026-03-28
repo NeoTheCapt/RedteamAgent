@@ -143,6 +143,7 @@ Keep each heredoc as a standalone command:
 Then start the next command on a new line. Do not write `EOF && next_command`.
 When writing Markdown via unquoted heredoc, do not include raw backticks like `` `cmd` `` inside the body.
 Either escape them as `\`cmd\`` or write plain text, otherwise shell command substitution may run unexpectedly.
+For later temp files that should preserve literal Markdown/JSON/JSONL content, prefer a single-quoted heredoc (`<<'EOF'`) instead of an unquoted one.
 Never pass raw JSONL directly to `append_surface.sh`. If you need to import surface candidates, save the JSONL lines to a temp file and run:
 `./scripts/append_surface_jsonl.sh "$DIR" < "$TMP_JSONL"`
 
