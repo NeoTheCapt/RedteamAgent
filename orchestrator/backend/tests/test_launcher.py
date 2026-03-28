@@ -59,6 +59,21 @@ def test_create_run_prepares_isolated_runtime_directories():
     assert metadata["engagement_root"] == run["engagement_root"]
 
 
+def test_prepare_run_runtime_syncs_agent_source_into_workspace():
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"])
+
+    run_root = Path(run["engagement_root"])
+    source_engage = Path(settings.agent_source_dir) / ".opencode" / "commands" / "engage.md"
+    workspace_engage = run_root / "workspace" / ".opencode" / "commands" / "engage.md"
+
+    assert workspace_engage.exists()
+    assert workspace_engage.read_text(encoding="utf-8") == source_engage.read_text(encoding="utf-8")
+    assert not (run_root / "workspace" / "engagements").exists()
+
+
 def test_each_run_gets_its_own_runtime_root():
     client = TestClient(app)
     token = register_and_login(client, "alice")
