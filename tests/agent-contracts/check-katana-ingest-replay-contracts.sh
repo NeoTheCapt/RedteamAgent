@@ -80,6 +80,57 @@ root_path="$(sqlite3 "$ENG_DIR/cases.db" "select url_path from cases where sourc
   exit 1
 }
 
+cat > "$ENG_DIR/scope.json" <<'EOF'
+{
+  "target": "http://host.docker.internal:8000",
+  "hostname": "host.docker.internal",
+  "port": 8000,
+  "scope": ["host.docker.internal", "*.host.docker.internal"],
+  "status": "in_progress",
+  "start_time": "2026-03-28T00:00:00Z",
+  "phases_completed": [],
+  "current_phase": "recon"
+}
+EOF
+
+python3 - <<'PY' "$ENG_DIR/scans/katana_output.jsonl"
+from pathlib import Path
+import json
+import sys
+
+payload = {
+    "timestamp": "2026-03-28T00:00:30Z",
+    "request": {
+        "method": "GET",
+        "endpoint": "http://127.0.0.1:8000/rest/continue-code"
+    },
+    "response": {
+        "status_code": 200,
+        "headers": {
+            "Content-Type": "application/json; charset=UTF-8"
+        },
+        "xhr_requests": [
+            {
+                "method": "GET",
+                "endpoint": "http://127.0.0.1:8000/rest/user/whoami",
+                "headers": {
+                    "Accept": "application/json"
+                }
+            }
+        ]
+    }
+}
+Path(sys.argv[1]).write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
+PY
+sqlite3 "$ENG_DIR/cases.db" 'delete from cases;'
+KATANA_INGEST_SKIP_START=1 KATANA_INGEST_ONESHOT=1 "$ROOT/agent/scripts/katana_ingest.sh" "$ENG_DIR" >/dev/null
+if sqlite3 "$ENG_DIR/cases.db" 'select url from cases order by id;' | grep -q 'http://127.0.0.1:8000/'; then
+  echo "expected katana loopback replay to normalize queued URLs to host.docker.internal" >&2
+  exit 1
+fi
+sqlite3 "$ENG_DIR/cases.db" 'select url from cases order by id;' | grep -qx 'http://host.docker.internal:8000/rest/continue-code'
+sqlite3 "$ENG_DIR/cases.db" 'select url from cases order by id;' | grep -qx 'http://host.docker.internal:8000/rest/user/whoami'
+
 python3 - <<'PY' "$ENG_DIR/scans/katana_output.jsonl"
 from pathlib import Path
 import json
