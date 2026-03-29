@@ -10,6 +10,7 @@ import subprocess
 import time
 from threading import Thread
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 from .. import db
 from ..config import settings
@@ -49,6 +50,45 @@ def process_metadata_path_for(run: Run) -> Path:
 
 def runtime_container_name(run: Run) -> str:
     return f"redteam-orch-run-{run.id:04d}"
+
+
+_LOOPBACK_RUNTIME_HOSTS = {"127.0.0.1", "localhost", "0.0.0.0", "::1"}
+_RUNTIME_HOST_GATEWAY_ALIAS = "host.docker.internal"
+
+
+def _rewrite_runtime_target(target: str) -> str:
+    stripped = (target or "").strip()
+    if not stripped:
+        return target
+
+    try:
+        parsed = urlsplit(stripped)
+    except ValueError:
+        return target
+
+    if parsed.scheme not in {"http", "https"}:
+        return target
+
+    hostname = (parsed.hostname or "").strip().lower()
+    if hostname not in _LOOPBACK_RUNTIME_HOSTS:
+        return target
+
+    auth = ""
+    if parsed.username:
+        auth = parsed.username
+        if parsed.password:
+            auth += f":{parsed.password}"
+        auth += "@"
+
+    if ":" in _RUNTIME_HOST_GATEWAY_ALIAS and not _RUNTIME_HOST_GATEWAY_ALIAS.startswith("["):
+        host = f"[{_RUNTIME_HOST_GATEWAY_ALIAS}]"
+    else:
+        host = _RUNTIME_HOST_GATEWAY_ALIAS
+    if parsed.port is not None:
+        host = f"{host}:{parsed.port}"
+
+    rewritten = parsed._replace(netloc=f"{auth}{host}")
+    return urlunsplit(rewritten)
 
 
 def _active_engagement_dir(run: Run) -> Path | None:
@@ -835,6 +875,7 @@ def start_run_runtime(project: Project, run: Run, user: User) -> Run:
             if value:
                 env_args.extend(["-e", f"{key}={value}"])
 
+        runtime_target = _rewrite_runtime_target(run.target)
         docker_command = [
             "docker",
             "run",
@@ -853,7 +894,7 @@ def start_run_runtime(project: Project, run: Run, user: User) -> Run:
             "run",
             "--format",
             "json",
-            f"/autoengage {run.target}",
+            f"/autoengage {runtime_target}",
         ]
         result = subprocess.run(
             docker_command,
