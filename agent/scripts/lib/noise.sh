@@ -85,6 +85,31 @@ is_katana_api_like_path() {
     esac
 }
 
+is_katana_low_signal_realtime_url() {
+    local url="${1:-}"
+    local path_lower query_lower
+
+    [[ -n "$url" ]] || return 1
+
+    path_lower="$(_katana_urlish_path "$url")"
+    path_lower="$(printf '%s' "$path_lower" | tr '[:upper:]' '[:lower:]')"
+    query_lower=""
+    if [[ "$url" == *\?* ]]; then
+        query_lower="${url#*\?}"
+        query_lower="$(printf '%s' "$query_lower" | tr '[:upper:]' '[:lower:]')"
+    fi
+
+    case "$path_lower" in
+        /socket.io|/socket.io/)
+            if [[ "$query_lower" == *"transport=polling"* ]]; then
+                return 0
+            fi
+            ;;
+    esac
+
+    return 1
+}
+
 is_katana_noise_source() {
     local source_ref="${1:-}"
     local _tag="${2:-}"
