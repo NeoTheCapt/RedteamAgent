@@ -5,6 +5,8 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.models.event import Event
+from app.services.events import _project_process_log_events
 
 def register_and_login(client: TestClient, username: str) -> str:
     client.post("/auth/register", json={"username": username, "password": "secret-password"})
@@ -251,6 +253,53 @@ def test_log_artifact_projection_uses_latest_known_phase_for_later_source_analyz
     )
 
 
+def test_log_artifact_projection_prefers_agent_phase_for_exploit_developer():
+    client = TestClient(app)
+
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"])
+
+    raw_events = [
+        {
+            "event_type": "artifact.updated",
+            "phase": "unknown",
+            "task_name": "log.md",
+            "agent_name": "operator",
+            "summary": "Engagement start",
+        },
+        {
+            "event_type": "artifact.updated",
+            "phase": "unknown",
+            "task_name": "log.md",
+            "agent_name": "exploit-developer",
+            "summary": "Exploit start",
+        },
+    ]
+
+    for event in raw_events:
+        response = client.post(
+            f"/projects/{project['id']}/runs/{run['id']}/events",
+            headers={"Authorization": f"Bearer {token}"},
+            json=event,
+        )
+        assert response.status_code == 201
+
+    response = client.get(
+        f"/projects/{project['id']}/runs/{run['id']}/events",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    events = response.json()
+
+    assert any(
+        event["event_type"] == "task.started"
+        and event["phase"] == "exploit"
+        and event["task_name"] == "exploit-developer"
+        for event in events
+    )
+
+
 def test_process_log_task_tool_is_projected_into_task_timeline():
     client = TestClient(app)
 
@@ -330,6 +379,83 @@ def test_process_log_regular_tool_use_is_projected_into_operator_timeline():
         and event["task_name"] == "bash"
         for event in events
     )
+
+
+def test_process_log_task_tool_parses_current_phase_prompt_format(tmp_path: Path):
+    run_root = tmp_path / "current-phase"
+    runtime_dir = run_root / "runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    (runtime_dir / "process.log").write_text(
+        (
+            '{"type":"tool_use","timestamp":1774816996799,'
+            '"part":{"tool":"task","state":{"status":"completed","input":'
+            '{"description":"Triage API batch","subagent_type":"vulnerability-analyst",'
+            '"prompt":"Authorized lab target: http://host.docker.internal:8000\\nCurrent phase: consume_test\\nAssigned batch file: /workspace/api_batch_001.json\\n"}'
+            '}}}\n'
+        ),
+        encoding="utf-8",
+    )
+
+    events = _project_process_log_events(run_id=1, run_root=run_root, events=[])
+
+    assert any(
+        event.event_type == "task.started"
+        and event.phase == "consume-test"
+        and event.agent_name == "vulnerability-analyst"
+        and event.summary == "Triage API batch"
+        for event in events
+    )
+    assert any(
+        event.event_type == "task.completed"
+        and event.phase == "consume-test"
+        and event.agent_name == "vulnerability-analyst"
+        and event.summary == "Triage API batch completed"
+        for event in events
+    )
+
+
+def test_process_log_task_projection_upgrades_weaker_synthetic_log_phase(tmp_path: Path):
+    run_root = tmp_path / "phase-upgrade"
+    runtime_dir = run_root / "runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    created_at = "2026-03-29 20:42:47"
+    (runtime_dir / "process.log").write_text(
+        (
+            '{"type":"tool_use","timestamp":1774816967000,'
+            '"part":{"tool":"task","state":{"status":"completed","input":'
+            '{"description":"Exploit start","subagent_type":"exploit-developer",'
+            '"prompt":"**Target**: https://www.okx.com\\n**Phase**: Exploit\\n"}'
+            '}}}\n'
+        ),
+        encoding="utf-8",
+    )
+    synthetic_events = [
+        Event(
+            id=-1,
+            run_id=1,
+            event_type="task.started",
+            phase="recon",
+            task_name="exploit-developer",
+            agent_name="exploit-developer",
+            summary="Exploit start",
+            created_at=created_at,
+        )
+    ]
+
+    events = _project_process_log_events(run_id=1, run_root=run_root, events=synthetic_events)
+    upgraded = [
+        event
+        for event in events
+        if event.event_type == "task.started"
+        and event.agent_name == "exploit-developer"
+        and event.summary == "Exploit start"
+        and event.created_at == created_at
+    ]
+
+    assert len(upgraded) == 1
+    assert upgraded[0].phase == "exploit"
+    assert upgraded[0].id == -1
+
 
 
 def test_process_log_projection_keeps_utc_ordering_even_when_local_timezone_is_not_utc():
