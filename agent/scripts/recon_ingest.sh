@@ -14,6 +14,7 @@ source "$SCRIPT_DIR/lib/params.sh"
 source "$SCRIPT_DIR/lib/classify.sh"
 source "$SCRIPT_DIR/lib/db.sh"
 source "$SCRIPT_DIR/lib/placeholders.sh"
+source "$SCRIPT_DIR/lib/source_queue_filter.sh"
 
 # --- Validate arguments ---
 if [[ $# -lt 2 ]]; then
@@ -112,6 +113,10 @@ while IFS= read -r line; do
 
     # Generate dedup signature
     params_sig=$(generate_params_sig "$query_params" "$body_params")
+
+    if ! should_enqueue_case "$SOURCE" "$case_type" "$method" "$url" "$url_path"; then
+        continue
+    fi
 
     # Insert into DB
     db_insert_case "$DB_PATH" \

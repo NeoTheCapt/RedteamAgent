@@ -6,6 +6,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib/params.sh"
+source "$SCRIPT_DIR/lib/source_queue_filter.sh"
 
 DB="${1:-}"
 ACTION="${2:-}"
@@ -165,6 +166,10 @@ case "$ACTION" in
       [[ "$CONTENT_LENGTH" =~ ^-?[0-9]+$ ]] || CONTENT_LENGTH=0
       [[ "$RESPONSE_STATUS" =~ ^-?[0-9]+$ ]] || RESPONSE_STATUS=0
       [[ "$RESPONSE_SIZE" =~ ^-?[0-9]+$ ]] || RESPONSE_SIZE=0
+
+      if ! should_enqueue_case "$SOURCE" "$TYPE" "$METHOD" "$URL" "$URL_PATH"; then
+        continue
+      fi
 
       # Escape single quotes for SQLite
       METHOD="${METHOD//\'/\'\'}"
