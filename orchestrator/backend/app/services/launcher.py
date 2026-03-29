@@ -71,7 +71,7 @@ _AUTO_RESUME_REASON_CODES = {
     # instead of hard-failing an otherwise healthy queue.
     "runtime_disappeared",
 }
-_AUTO_RESUME_LIMIT = 2
+_AUTO_RESUME_LIMIT = 3
 
 RUN_STALL_TIMEOUT_SECONDS = 900
 EARLY_PHASE_STALL_TIMEOUT_SECONDS = 180
@@ -873,6 +873,19 @@ def _write_run_terminal_reason(run: Run, *, reason_code: str, reason_text: str) 
     metadata_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
+def _clear_run_terminal_reason(run: Run) -> None:
+    metadata_path = metadata_path_for(run)
+    if not metadata_path.exists():
+        return
+    try:
+        payload = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        payload = {}
+    payload.pop("stop_reason_code", None)
+    payload.pop("stop_reason_text", None)
+    metadata_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
 def _terminal_reason(
     *,
     succeeded: bool,
@@ -1493,6 +1506,7 @@ def _maybe_auto_resume_run(
     resumed = db.get_run_by_id(run.id) or run
     if resumed.status != "running":
         resumed = db.update_run_status(run.id, "running")
+    _clear_run_terminal_reason(resumed)
     log_handle = open(process_log_path_for(run), "ab")
     log_follower = _launch_runtime_container(
         project,
@@ -1664,6 +1678,7 @@ def start_run_runtime(project: Project, run: Run, user: User) -> Run:
         return db.update_run_status(run.id, "failed")
 
     running = db.update_run_status(run.id, "running")
+    _clear_run_terminal_reason(running)
     _append_runtime_event(running, "run.started", "initializing", "Runtime launched; waiting for agent activity.")
     Thread(
         target=_supervise_container,
