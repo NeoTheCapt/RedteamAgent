@@ -8,6 +8,14 @@ trap 'rm -rf "$TMP_DIR"' EXIT
 ENG_DIR="$TMP_DIR/engagement"
 mkdir -p "$ENG_DIR"
 printf '' > "$ENG_DIR/surfaces.jsonl"
+cat > "$ENG_DIR/scope.json" <<'EOF'
+{
+  "target": "http://127.0.0.1:8000",
+  "hostname": "127.0.0.1",
+  "port": 8000,
+  "scope": ["127.0.0.1", "*.127.0.0.1"]
+}
+EOF
 
 cat <<'EOF' | "$ROOT/agent/scripts/append_surface_jsonl.sh" "$ENG_DIR"
 {"surface_type":"object_reference","target":"GET /orders/7","source":"source-analyzer","rationale":"bundle shows direct order fetch","evidence_ref":"downloads/app.js","status":"discovered"}
@@ -53,6 +61,14 @@ grep -q '"surface_type": "file_handling"' "$ENG_DIR/surfaces.jsonl"
 grep -q '"target": "GET http://127.0.0.1:8000/ftp/incident-support.kdbx"' "$ENG_DIR/surfaces.jsonl"
 grep -q '"surface_type": "workflow_token"' "$ENG_DIR/surfaces.jsonl"
 grep -q '"surface_type": "privileged_write"' "$ENG_DIR/surfaces.jsonl"
+
+cat <<'EOF' | "$ROOT/agent/scripts/append_surface_jsonl.sh" "$ENG_DIR"
+{"url":"http://host.docker.internal:8000/rest/admin","method":"GET","type":"page","reason":"Container-local alias should collapse back to the scoped loopback target"}
+{"url":"http://localhost:3000/.well-known/csaf/provider-metadata.json","method":"GET","type":"api-docs","reason":"Cross-origin loopback CSAF reference should not be imported as an in-scope surface"}
+EOF
+
+grep -q '"target": "GET http://127.0.0.1:8000/rest/admin"' "$ENG_DIR/surfaces.jsonl"
+! grep -q 'localhost:3000' "$ENG_DIR/surfaces.jsonl"
 
 cat <<'EOF' | "$ROOT/agent/scripts/append_surface_jsonl.sh" "$ENG_DIR"
 {"url":"https://okg-pub-hk.oss-accelerate.aliyuncs.com/upgradeapp/install-manifest2.plist","type":"asset-distribution","reason":"Public download API exposes external mobile install manifest host"}

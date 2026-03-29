@@ -3,6 +3,7 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/placeholders.sh"
+source "$SCRIPT_DIR/loopback_scope.sh"
 
 surface_file_path() {
     local eng_dir="${1:?engagement dir required}"
@@ -64,6 +65,16 @@ upsert_surface_record() {
     surface_validate_type "$surface_type"
     surface_validate_status "$status"
     surface_validate_target "$target"
+
+    local normalized_target
+    normalized_target="$(normalize_target_for_scope "$eng_dir" "$target")" || {
+        if [[ $? -eq 10 ]]; then
+            return 0
+        fi
+        return 1
+    }
+    target="$normalized_target"
+
     ensure_surface_file "$eng_dir"
     surface_file="$(surface_file_path "$eng_dir")"
     tmp_file="$(mktemp "${TMPDIR:-/tmp}/surfaces-jsonl.XXXXXX")"

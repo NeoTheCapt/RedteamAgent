@@ -15,6 +15,7 @@ source "$SCRIPT_DIR/lib/classify.sh"
 source "$SCRIPT_DIR/lib/db.sh"
 source "$SCRIPT_DIR/lib/placeholders.sh"
 source "$SCRIPT_DIR/lib/source_queue_filter.sh"
+source "$SCRIPT_DIR/lib/loopback_scope.sh"
 
 # --- Validate arguments ---
 if [[ $# -lt 2 ]]; then
@@ -24,6 +25,7 @@ fi
 
 DB_PATH="$1"
 SOURCE="$2"
+ENG_DIR_FOR_SCOPE_FILTER="$(cd "$(dirname "$DB_PATH")" && pwd)"
 
 if [[ ! -f "$DB_PATH" ]]; then
     echo "ERROR: database not found: $DB_PATH" >&2
@@ -81,6 +83,14 @@ while IFS= read -r line; do
 
     # Skip if URL is empty
     [[ -z "$url" ]] && continue
+
+    normalized_url="$(normalize_target_for_scope "$ENG_DIR_FOR_SCOPE_FILTER" "$url")" || {
+        if [[ $? -eq 10 ]]; then
+            continue
+        fi
+        continue
+    }
+    url="$normalized_url"
 
     # If URL doesn't start with http, it might be a bare hostname — prefix with https://
     if [[ ! "$url" =~ ^https?:// ]]; then
