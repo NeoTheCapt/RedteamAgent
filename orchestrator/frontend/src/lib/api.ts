@@ -26,6 +26,8 @@ export type Run = {
   target: string;
   status: string;
   engagement_root: string;
+  created_at: string;
+  updated_at: string;
 };
 
 export type RunSummary = {

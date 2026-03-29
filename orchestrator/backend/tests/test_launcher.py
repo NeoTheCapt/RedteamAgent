@@ -54,9 +54,12 @@ def test_create_run_prepares_isolated_runtime_directories():
     assert (run_root / "opencode-home").is_dir()
 
     metadata = json.loads((run_root / "run.json").read_text(encoding="utf-8"))
+    assert metadata["id"] == run["id"]
     assert metadata["run_id"] == run["id"]
     assert metadata["target"] == "https://example.com"
     assert metadata["engagement_root"] == run["engagement_root"]
+    assert metadata["created_at"] == run["created_at"]
+    assert metadata["updated_at"] == run["updated_at"]
 
 
 def test_prepare_run_runtime_syncs_agent_source_into_workspace():

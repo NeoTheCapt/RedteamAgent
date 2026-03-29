@@ -49,6 +49,14 @@ def test_create_run_and_list_project_runs(isolate_data_dir):
     assert run_payload["engagement_root"] == str(
         isolate_data_dir / "projects-root" / "alice" / "alpha" / "runs" / "run-0001"
     )
+    assert run_payload["created_at"]
+    assert run_payload["updated_at"]
+
+    run_metadata = json.loads((Path(run_payload["engagement_root"]) / "run.json").read_text(encoding="utf-8"))
+    assert run_metadata["id"] == run_payload["id"]
+    assert run_metadata["run_id"] == run_payload["id"]
+    assert run_metadata["created_at"] == run_payload["created_at"]
+    assert run_metadata["updated_at"] == run_payload["updated_at"]
 
     runs_response = client.get(
         f"/projects/{project['id']}/runs",
@@ -94,6 +102,15 @@ def test_run_status_transitions_require_project_ownership():
     )
     assert completed.status_code == 200
     assert completed.json()["status"] == "completed"
+    assert completed.json()["created_at"]
+    assert completed.json()["updated_at"]
+
+    run_root = Path(completed.json()["engagement_root"])
+    metadata = json.loads((run_root / "run.json").read_text(encoding="utf-8"))
+    assert metadata["id"] == run_id
+    assert metadata["run_id"] == run_id
+    assert metadata["created_at"] == completed.json()["created_at"]
+    assert metadata["updated_at"] == completed.json()["updated_at"]
 
 
 def test_list_runs_keeps_running_container_alive_across_backend_restart(monkeypatch):

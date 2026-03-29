@@ -27,6 +27,8 @@ class RunResponse(BaseModel):
     target: str
     status: str
     engagement_root: str
+    created_at: str
+    updated_at: str
 
 
 class RunSummaryTargetResponse(BaseModel):
@@ -133,6 +135,8 @@ def _run_response(run: Run) -> RunResponse:
         target=run.target,
         status=run.status,
         engagement_root=run.engagement_root,
+        created_at=run.created_at,
+        updated_at=run.updated_at,
     )
 
 

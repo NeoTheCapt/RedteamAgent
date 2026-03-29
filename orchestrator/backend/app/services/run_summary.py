@@ -793,10 +793,13 @@ def _sync_run_metadata_projection(run, run_root: Path, current: dict, phases: li
         payload = {}
     payload.update(
         {
+            "id": run.id,
             "run_id": run.id,
+            "project_id": run.project_id,
             "target": run.target,
             "status": run.status,
             "engagement_root": run.engagement_root,
+            "created_at": run.created_at,
             "updated_at": run.updated_at,
             "current_action": current,
             "phase_waterfall": phases,
