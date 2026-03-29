@@ -288,17 +288,27 @@ def _load_cases_metrics(path: Path) -> dict:
         return metrics
 
     def _reader(connection: sqlite3.Connection):
-        type_rows = connection.execute(
-            "SELECT type, status, COUNT(*) AS count FROM cases GROUP BY type, status"
-        ).fetchall()
-        column_rows = connection.execute("PRAGMA table_info(cases)").fetchall()
-        column_names = {str(row[1]) for row in column_rows}
-        if "assigned_agent" in column_names:
-            processing_rows = connection.execute(
-                "SELECT assigned_agent, COUNT(*) AS count FROM cases WHERE status = 'processing' AND assigned_agent IS NOT NULL AND assigned_agent != '' GROUP BY assigned_agent"
+        try:
+            type_rows = connection.execute(
+                "SELECT type, status, COUNT(*) AS count FROM cases GROUP BY type, status"
             ).fetchall()
-        else:
-            processing_rows = []
+        except sqlite3.Error:
+            type_rows = []
+
+        try:
+            column_rows = connection.execute("PRAGMA table_info(cases)").fetchall()
+        except sqlite3.Error:
+            column_rows = []
+        column_names = {str(row[1]) for row in column_rows}
+
+        processing_rows = []
+        if "assigned_agent" in column_names:
+            try:
+                processing_rows = connection.execute(
+                    "SELECT assigned_agent, COUNT(*) AS count FROM cases WHERE status = 'processing' AND assigned_agent IS NOT NULL AND assigned_agent != '' GROUP BY assigned_agent"
+                ).fetchall()
+            except sqlite3.Error:
+                processing_rows = []
         return type_rows, processing_rows
 
     payload = _read_sqlite_with_fallback(path, _reader, None)
@@ -347,7 +357,10 @@ def _load_observed_paths(path: Path) -> list[ObservedPathRecord]:
         return []
 
     def _reader(connection: sqlite3.Connection):
-        column_rows = connection.execute("PRAGMA table_info(cases)").fetchall()
+        try:
+            column_rows = connection.execute("PRAGMA table_info(cases)").fetchall()
+        except sqlite3.Error:
+            return [], []
         column_names = [str(row[1]) for row in column_rows]
         if not column_names:
             return [], []
@@ -364,8 +377,37 @@ def _load_observed_paths(path: Path) -> list[ObservedPathRecord]:
             "type, "
             "url"
         )
-        rows = connection.execute(query).fetchall()
-        return selected, rows
+        try:
+            rows = connection.execute(query).fetchall()
+            return selected, rows
+        except sqlite3.Error:
+            pass
+
+        if "id" not in column_names:
+            return selected, []
+
+        try:
+            row_ids = [
+                row[0]
+                for row in connection.execute(
+                    "SELECT id FROM cases ORDER BY CASE WHEN status = 'processing' THEN 0 WHEN status = 'pending' THEN 1 WHEN status = 'done' THEN 2 ELSE 3 END, type, url"
+                ).fetchall()
+            ]
+        except sqlite3.Error:
+            return selected, []
+
+        recovered_rows = []
+        for row_id in row_ids:
+            try:
+                row = connection.execute(
+                    f"SELECT {', '.join(selected)} FROM cases WHERE id = ?",
+                    (row_id,),
+                ).fetchone()
+            except sqlite3.Error:
+                continue
+            if row is not None:
+                recovered_rows.append(row)
+        return selected, recovered_rows
 
     payload = _read_sqlite_with_fallback(path, _reader, None)
     if payload is None:
