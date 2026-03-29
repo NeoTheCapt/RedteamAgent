@@ -432,6 +432,140 @@ def test_list_runs_marks_pending_queue_stall_failed_even_if_only_exploit_artifac
     assert "pending queue items remained undispatched" in metadata["stop_reason_text"]
 
 
+def test_list_runs_marks_stalled_run_failed_even_if_cases_sqlite_wal_churns(monkeypatch):
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+
+    create_run = client.post(
+        f"/projects/{project['id']}/runs",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"target": "https://example.com"},
+    )
+    assert create_run.status_code == 201
+    run = create_run.json()
+    db.update_run_status(run["id"], "running")
+
+    run_root = Path(run["engagement_root"])
+    runtime_dir = run_root / "runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    process_log = runtime_dir / "process.log"
+    process_log.write_text("exploit dispatched\n", encoding="utf-8")
+    old_epoch = datetime.now().timestamp() - 950
+    os.utime(process_log, (old_epoch, old_epoch))
+
+    workspace = run_root / "workspace"
+    engagement_dir = workspace / "engagements" / "2026-03-28-000000-example"
+    engagement_dir.mkdir(parents=True, exist_ok=True)
+    (workspace / "engagements" / ".active").write_text(
+        "engagements/2026-03-28-000000-example\n",
+        encoding="utf-8",
+    )
+    scope_path = engagement_dir / "scope.json"
+    scope_path.write_text(
+        json.dumps(
+            {
+                "status": "in_progress",
+                "current_phase": "exploit",
+                "phases_completed": ["recon", "collect", "consume_test"],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    os.utime(scope_path, (old_epoch, old_epoch))
+    (engagement_dir / "log.md").write_text("stale exploit\n", encoding="utf-8")
+    os.utime(engagement_dir / "log.md", (old_epoch, old_epoch))
+    with sqlite3.connect(engagement_dir / "cases.db") as connection:
+        connection.execute(
+            "CREATE TABLE cases (id INTEGER PRIMARY KEY AUTOINCREMENT, status TEXT NOT NULL)"
+        )
+        connection.execute("INSERT INTO cases(status) VALUES ('done')")
+        connection.commit()
+
+    recent_wal = engagement_dir / "cases.db-wal"
+    recent_wal.write_text("optimizer read churn\n", encoding="utf-8")
+
+    monkeypatch.setattr("app.services.runs.locate_runtime_pid", lambda _run: 12345)
+    stopped: list[int] = []
+    monkeypatch.setattr("app.services.runs.stop_run_runtime", lambda reconciled_run: stopped.append(reconciled_run.id))
+
+    runs_response = client.get(
+        f"/projects/{project['id']}/runs",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert runs_response.status_code == 200
+    assert runs_response.json()[0]["status"] == "failed"
+    assert stopped == [run["id"]]
+    metadata = json.loads((run_root / "run.json").read_text(encoding="utf-8"))
+    assert metadata["stop_reason_code"] == "queue_stalled"
+    assert metadata["stop_reason_text"] == "Runtime produced no new output before stall timeout elapsed."
+
+
+def test_list_runs_keeps_recent_opencode_log_activity_running(monkeypatch):
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+
+    create_run = client.post(
+        f"/projects/{project['id']}/runs",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"target": "https://example.com"},
+    )
+    assert create_run.status_code == 201
+    run = create_run.json()
+    db.update_run_status(run["id"], "running")
+
+    run_root = Path(run["engagement_root"])
+    runtime_dir = run_root / "runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    process_log = runtime_dir / "process.log"
+    process_log.write_text("exploit dispatched\n", encoding="utf-8")
+    old_epoch = datetime.now().timestamp() - 950
+    os.utime(process_log, (old_epoch, old_epoch))
+
+    workspace = run_root / "workspace"
+    engagement_dir = workspace / "engagements" / "2026-03-28-000000-example"
+    engagement_dir.mkdir(parents=True, exist_ok=True)
+    (workspace / "engagements" / ".active").write_text(
+        "engagements/2026-03-28-000000-example\n",
+        encoding="utf-8",
+    )
+    (engagement_dir / "scope.json").write_text(
+        json.dumps(
+            {
+                "status": "in_progress",
+                "current_phase": "exploit",
+                "phases_completed": ["recon", "collect", "consume_test"],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    with sqlite3.connect(engagement_dir / "cases.db") as connection:
+        connection.execute(
+            "CREATE TABLE cases (id INTEGER PRIMARY KEY AUTOINCREMENT, status TEXT NOT NULL)"
+        )
+        connection.execute("INSERT INTO cases(status) VALUES ('done')")
+        connection.commit()
+
+    opencode_log = run_root / "opencode-home" / "log" / "2026-03-28T000000.log"
+    opencode_log.parent.mkdir(parents=True, exist_ok=True)
+    opencode_log.write_text('{"type":"message","text":"still working"}\n', encoding="utf-8")
+
+    monkeypatch.setattr("app.services.runs.locate_runtime_pid", lambda _run: 12345)
+    stopped: list[int] = []
+    monkeypatch.setattr("app.services.runs.stop_run_runtime", lambda reconciled_run: stopped.append(reconciled_run.id))
+
+    runs_response = client.get(
+        f"/projects/{project['id']}/runs",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert runs_response.status_code == 200
+    assert runs_response.json()[0]["status"] == "running"
+    assert stopped == []
+
+
 def test_list_runs_keeps_processing_queue_under_15_minute_watchdog_running(monkeypatch):
     client = TestClient(app)
     token = register_and_login(client, "alice")
@@ -996,7 +1130,7 @@ def test_list_runs_normalizes_scope_phase_aliases(monkeypatch):
     assert normalized["current_phase"] == "consume_test"
 
 
-def test_list_runs_keeps_early_recon_stall_running_while_pid_is_alive(monkeypatch):
+def test_list_runs_marks_early_recon_stall_failed_even_if_pid_is_alive(monkeypatch):
     client = TestClient(app)
     token = register_and_login(client, "alice")
     project = create_project(client, token)
@@ -1043,13 +1177,18 @@ def test_list_runs_keeps_early_recon_stall_running_while_pid_is_alive(monkeypatc
         connection.commit()
 
     monkeypatch.setattr("app.services.runs.locate_runtime_pid", lambda _run: 12345)
+    stopped: list[int] = []
+    monkeypatch.setattr("app.services.runs.stop_run_runtime", lambda reconciled_run: stopped.append(reconciled_run.id))
 
     runs_response = client.get(
         f"/projects/{project['id']}/runs",
         headers={"Authorization": f"Bearer {token}"},
     )
     assert runs_response.status_code == 200
-    assert runs_response.json()[0]["status"] == "running"
+    assert runs_response.json()[0]["status"] == "failed"
+    assert stopped == [run["id"]]
+    metadata = json.loads((run_root / "run.json").read_text(encoding="utf-8"))
+    assert metadata["stop_reason_code"] == "queue_stalled"
 
 
 def test_delete_run_removes_runtime_files_and_db_records():
