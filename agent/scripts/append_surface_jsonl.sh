@@ -41,6 +41,10 @@ normalize_surface_type() {
             printf '%s\n' "api_documentation"
             return 0
             ;;
+        asset_distribution|cdn_asset_host|cdn_host|download_host|object_storage|storage_bucket)
+            printf '%s\n' "dynamic_render"
+            return 0
+            ;;
         auth|authentication|login|register|mfa)
             printf '%s\n' "auth_entry"
             return 0
@@ -71,6 +75,11 @@ infer_surface_type() {
 
     if [[ "$haystack" == *"swagger"* || "$haystack" == *"openapi"* || "$haystack" == *"api doc"* || "$haystack" == *"documented"* || "$haystack" == *"/api-docs"* || "$haystack" == *"/okx-api"* || "$haystack" == *"docs-v5"* ]]; then
         printf '%s\n' "api_documentation"
+        return 0
+    fi
+
+    if [[ "$item_type" == "asset-distribution" || "$item_type" == "asset_distribution" || "$item_type" == "cdn-asset-host" || "$item_type" == "cdn_asset_host" || "$item_type" == "cdn-host" || "$item_type" == "object-storage" || "$item_type" == "storage-bucket" || "$haystack" == *"asset host"* || "$haystack" == *"cdn host"* || "$haystack" == *"installer manifest"* || "$haystack" == *"object storage"* ]]; then
+        printf '%s\n' "dynamic_render"
         return 0
     fi
 
