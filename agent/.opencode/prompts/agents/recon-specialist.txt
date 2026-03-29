@@ -143,6 +143,9 @@ Domains & Infrastructure:
     scratch data, use `downloads/`, `scans/`, or an engagement-local temp dir under `$DIR`
     (for example `mktemp -d "$DIR/tmp.recon.XXXXXX"`). Do NOT use `/tmp` or other external paths during
     unattended runs; they trigger approval-gated `external_directory` access and can stall the run.
+    Also do NOT inspect OpenCode tool-output paths (`/root/.local/share/opencode`, `tool-output/`, or
+    `tool_*` include handles) with `grep`, `read`, or `glob`. If command output is truncated, rerun the
+    command so it saves to a file under `downloads/`, `scans/`, or `$DIR/tmp.*`, then inspect that file.
 17. CHRONOLOGICAL LOGGING: At the start of a substantial recon task, append one log entry:
     `./scripts/append_log_entry.sh "$DIR" recon-specialist "Recon start" "<objective / command family>" "<target and scope>"`
     Before returning final results, append one summary entry:
