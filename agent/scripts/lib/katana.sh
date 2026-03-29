@@ -41,7 +41,7 @@ katana_request_should_ingest() {
     local request_json="${1:-}"
     [[ -n "$request_json" ]] || return 1
 
-    local url url_path source_ref tag attribute content_type error_text
+    local url url_path source_ref tag attribute content_type error_text response_status
     url="$(printf '%s' "$request_json" | jq -r '.url // empty' 2>/dev/null || true)"
     [[ -n "$url" ]] || return 1
 
@@ -55,12 +55,22 @@ katana_request_should_ingest() {
     attribute="$(printf '%s' "$request_json" | jq -r '.attribute // empty' 2>/dev/null || true)"
     content_type="$(printf '%s' "$request_json" | jq -r '.content_type // empty' 2>/dev/null || true)"
     error_text="$(printf '%s' "$request_json" | jq -r '.error // empty' 2>/dev/null || true)"
+    response_status="$(printf '%s' "$request_json" | jq -r '.response_status // 0' 2>/dev/null || true)"
 
     if [[ -n "$error_text" ]] \
         && katana_error_is_recoverable_discovery "$error_text" \
         && [[ "$tag" == "html" ]] \
         && [[ "$attribute" == "regex" ]] \
         && is_katana_internal_source_path "$url_path"; then
+        return 1
+    fi
+
+    if [[ "$tag" == "js" ]] \
+        && [[ "$attribute" == "regex" ]] \
+        && is_katana_javascript_source_ref "$source_ref" \
+        && is_katana_api_like_path "$url_path" \
+        && [[ "$response_status" =~ ^[0-9]+$ ]] \
+        && (( response_status >= 400 )); then
         return 1
     fi
 
