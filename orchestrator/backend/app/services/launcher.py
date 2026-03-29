@@ -59,6 +59,13 @@ _CONTAINER_STATUS_LOOKUP_UNAVAILABLE = "__lookup_unavailable__"
 
 _LOOPBACK_RUNTIME_HOSTS = {"127.0.0.1", "localhost", "0.0.0.0", "::1"}
 _RUNTIME_HOST_GATEWAY_ALIAS = "host.docker.internal"
+_AUTO_RESUME_REASON_CODES = {
+    "engagement_incomplete",
+    "incomplete_stop",
+    "queue_incomplete",
+    "surface_coverage_incomplete",
+}
+_AUTO_RESUME_LIMIT = 2
 
 
 def _rewrite_runtime_target(target: str) -> str:
@@ -578,6 +585,35 @@ def _write_container_metadata(run: Run, container_id: str, command: list[str]) -
     process_metadata_path_for(run).write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
+def _read_run_metadata(run: Run) -> dict[str, object]:
+    metadata_path = metadata_path_for(run)
+    if not metadata_path.exists():
+        return {}
+    try:
+        payload = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _update_run_metadata(run: Run, **fields: object) -> None:
+    payload = _read_run_metadata(run)
+    payload.update(fields)
+    metadata_path_for(run).write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _current_auto_resume_count(run: Run) -> int:
+    value = _read_run_metadata(run).get("auto_resume_count")
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _set_auto_resume_count(run: Run, count: int) -> None:
+    _update_run_metadata(run, auto_resume_count=max(0, int(count)))
+
+
 def _init_only_exit(run: Run) -> bool:
     process_log = process_log_path_for(run)
     if not process_log.exists():
@@ -780,6 +816,152 @@ def stop_run_runtime(run: Run) -> None:
                 )
 
 
+def _close_log_streams(log_follower: subprocess.Popen[bytes] | None, log_handle) -> None:
+    if log_follower is not None and log_follower.poll() is None:
+        log_follower.terminate()
+        try:
+            log_follower.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            log_follower.kill()
+    log_handle.close()
+
+
+def _runtime_command_text(run: Run, *, resume: bool = False) -> str:
+    if resume:
+        return "/resume"
+    return f"/autoengage {_rewrite_runtime_target(run.target)}"
+
+
+def _launch_runtime_container(
+    project: Project,
+    run: Run,
+    user: User,
+    *,
+    command_text: str,
+    log_handle,
+) -> subprocess.Popen[bytes]:
+    subprocess.run(
+        ["docker", "rm", "-f", runtime_container_name(run)],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    runtime_env = _runtime_env(project, run, user)
+    passthrough_keys = [
+        "REDTEAM_OPENCODE_MODEL",
+        "REDTEAM_OPENCODE_SMALL_MODEL",
+        "OPENAI_API_KEY",
+        "OPENAI_BASE_URL",
+        "OPENAI_MODEL",
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_BASE_URL",
+        "ANTHROPIC_MODEL",
+        "GOOGLE_API_KEY",
+        "GEMINI_API_KEY",
+        "LOG_LEVEL",
+    ]
+    env_args = [
+        "-e",
+        f"ORCHESTRATOR_BASE_URL={runtime_env['ORCHESTRATOR_BASE_URL']}",
+        "-e",
+        f"ORCHESTRATOR_TOKEN={runtime_env['ORCHESTRATOR_TOKEN']}",
+        "-e",
+        f"ORCHESTRATOR_PROJECT_ID={runtime_env['ORCHESTRATOR_PROJECT_ID']}",
+        "-e",
+        f"ORCHESTRATOR_RUN_ID={runtime_env['ORCHESTRATOR_RUN_ID']}",
+    ]
+    for key in passthrough_keys:
+        value = runtime_env.get(key)
+        if value:
+            env_args.extend(["-e", f"{key}={value}"])
+
+    docker_command = [
+        "docker",
+        "run",
+        "-d",
+        "--name",
+        runtime_container_name(run),
+        "--add-host",
+        "host.docker.internal:host-gateway",
+        "-v",
+        f"{workspace_root_for(run)}:/workspace",
+        "-v",
+        f"{opencode_home_root_for(run)}:/root/.local/share/opencode",
+        *env_args,
+        settings.redteam_allinone_image,
+        "opencode",
+        "run",
+        "--format",
+        "json",
+        command_text,
+    ]
+    result = subprocess.run(
+        docker_command,
+        cwd=str(run.engagement_root),
+        env=os.environ.copy(),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        error_output = (result.stderr or result.stdout or "").strip()
+        raise RuntimeError(error_output or "docker run failed")
+    container_id = (result.stdout or "").strip()
+    _write_container_metadata(run, container_id, docker_command)
+    return subprocess.Popen(
+        ["docker", "logs", "-f", runtime_container_name(run)],
+        cwd=str(run.engagement_root),
+        env=os.environ.copy(),
+        stdout=log_handle,
+        stderr=subprocess.STDOUT,
+    )
+
+
+def _maybe_auto_resume_run(
+    project: Project,
+    run: Run,
+    user: User,
+    *,
+    phase: str,
+    reason_code: str,
+    reason_text: str,
+) -> bool:
+    if reason_code not in _AUTO_RESUME_REASON_CODES:
+        return False
+    if _active_engagement_dir(run) is None:
+        return False
+    attempt = _current_auto_resume_count(run)
+    if attempt >= _AUTO_RESUME_LIMIT:
+        return False
+
+    next_attempt = attempt + 1
+    _set_auto_resume_count(run, next_attempt)
+    _append_runtime_event(
+        run,
+        "run.resumed",
+        phase,
+        f"Relaunching /resume after {reason_code} ({next_attempt}/{_AUTO_RESUME_LIMIT}): {reason_text}",
+    )
+    resumed = db.get_run_by_id(run.id) or run
+    if resumed.status != "running":
+        resumed = db.update_run_status(run.id, "running")
+    log_handle = open(process_log_path_for(run), "ab")
+    log_follower = _launch_runtime_container(
+        project,
+        resumed,
+        user,
+        command_text=_runtime_command_text(resumed, resume=True),
+        log_handle=log_handle,
+    )
+    Thread(
+        target=_supervise_container,
+        args=(resumed, project, user, runtime_container_name(resumed), log_follower, log_handle),
+        daemon=True,
+    ).start()
+    return True
+
+
 def _supervise_process(run: Run, process: subprocess.Popen[bytes], log_handle, heartbeat_interval: int = 5) -> None:
     while True:
         try:
@@ -812,6 +994,8 @@ def _supervise_process(run: Run, process: subprocess.Popen[bytes], log_handle, h
 
 def _supervise_container(
     run: Run,
+    project: Project,
+    user: User,
     container_name: str,
     log_follower: subprocess.Popen[bytes] | None,
     log_handle,
@@ -853,6 +1037,16 @@ def _supervise_container(
                 completion_reason=completion_reason,
                 init_only_exit=init_only_exit,
             )
+            if not succeeded and _maybe_auto_resume_run(
+                project,
+                run,
+                user,
+                phase=phase,
+                reason_code=reason_code,
+                reason_text=reason_text,
+            ):
+                _close_log_streams(log_follower, log_handle)
+                return
             _append_runtime_event(
                 run,
                 "run.completed" if succeeded else "run.failed",
@@ -865,103 +1059,38 @@ def _supervise_container(
         if status is None:
             phase, _ = _heartbeat_context(run)
             succeeded, reason_code, reason_text, summary = _terminal_reason_from_artifacts(run)
+            if not succeeded and _maybe_auto_resume_run(
+                project,
+                run,
+                user,
+                phase=phase,
+                reason_code=reason_code,
+                reason_text=reason_text,
+            ):
+                _close_log_streams(log_follower, log_handle)
+                return
             _append_runtime_event(run, "run.completed" if succeeded else "run.failed", phase, summary)
             terminal = db.update_run_status(run.id, "completed" if succeeded else "failed")
             _write_run_terminal_reason(terminal, reason_code=reason_code, reason_text=reason_text)
             break
         time.sleep(heartbeat_interval)
 
-    if log_follower is not None and log_follower.poll() is None:
-        log_follower.terminate()
-        try:
-            log_follower.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            log_follower.kill()
-    log_handle.close()
+    _close_log_streams(log_follower, log_handle)
 
 
 def start_run_runtime(project: Project, run: Run, user: User) -> Run:
     prepare_run_runtime(project, run)
     process_log_path_for(run).parent.mkdir(parents=True, exist_ok=True)
+    _set_auto_resume_count(run, 0)
     log_handle = open(process_log_path_for(run), "ab")
 
     try:
-        subprocess.run(
-            ["docker", "rm", "-f", runtime_container_name(run)],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            check=False,
-        )
-        runtime_env = _runtime_env(project, run, user)
-        passthrough_keys = [
-            "REDTEAM_OPENCODE_MODEL",
-            "REDTEAM_OPENCODE_SMALL_MODEL",
-            "OPENAI_API_KEY",
-            "OPENAI_BASE_URL",
-            "OPENAI_MODEL",
-            "ANTHROPIC_API_KEY",
-            "ANTHROPIC_BASE_URL",
-            "ANTHROPIC_MODEL",
-            "GOOGLE_API_KEY",
-            "GEMINI_API_KEY",
-            "LOG_LEVEL",
-        ]
-        env_args = [
-            "-e",
-            f"ORCHESTRATOR_BASE_URL={runtime_env['ORCHESTRATOR_BASE_URL']}",
-            "-e",
-            f"ORCHESTRATOR_TOKEN={runtime_env['ORCHESTRATOR_TOKEN']}",
-            "-e",
-            f"ORCHESTRATOR_PROJECT_ID={runtime_env['ORCHESTRATOR_PROJECT_ID']}",
-            "-e",
-            f"ORCHESTRATOR_RUN_ID={runtime_env['ORCHESTRATOR_RUN_ID']}",
-        ]
-        for key in passthrough_keys:
-            value = runtime_env.get(key)
-            if value:
-                env_args.extend(["-e", f"{key}={value}"])
-
-        runtime_target = _rewrite_runtime_target(run.target)
-        docker_command = [
-            "docker",
-            "run",
-            "-d",
-            "--name",
-            runtime_container_name(run),
-            "--add-host",
-            "host.docker.internal:host-gateway",
-            "-v",
-            f"{workspace_root_for(run)}:/workspace",
-            "-v",
-            f"{opencode_home_root_for(run)}:/root/.local/share/opencode",
-            *env_args,
-            settings.redteam_allinone_image,
-            "opencode",
-            "run",
-            "--format",
-            "json",
-            f"/autoengage {runtime_target}",
-        ]
-        result = subprocess.run(
-            docker_command,
-            cwd=str(run.engagement_root),
-            env=os.environ.copy(),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            check=False,
-        )
-        if result.returncode != 0:
-            error_output = (result.stderr or result.stdout or "").strip()
-            raise RuntimeError(error_output or "docker run failed")
-        container_id = (result.stdout or "").strip()
-        _write_container_metadata(run, container_id, docker_command)
-        log_follower = subprocess.Popen(
-            ["docker", "logs", "-f", runtime_container_name(run)],
-            cwd=str(run.engagement_root),
-            env=os.environ.copy(),
-            stdout=log_handle,
-            stderr=subprocess.STDOUT,
+        log_follower = _launch_runtime_container(
+            project,
+            run,
+            user,
+            command_text=_runtime_command_text(run),
+            log_handle=log_handle,
         )
     except Exception as exc:
         log_handle.write(f"launcher failed: {exc!r}\n".encode("utf-8"))
@@ -970,5 +1099,9 @@ def start_run_runtime(project: Project, run: Run, user: User) -> Run:
 
     running = db.update_run_status(run.id, "running")
     _append_runtime_event(running, "run.started", "initializing", "Runtime launched; waiting for agent activity.")
-    Thread(target=_supervise_container, args=(running, runtime_container_name(run), log_follower, log_handle), daemon=True).start()
+    Thread(
+        target=_supervise_container,
+        args=(running, project, user, runtime_container_name(run), log_follower, log_handle),
+        daemon=True,
+    ).start()
     return running
