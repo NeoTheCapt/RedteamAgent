@@ -34,7 +34,22 @@ is_katana_noise_source() {
     local _error_text="${5:-}"
 
     [[ -n "$source_ref" ]] || return 1
-    is_katana_binary_source_ref "$source_ref"
+
+    if is_katana_binary_source_ref "$source_ref"; then
+        return 0
+    fi
+
+    # Treat asset-directory source pages as noise too. Some SPA targets serve index.html
+    # for arbitrary asset subpaths (for example /assets/.../), which makes katana emit
+    # recoverable error discoveries for bogus relative .js/.css links under those paths.
+    # Those rows have no trustworthy response metadata and poison the crawl queue.
+    local source_path
+    source_path="$(_katana_urlish_path "$source_ref")"
+    if is_katana_noise_path "$source_path"; then
+        return 0
+    fi
+
+    return 1
 }
 
 is_katana_noise_path() {
