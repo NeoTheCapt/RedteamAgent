@@ -546,6 +546,7 @@ def _build_agent_cards(
 ) -> list[dict]:
     scope_phase = _normalize_phase(scope.get("current_phase")) if scope else "unknown"
     latest_by_agent: dict[str, object] = {}
+    latest_task_by_agent: dict[str, object] = {}
     terminal = _is_terminal_run_status(run_status)
     for event in events:
         agent_name = getattr(event, "agent_name", "")
@@ -554,10 +555,15 @@ def _build_agent_cards(
         if getattr(event, "event_type", "") == "artifact.updated" and getattr(event, "task_name", "") == "log.md":
             continue
         latest_by_agent[agent_name] = event
+        if getattr(event, "event_type", "").startswith("task."):
+            latest_task_by_agent[agent_name] = event
 
     cards: list[dict] = []
-    for agent_name, event in sorted(latest_by_agent.items(), key=lambda item: item[0]):
-        event_type = getattr(event, "event_type", "")
+    for agent_name in sorted(latest_by_agent):
+        latest_event = latest_by_agent[agent_name]
+        task_event = latest_task_by_agent.get(agent_name)
+        status_event = task_event or latest_event
+        event_type = getattr(status_event, "event_type", "")
         status_name = "idle"
         if terminal:
             if event_type == "task.completed":
@@ -567,17 +573,15 @@ def _build_agent_cards(
                 status_name = "active"
             elif event_type == "task.completed":
                 status_name = "completed"
-            elif _event_phase(event) != "unknown":
-                status_name = "active"
 
         cards.append(
             {
                 "agent_name": agent_name,
-                "phase": _resolved_event_phase(event, scope_phase),
+                "phase": _resolved_event_phase(status_event, scope_phase),
                 "status": status_name,
-                "task_name": getattr(event, "task_name", ""),
-                "summary": getattr(event, "summary", ""),
-                "updated_at": getattr(event, "created_at", ""),
+                "task_name": getattr(status_event, "task_name", ""),
+                "summary": getattr(latest_event, "summary", ""),
+                "updated_at": getattr(latest_event, "created_at", ""),
             }
         )
 

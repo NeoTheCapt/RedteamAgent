@@ -472,6 +472,71 @@ def test_run_summary_prefers_processing_agents_over_stale_runtime_phase_and_comp
 
 
 
+def test_run_summary_does_not_reactivate_completed_agents_from_surface_updates():
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "https://target.example")
+    active_dir = setup_active_engagement(run)
+    (active_dir / "scope.json").write_text(
+        json.dumps(
+            {
+                "hostname": "target.example",
+                "status": "in_progress",
+                "phases_completed": ["recon", "collect"],
+                "current_phase": "consume_test",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    for event in [
+        {
+            "event_type": "task.completed",
+            "phase": "recon",
+            "task_name": "recon-specialist",
+            "agent_name": "recon-specialist",
+            "summary": "Recon summary",
+        },
+        {
+            "event_type": "surface.updated",
+            "phase": "unknown",
+            "task_name": "dynamic_render",
+            "agent_name": "recon-specialist",
+            "summary": "dynamic_render discovered: GET /web3/explorer",
+        },
+        {
+            "event_type": "task.started",
+            "phase": "consume-test",
+            "task_name": "source-analyzer",
+            "agent_name": "source-analyzer",
+            "summary": "Source analysis start",
+        },
+    ]:
+        response = client.post(
+            f"/projects/{project['id']}/runs/{run['id']}/events",
+            headers={"Authorization": f"Bearer {token}"},
+            json=event,
+        )
+        assert response.status_code == 201
+
+    response = client.get(
+        f"/projects/{project['id']}/runs/{run['id']}/summary",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+
+    assert payload["overview"]["active_agents"] == 1
+    assert payload["current"]["agent_name"] == "source-analyzer"
+    recon_card = next(item for item in payload["agents"] if item["agent_name"] == "recon-specialist")
+    assert recon_card["status"] == "completed"
+    assert recon_card["phase"] == "recon"
+    assert recon_card["task_name"] == "recon-specialist"
+    assert recon_card["summary"] == "dynamic_render discovered: GET /web3/explorer"
+
+
+
 def test_run_summary_prefers_live_exploit_phase_over_stale_scope_phase():
     client = TestClient(app)
     token = register_and_login(client, "alice")
