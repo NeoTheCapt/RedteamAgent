@@ -36,15 +36,7 @@ def create_event_for_run(
     return db.create_event(run.id, event_type, phase, task_name, agent_name, summary)
 
 
-def _phase_for_event(event: Event, current_phase: str = "unknown") -> str:
-    if event.phase != "unknown":
-        return event.phase
-
-    if event.agent_name == "operator" and event.summary == "Engagement start":
-        return "recon"
-    if current_phase != "unknown":
-        return current_phase
-
+def _agent_phase(agent_name: str | None) -> str:
     agent_phase = {
         "recon-specialist": "recon",
         "vulnerability-analyst": "consume-test",
@@ -52,8 +44,24 @@ def _phase_for_event(event: Event, current_phase: str = "unknown") -> str:
         "osint-analyst": "exploit",
         "report-writer": "report",
     }
-    if event.agent_name in agent_phase:
-        return agent_phase[event.agent_name]
+    if not agent_name:
+        return "unknown"
+    return agent_phase.get(agent_name, "unknown")
+
+
+def _phase_for_event(event: Event, current_phase: str = "unknown") -> str:
+    if event.phase != "unknown":
+        return event.phase
+
+    if event.agent_name == "operator" and event.summary == "Engagement start":
+        return "recon"
+
+    agent_phase = _agent_phase(event.agent_name)
+    if agent_phase != "unknown":
+        return agent_phase
+    if current_phase != "unknown":
+        return current_phase
+
     return "unknown"
 
 
@@ -169,6 +177,21 @@ def _scope_phase_for_run(run_root: Path) -> str:
     return _normalize_phase_name(scope.get("current_phase"))
 
 
+def _phase_from_task_prompt(prompt: str) -> str:
+    patterns = [
+        r"\*\*Phase\*\*:\s*([A-Za-z_& -]+)",
+        r"(?:^|\n)\*\*Current phase\*\*:\s*([A-Za-z_& -]+)",
+        r"(?:^|\n)Current phase:\s*([A-Za-z_& -]+)",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, prompt, flags=re.IGNORECASE)
+        if match:
+            phase = _normalize_phase_name(match.group(1))
+            if phase != "unknown":
+                return phase
+    return "unknown"
+
+
 def _project_process_log_events(run_id: int, run_root: Path, events: list[Event]) -> list[Event]:
     process_log = run_root / "runtime" / "process.log"
     if not process_log.exists():
@@ -177,17 +200,38 @@ def _project_process_log_events(run_id: int, run_root: Path, events: list[Event]
     projected: list[Event] = []
     next_id = -100000
     scope_phase = _scope_phase_for_run(run_root)
-    seen = {
-        (event.event_type, event.agent_name, event.summary, event.created_at)
-        for event in events
+    indexed_events = list(events)
+    task_event_index = {
+        (event.event_type, event.agent_name, event.summary, event.created_at): idx
+        for idx, event in enumerate(indexed_events)
         if event.agent_name and event.event_type.startswith("task.")
     }
+    projected_keys: set[tuple[str, str, str, str]] = set()
 
     def add_projected(event_type: str, phase: str, task_name: str, agent_name: str, summary: str, created_at: str) -> None:
         nonlocal next_id
         key = (event_type, agent_name, summary, created_at)
-        if key in seen:
+        existing_idx = task_event_index.get(key)
+        if existing_idx is not None:
+            existing = indexed_events[existing_idx]
+            should_upgrade = phase != "unknown" and (
+                existing.phase == "unknown" or existing.id < 0 or existing.task_name != task_name
+            )
+            if should_upgrade:
+                indexed_events[existing_idx] = Event(
+                    id=existing.id,
+                    run_id=existing.run_id,
+                    event_type=existing.event_type,
+                    phase=phase,
+                    task_name=task_name,
+                    agent_name=agent_name,
+                    summary=summary,
+                    created_at=created_at,
+                )
             return
+        if key in projected_keys:
+            return
+
         projected.append(
             Event(
                 id=next_id,
@@ -200,7 +244,7 @@ def _project_process_log_events(run_id: int, run_root: Path, events: list[Event]
                 created_at=created_at,
             )
         )
-        seen.add(key)
+        projected_keys.add(key)
         next_id += 1
 
     for line in process_log.read_text(encoding="utf-8", errors="replace").splitlines():
@@ -246,8 +290,9 @@ def _project_process_log_events(run_id: int, run_root: Path, events: list[Event]
             continue
 
         prompt = task_input.get("prompt") or ""
-        phase_match = re.search(r"\*\*Phase\*\*:\s*([A-Za-z& -]+)", prompt)
-        phase = _normalize_phase_name(phase_match.group(1) if phase_match else None)
+        phase = _phase_from_task_prompt(prompt)
+        if phase == "unknown":
+            phase = scope_phase if scope_phase != "unknown" else _agent_phase(agent_name)
         summary = task_input.get("description") or f"{agent_name} task"
 
         add_projected("task.started", phase, agent_name, agent_name, summary, created_at)
@@ -260,9 +305,9 @@ def _project_process_log_events(run_id: int, run_root: Path, events: list[Event]
             created_at,
         )
 
-    if not projected:
+    if not projected and indexed_events == events:
         return events
-    return sorted([*events, *projected], key=lambda item: (item.created_at, item.id))
+    return sorted([*indexed_events, *projected], key=lambda item: (item.created_at, item.id))
 
 
 def list_events_for_run(project_id: int, run_id: int, user: User) -> list[Event]:
