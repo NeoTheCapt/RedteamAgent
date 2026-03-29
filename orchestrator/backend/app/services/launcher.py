@@ -191,20 +191,23 @@ def _surface_completion_ok(surface_file: Path) -> bool:
     return True
 
 
-def _last_logged_stop_reason(log_path: Path) -> str:
+def _last_logged_stop_metadata(log_path: Path) -> tuple[str, str]:
     if not log_path.exists():
-        return ""
+        return ("", "")
     content = log_path.read_text(encoding="utf-8", errors="replace")
-    matches = list(
-        re.finditer(
-            r"^## \[[^\]]+\] Run stop — operator\s*$.*?^\*\*Result\*\*: (.+)$",
-            content,
-            flags=re.MULTILINE | re.DOTALL,
-        )
-    )
-    if not matches:
-        return ""
-    return matches[-1].group(1).strip()
+    headings = list(re.finditer(r"^## \[[^\]]+\] Run stop — operator\s*$", content, flags=re.MULTILINE))
+    if not headings:
+        return ("", "")
+    section = content[headings[-1].start() :]
+    action_match = re.search(r"^\*\*Action\*\*: stop_reason=([^\n]+)\s*$", section, flags=re.MULTILINE)
+    result_match = re.search(r"^\*\*Result\*\*: (.+)$", section, flags=re.MULTILINE)
+    reason_code = action_match.group(1).strip() if action_match else ""
+    reason_text = result_match.group(1).strip() if result_match else ""
+    return (reason_code, reason_text)
+
+
+def _last_logged_stop_reason(log_path: Path) -> str:
+    return _last_logged_stop_metadata(log_path)[1]
 
 
 def engagement_completion_state(run: Run) -> tuple[bool, str]:
