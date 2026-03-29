@@ -473,6 +473,31 @@ def update_run_status(run_id: int, status: str) -> Run:
     return run
 
 
+def set_run_updated_at(run_id: int, updated_at: str) -> Run:
+    with get_connection() as connection:
+        connection.execute(
+            """
+            UPDATE runs
+            SET updated_at = ?
+            WHERE id = ?
+            """,
+            (updated_at, run_id),
+        )
+        row = connection.execute(
+            """
+            SELECT id, project_id, target, status, engagement_root, created_at, updated_at
+            FROM runs
+            WHERE id = ?
+            """,
+            (run_id,),
+        ).fetchone()
+        assert row is not None
+        run = Run.from_row(row)
+
+    _write_run_metadata(run)
+    return run
+
+
 def _write_run_metadata(run: Run) -> None:
     metadata_path = Path(run.engagement_root) / "run.json"
     if not metadata_path.exists():
