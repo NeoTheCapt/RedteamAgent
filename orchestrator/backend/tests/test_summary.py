@@ -1506,9 +1506,13 @@ def test_run_summary_normalizes_loopback_runtime_artifacts_and_redacts_katana_he
     assert observed_payload[0]["url"] == "http://127.0.0.1:8000/rest/admin"
 
     normalized_scope = json.loads((active_dir / "scope.json").read_text(encoding="utf-8"))
-    assert normalized_scope["target"] == "http://127.0.0.1:8000"
-    assert normalized_scope["hostname"] == "127.0.0.1"
-    assert normalized_scope["scope"] == ["127.0.0.1", "*.127.0.0.1"]
+    assert normalized_scope["target"] == "http://host.docker.internal:8000"
+    assert normalized_scope["hostname"] == "host.docker.internal"
+    assert normalized_scope["scope"] == ["host.docker.internal", "*.host.docker.internal"]
+
+    with sqlite3.connect(active_dir / "cases.db") as connection:
+        row = connection.execute("SELECT url FROM cases").fetchone()
+    assert row == ("http://host.docker.internal:8000/rest/admin",)
 
     findings_text = (active_dir / "findings.md").read_text(encoding="utf-8")
     report_text = (active_dir / "report.md").read_text(encoding="utf-8")
