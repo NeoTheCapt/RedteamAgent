@@ -156,7 +156,87 @@ def _canonical_phase_name(value: str | None) -> str:
     return _PHASE_CANONICAL_MAP.get(normalized, normalized)
 
 
-def _normalize_scope_file(scope_path: Path) -> dict[str, object] | None:
+def _loopback_display_context(run: Run | None) -> dict[str, str] | None:
+    if run is None:
+        return None
+
+    stripped = str(run.target or "").strip()
+    if not stripped:
+        return None
+
+    try:
+        parsed = urlsplit(stripped)
+    except ValueError:
+        return None
+
+    hostname = (parsed.hostname or "").strip().lower()
+    if parsed.scheme not in {"http", "https"} or hostname not in _LOOPBACK_RUNTIME_HOSTS:
+        return None
+
+    alias_netloc = _RUNTIME_HOST_GATEWAY_ALIAS
+    if parsed.port is not None:
+        alias_netloc = f"{alias_netloc}:{parsed.port}"
+
+    return {
+        "target": stripped,
+        "target_base": urlunsplit((parsed.scheme, parsed.netloc, "", "", "")),
+        "target_host": parsed.hostname or hostname,
+        "alias_host": _RUNTIME_HOST_GATEWAY_ALIAS,
+        "alias_base": urlunsplit((parsed.scheme, alias_netloc, "", "", "")),
+    }
+
+
+def _rewrite_loopback_text(value: str, context: dict[str, str] | None) -> str:
+    if not value or context is None:
+        return value
+
+    rewritten = value.replace(context["alias_base"], context["target_base"])
+    rewritten = rewritten.replace(f"*.{context['alias_host']}", f"*.{context['target_host']}")
+    rewritten = rewritten.replace(context["alias_host"], context["target_host"])
+    return rewritten
+
+
+def _is_sensitive_header_name(name: str) -> bool:
+    normalized = str(name or "").strip().lower()
+    if not normalized:
+        return False
+    return normalized in {
+        "authorization",
+        "proxy-authorization",
+        "cookie",
+        "set-cookie",
+        "x-api-key",
+        "x-auth-token",
+        "x-csrf-token",
+        "x-xsrf-token",
+    }
+
+
+def _rewrite_artifact_value(value, context: dict[str, str] | None, *, redact_headers: bool = False):
+    if isinstance(value, dict):
+        rewritten: dict[object, object] = {}
+        for key, item in value.items():
+            key_name = str(key or "")
+            lower_key = key_name.strip().lower()
+            if redact_headers and lower_key == "headers" and isinstance(item, dict):
+                sanitized_headers = {}
+                for header_name, header_value in item.items():
+                    if _is_sensitive_header_name(str(header_name)):
+                        sanitized_headers[header_name] = "<redacted>"
+                    else:
+                        sanitized_headers[header_name] = _rewrite_artifact_value(header_value, context, redact_headers=redact_headers)
+                rewritten[key] = sanitized_headers
+                continue
+            rewritten[key] = _rewrite_artifact_value(item, context, redact_headers=redact_headers)
+        return rewritten
+    if isinstance(value, list):
+        return [_rewrite_artifact_value(item, context, redact_headers=redact_headers) for item in value]
+    if isinstance(value, str):
+        return _rewrite_loopback_text(value, context)
+    return value
+
+
+def _normalize_scope_file(scope_path: Path, *, run: Run | None = None) -> dict[str, object] | None:
     if not scope_path.exists():
         return None
     try:
@@ -179,6 +259,12 @@ def _normalize_scope_file(scope_path: Path) -> dict[str, object] | None:
             payload["phases_completed"] = normalized
             changed = True
 
+    context = _loopback_display_context(run)
+    rewritten_payload = _rewrite_artifact_value(payload, context)
+    if rewritten_payload != payload:
+        payload = rewritten_payload
+        changed = True
+
     if changed:
         scope_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
     return payload
@@ -200,7 +286,7 @@ def _heartbeat_context(run: Run) -> tuple[str, str]:
     if not scope_path.exists():
         return ("unknown", "Runtime active; engagement created, waiting for phase details.")
 
-    scope = _normalize_scope_file(scope_path)
+    scope = _normalize_scope_file(scope_path, run=run)
     if scope is None:
         return ("unknown", "Runtime active; scope metadata is not yet readable.")
 
@@ -281,7 +367,7 @@ def engagement_completion_state(run: Run) -> tuple[bool, str]:
     if not scope_path.exists():
         return (False, "scope.json is missing.")
 
-    scope = _normalize_scope_file(scope_path)
+    scope = _normalize_scope_file(scope_path, run=run)
     if scope is None:
         return (False, "scope.json is unreadable.")
 
@@ -314,11 +400,87 @@ def engagement_completion_state(run: Run) -> tuple[bool, str]:
     return (True, "Engagement completed and finalized.")
 
 
+def _normalize_text_artifact(path: Path, context: dict[str, str] | None) -> None:
+    if context is None or not path.exists():
+        return
+    original = path.read_text(encoding="utf-8", errors="replace")
+    rewritten = _rewrite_loopback_text(original, context)
+    if rewritten != original:
+        path.write_text(rewritten, encoding="utf-8")
+
+
+def _normalize_jsonl_artifact(path: Path, context: dict[str, str] | None, *, redact_headers: bool = False) -> None:
+    if context is None or not path.exists():
+        return
+
+    original = path.read_text(encoding="utf-8", errors="replace")
+    trailing_newline = original.endswith("\n")
+    rewritten_lines: list[str] = []
+    changed = False
+
+    for line in original.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            rewritten_lines.append(line)
+            continue
+        try:
+            payload = json.loads(stripped)
+        except json.JSONDecodeError:
+            rewritten_line = _rewrite_loopback_text(line, context)
+        else:
+            rewritten_payload = _rewrite_artifact_value(payload, context, redact_headers=redact_headers)
+            rewritten_line = json.dumps(rewritten_payload, separators=(",", ":"))
+        if rewritten_line != line:
+            changed = True
+        rewritten_lines.append(rewritten_line)
+
+    if changed:
+        rewritten = "\n".join(rewritten_lines)
+        if trailing_newline:
+            rewritten += "\n"
+        path.write_text(rewritten, encoding="utf-8")
+
+
+def _normalize_cases_db(path: Path, context: dict[str, str] | None) -> None:
+    if context is None or not path.exists():
+        return
+    try:
+        with sqlite3.connect(path, timeout=1.0) as connection:
+            connection.execute("PRAGMA busy_timeout = 1000")
+            column_rows = connection.execute("PRAGMA table_info(cases)").fetchall()
+            column_names = {str(row[1]) for row in column_rows}
+            if "id" not in column_names or "url" not in column_names:
+                return
+            rows = connection.execute("SELECT id, url FROM cases").fetchall()
+            changed = False
+            for row_id, raw_url in rows:
+                url = str(raw_url or "")
+                rewritten = _rewrite_loopback_text(url, context)
+                if rewritten == url:
+                    continue
+                connection.execute("UPDATE cases SET url = ? WHERE id = ?", (rewritten, row_id))
+                changed = True
+            if changed:
+                connection.commit()
+    except sqlite3.Error:
+        return
+
+
 def normalize_active_scope(run: Run) -> None:
     engagement_dir = _active_engagement_dir(run)
     if engagement_dir is None:
         return
-    _normalize_scope_file(engagement_dir / "scope.json")
+
+    context = _loopback_display_context(run)
+    _normalize_scope_file(engagement_dir / "scope.json", run=run)
+    if context is None:
+        return
+
+    _normalize_text_artifact(engagement_dir / "findings.md", context)
+    _normalize_text_artifact(engagement_dir / "report.md", context)
+    _normalize_jsonl_artifact(engagement_dir / "surfaces.jsonl", context)
+    _normalize_jsonl_artifact(engagement_dir / "scans" / "katana_output.jsonl", context, redact_headers=True)
+    _normalize_cases_db(engagement_dir / "cases.db", context)
 
 
 def _write_run_terminal_reason(run: Run, *, reason_code: str, reason_text: str) -> None:
