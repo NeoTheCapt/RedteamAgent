@@ -212,13 +212,13 @@ surface. The user can configure auth later at any time with `/auth`.
 Start the pipeline regardless of auth choice (skip or configured):
 
 1. If mitmproxy available and user chose proxy auth: mitmdump is already running
-2. Start Katana crawler through the single supported wrapper path:
-   `./scripts/katana_ingest.sh "$DIR" > "$DIR/scans/katana_ingest.log" 2>&1 < /dev/null &`
-   If you need the background PID, capture it on the NEXT line only:
-   `katana_ingest_pid=$!`
-   `printf '%s\n' "$katana_ingest_pid" > "$DIR/pids/katana_ingest.pid"`
-   Never combine the background launch and PID-file write in one chained command. On bash/zsh that can redirect into the wrong path.
-   Never launch `katana` directly from bash. Only `./scripts/katana_ingest.sh` or `start_katana` may start crawling.
+2. Start Katana crawler through the single supported background helper path:
+   `./scripts/start_katana_ingest_background.sh "$DIR"`
+   That helper launches `./scripts/katana_ingest.sh`, writes `$DIR/pids/katana_ingest.pid`, and prints the spawned PID.
+   Never inline the background launch + PID-file redirect yourself. Do not write one-liners like:
+   `DIR="..." && ./scripts/katana_ingest.sh "$DIR" ... & katana_ingest_pid=$!; printf ... > "$DIR/pids/katana_ingest.pid"`
+   because bash/zsh can evaluate the redirect with an empty `$DIR` and write into `/pids/...`.
+   Never launch `katana` directly from bash. Only `./scripts/start_katana_ingest_background.sh`, `./scripts/katana_ingest.sh`, or `start_katana` may start crawling.
    (Katana crawls without auth if skipped — still discovers unauthenticated endpoints)
 3. ALL subsequent phases (Recon → Collect → Consume & Test → Exploit → Report) proceed normally
 
@@ -272,12 +272,10 @@ After approval:
    without real parameters belong in `Surface Candidates`, not `cases.db`.
 2. Start Katana container + ingest pipeline:
    ```bash
-   ./scripts/katana_ingest.sh "$DIR" > "$DIR/scans/katana_ingest.log" 2>&1 < /dev/null &
-   katana_ingest_pid=$!
-   printf '%s\n' "$katana_ingest_pid" > "$DIR/pids/katana_ingest.pid"
+   katana_ingest_pid=$(./scripts/start_katana_ingest_background.sh "$DIR")
    echo "[katana] Crawler + ingest running in background (pid $katana_ingest_pid)"
    ```
-   Keep the PID capture on separate lines after the background launch. Do not chain it into the same command with `&&`, `;`, or another redirect.
+   Do not recreate the background launch + PID-file write inline. Use the helper exactly as shown.
 3. Show queue stats: `./scripts/dispatcher.sh "$DIR/cases.db" stats`
 
 ### Phase 3: CONSUME & TEST (main testing loop)
