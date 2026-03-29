@@ -3,7 +3,9 @@
 katana_emit_out_of_scope_regexes() {
     cat <<'EOF'
 https?://[^?#]*(?:%5[cC]|\\|%22|"|%27|'|\{\{|\}\}|%7[bB]%7[bB]|%7[dD]%7[dD]|%2[aA]|\*)
-https?://[^/]+/(?:assets|cdn/assets|cdnpre/assets|cdn/i18n)/(?:[^?#]*/)?(?:images?|img|icons?|fonts?|i18n)(?:/|$)
+https?://[^?#]+/(?:assets|cdn/assets|cdnpre/assets|cdn/i18n)/(?:[^?#]*/)?(?:images?|img|icons?|fonts?|i18n)(?:/[^?#]*)?(?:$|[?#])
+https?://[^?#]+/(?:assets|cdn/assets|cdnpre/assets)/(?:[^?#]*/)?(?:scripts/lib|[bB]un)(?:/[^?#]*)?(?:$|[?#])
+https?://[^?#]+/(?:[^?#]*/)?(?:build/routes|node_modules)(?:/[^?#]*)?(?:$|[?#])
 https?://[^?#]+\.(?:png|jpe?g|gif|webp|bmp|ico|svg|avif|mp3|mp4|wav|ogg|pdf|zip|gz|woff2?|ttf|eot|wasm(?:\.br|\.gz)?)(?:$|[?#])
 EOF
 }
