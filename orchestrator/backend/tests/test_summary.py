@@ -1323,3 +1323,142 @@ def test_run_summary_backfills_surface_candidates_from_process_log_without_dupli
     surfaces_rows = [json.loads(line) for line in (active_dir / "surfaces.jsonl").read_text(encoding="utf-8").splitlines() if line.strip()]
     assert len(surfaces_rows) == 2
     assert {row["surface_type"] for row in surfaces_rows} == {"account_recovery", "workflow_token"}
+
+
+def test_run_summary_backfill_normalizes_loopback_surface_candidates_without_duplicate_growth():
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "http://127.0.0.1:8000")
+    active_dir = setup_active_engagement(run)
+
+    (active_dir / "scope.json").write_text(
+        json.dumps(
+            {
+                "target": "http://host.docker.internal:8000",
+                "hostname": "host.docker.internal",
+                "port": 8000,
+                "scope": ["host.docker.internal", "*.host.docker.internal"],
+                "status": "in_progress",
+                "current_phase": "recon",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (active_dir / "surfaces.jsonl").write_text("", encoding="utf-8")
+
+    process_log = Path(run["engagement_root"], "runtime", "process.log")
+    process_log.parent.mkdir(parents=True, exist_ok=True)
+    process_log.write_text(
+        json.dumps(
+            {
+                "type": "tool_use",
+                "part": {
+                    "state": {
+                        "output": (
+                            "[source-analyzer] #### Surface Candidates\n"
+                            "[source-analyzer] {\"surface_type\":\"auth_entry\",\"target\":\"GET http://host.docker.internal:8000/#/login\",\"source\":\"source-analyzer\",\"rationale\":\"login route discovered from SPA bundle\",\"evidence_ref\":\"main.js\",\"status\":\"discovered\"}\n"
+                            "\n"
+                            "[source-analyzer] #### Findings\n"
+                        )
+                    }
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    for _ in range(3):
+        response = client.get(
+            f"/projects/{project['id']}/runs/{run['id']}/summary",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert response.status_code == 200
+
+    payload = response.json()
+    assert payload["coverage"]["total_surfaces"] == 1
+    assert any(item["type"] == "auth_entry" and item["count"] == 1 for item in payload["coverage"]["surface_types"])
+
+    surfaces_rows = [json.loads(line) for line in (active_dir / "surfaces.jsonl").read_text(encoding="utf-8").splitlines() if line.strip()]
+    assert len(surfaces_rows) == 1
+    assert surfaces_rows[0]["target"] == "GET http://127.0.0.1:8000/#/login"
+    assert "host.docker.internal" not in (active_dir / "surfaces.jsonl").read_text(encoding="utf-8")
+
+
+def test_run_summary_backfill_skips_placeholder_surface_candidates():
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "https://target.example")
+    active_dir = setup_active_engagement(run)
+
+    (active_dir / "scope.json").write_text(
+        json.dumps(
+            {
+                "target": "https://target.example",
+                "hostname": "target.example",
+                "port": 443,
+                "scope": ["target.example", "*.target.example"],
+                "status": "in_progress",
+                "current_phase": "recon",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (active_dir / "surfaces.jsonl").write_text("", encoding="utf-8")
+
+    process_log = Path(run["engagement_root"], "runtime", "process.log")
+    process_log.parent.mkdir(parents=True, exist_ok=True)
+    process_log.write_text(
+        json.dumps(
+            {
+                "type": "tool_use",
+                "part": {
+                    "state": {
+                        "output": (
+                            "[source-analyzer] #### Surface Candidates\n"
+                            "[source-analyzer] {\"surface_type\":\"workflow_token\",\"target\":\"GET /rest/continue-code/apply/<code>\",\"source\":\"source-analyzer\",\"rationale\":\"templated continue-code route\",\"evidence_ref\":\"main.js\",\"status\":\"discovered\"}\n"
+                            "[source-analyzer] {\"surface_type\":\"account_recovery\",\"target\":\"GET /rest/user/security-question?email=<email>\",\"source\":\"source-analyzer\",\"rationale\":\"templated account recovery route\",\"evidence_ref\":\"main.js\",\"status\":\"discovered\"}\n"
+                            "[source-analyzer] {\"surface_type\":\"auth_entry\",\"target\":\"GET /login\",\"source\":\"source-analyzer\",\"rationale\":\"concrete login route\",\"evidence_ref\":\"main.js\",\"status\":\"discovered\"}\n"
+                            "\n"
+                            "[source-analyzer] #### Findings\n"
+                        )
+                    }
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    response = client.get(
+        f"/projects/{project['id']}/runs/{run['id']}/summary",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["coverage"]["total_surfaces"] == 1
+    assert payload["coverage"]["surface_types"] == [
+        {
+            "type": "auth_entry",
+            "total": None,
+            "done": None,
+            "pending": None,
+            "processing": None,
+            "error": None,
+            "count": 1,
+        }
+    ]
+
+    surfaces_rows = [json.loads(line) for line in (active_dir / "surfaces.jsonl").read_text(encoding="utf-8").splitlines() if line.strip()]
+    assert surfaces_rows == [
+        {
+            "surface_type": "auth_entry",
+            "target": "GET /login",
+            "source": "source-analyzer",
+            "rationale": "concrete login route",
+            "evidence_ref": "main.js",
+            "status": "discovered",
+        }
+    ]
