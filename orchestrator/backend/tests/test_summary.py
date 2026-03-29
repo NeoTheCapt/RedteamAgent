@@ -1113,3 +1113,109 @@ def test_observed_paths_prefers_populated_cases_db_when_workspace_db_is_empty():
     assert payload[0]["url"] == "http://127.0.0.1:8000/rest/user/login"
     assert payload[0]["status"] == "processing"
     assert any(item["url"] == "http://127.0.0.1:8000/robots.txt" for item in payload)
+
+
+
+def test_run_summary_normalizes_loopback_runtime_artifacts_and_redacts_katana_headers():
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "http://127.0.0.1:8000")
+    active_dir = setup_active_engagement(run)
+
+    (active_dir / "scope.json").write_text(
+        json.dumps(
+            {
+                "target": "http://host.docker.internal:8000",
+                "hostname": "host.docker.internal",
+                "port": 8000,
+                "scope": ["host.docker.internal", "*.host.docker.internal"],
+                "status": "in_progress",
+                "current_phase": "consume_test",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (active_dir / "findings.md").write_text(
+        "# Penetration Test Report: http://host.docker.internal:8000\n\n**Target**: http://host.docker.internal:8000\n",
+        encoding="utf-8",
+    )
+    (active_dir / "report.md").write_text(
+        "# Penetration Test Report: http://host.docker.internal:8000\n",
+        encoding="utf-8",
+    )
+    (active_dir / "surfaces.jsonl").write_text(
+        '{"surface_type":"dynamic_render","target":"GET http://host.docker.internal:8000/rest/admin","source":"source-analyzer","rationale":"local runtime alias leaked"}\n',
+        encoding="utf-8",
+    )
+    scans_dir = active_dir / "scans"
+    scans_dir.mkdir(parents=True, exist_ok=True)
+    (scans_dir / "katana_output.jsonl").write_text(
+        json.dumps(
+            {
+                "request": {"method": "GET", "endpoint": "http://host.docker.internal:8000/"},
+                "response": {
+                    "headers": {"Content-Type": "text/html"},
+                    "xhr_requests": [
+                        {
+                            "method": "GET",
+                            "endpoint": "http://host.docker.internal:8000/rest/admin/application-version",
+                            "headers": {
+                                "Authorization": "Bearer secret-jwt",
+                                "Cookie": "sid=secret-cookie",
+                                "Accept": "application/json",
+                            },
+                        }
+                    ],
+                },
+            },
+            separators=(",", ":"),
+        ),
+        encoding="utf-8",
+    )
+
+    with sqlite3.connect(active_dir / "cases.db") as connection:
+        connection.execute(
+            "CREATE TABLE cases (id INTEGER PRIMARY KEY AUTOINCREMENT, method TEXT, url TEXT, type TEXT NOT NULL, status TEXT NOT NULL, assigned_agent TEXT, source TEXT)"
+        )
+        connection.execute(
+            "INSERT INTO cases (method, url, type, status, assigned_agent, source) VALUES (?, ?, ?, ?, ?, ?)",
+            ("GET", "http://host.docker.internal:8000/rest/admin", "api", "processing", "vulnerability-analyst", "katana"),
+        )
+        connection.commit()
+
+    summary_response = client.get(
+        f"/projects/{project['id']}/runs/{run['id']}/summary",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert summary_response.status_code == 200
+    summary_payload = summary_response.json()
+    assert summary_payload["target"]["target"] == "http://127.0.0.1:8000"
+    assert summary_payload["target"]["hostname"] == "127.0.0.1"
+    assert summary_payload["target"]["scope_entries"] == ["127.0.0.1", "*.127.0.0.1"]
+
+    observed_response = client.get(
+        f"/projects/{project['id']}/runs/{run['id']}/observed-paths",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert observed_response.status_code == 200
+    observed_payload = observed_response.json()
+    assert observed_payload[0]["url"] == "http://127.0.0.1:8000/rest/admin"
+
+    normalized_scope = json.loads((active_dir / "scope.json").read_text(encoding="utf-8"))
+    assert normalized_scope["target"] == "http://127.0.0.1:8000"
+    assert normalized_scope["hostname"] == "127.0.0.1"
+    assert normalized_scope["scope"] == ["127.0.0.1", "*.127.0.0.1"]
+
+    findings_text = (active_dir / "findings.md").read_text(encoding="utf-8")
+    report_text = (active_dir / "report.md").read_text(encoding="utf-8")
+    surfaces_text = (active_dir / "surfaces.jsonl").read_text(encoding="utf-8")
+    katana_text = (scans_dir / "katana_output.jsonl").read_text(encoding="utf-8")
+
+    assert "host.docker.internal" not in findings_text
+    assert "host.docker.internal" not in report_text
+    assert "host.docker.internal" not in surfaces_text
+    assert "host.docker.internal" not in katana_text
+    assert "secret-jwt" not in katana_text
+    assert "secret-cookie" not in katana_text
+    assert '<redacted>' in katana_text
