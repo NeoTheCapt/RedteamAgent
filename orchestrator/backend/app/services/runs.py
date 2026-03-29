@@ -14,6 +14,8 @@ from ..models.project import Project
 from ..models.run import Run
 from ..models.user import User
 from .launcher import (
+    _active_engagement_dir,
+    _last_logged_stop_metadata,
     _write_run_terminal_reason,
     engagement_completion_state,
     locate_runtime_pid,
@@ -274,11 +276,18 @@ def _reconcile_run_status(run: Run) -> Run:
         return run
 
     if run.status == "running":
+        engagement_dir = _active_engagement_dir(run)
+        logged_reason_code = ""
+        logged_reason_text = ""
+        if engagement_dir is not None:
+            logged_reason_code, logged_reason_text = _last_logged_stop_metadata(engagement_dir / "log.md")
+
         failed = db.update_run_status(run.id, "failed")
         _write_run_terminal_reason(
             failed,
-            reason_code="runtime_disappeared",
-            reason_text="Runtime supervisor disappeared before the engagement reached a terminal state.",
+            reason_code=logged_reason_code or "runtime_disappeared",
+            reason_text=logged_reason_text
+            or "Runtime supervisor disappeared before the engagement reached a terminal state.",
         )
         stop_run_runtime(failed)
         return failed
