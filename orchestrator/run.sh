@@ -69,6 +69,12 @@ done
 
 mkdir -p "$RUN_DIR"
 
+CURRENT_NOFILE="$(ulimit -n 2>/dev/null || printf '0')"
+DESIRED_NOFILE="${ORCH_NOFILE_LIMIT:-4096}"
+if [[ "$CURRENT_NOFILE" =~ ^[0-9]+$ ]] && [[ "$DESIRED_NOFILE" =~ ^[0-9]+$ ]] && (( CURRENT_NOFILE < DESIRED_NOFILE )); then
+  ulimit -n "$DESIRED_NOFILE" 2>/dev/null || true
+fi
+
 if [[ ! -d "$BACKEND_VENV" ]]; then
   python3 -m venv "$BACKEND_VENV"
 fi
