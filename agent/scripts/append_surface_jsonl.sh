@@ -178,6 +178,9 @@ if (( invalid_lines > 0 )); then
     echo "WARN: skipped $invalid_lines invalid surface JSONL line(s)" >&2
 fi
 
-if (( imported_lines == 0 && invalid_lines > 0 )); then
-    exit 1
-fi
+# Surface candidates are advisory metadata, not queue-critical state.
+# If an agent returns only unresolved placeholder targets, warn but do not
+# abort the parent operator step — otherwise cases can be left stuck in
+# `processing` even though the actionable findings/case outcomes were valid.
+# Callers that need stricter validation should pre-validate their JSONL.
+true
