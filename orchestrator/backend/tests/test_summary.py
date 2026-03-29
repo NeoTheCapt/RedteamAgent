@@ -697,6 +697,76 @@ def test_run_summary_event_creation_updates_run_metadata_timestamp():
     assert after != before
 
 
+def test_run_summary_projects_current_state_into_run_metadata():
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "https://target.example")
+    active_dir = setup_active_engagement(run)
+    (active_dir / "scope.json").write_text(
+        json.dumps({"hostname": "target.example", "status": "in_progress", "current_phase": "recon"}),
+        encoding="utf-8",
+    )
+
+    client.post(
+        f"/projects/{project['id']}/runs/{run['id']}/events",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "event_type": "task.started",
+            "phase": "recon",
+            "task_name": "recon-specialist",
+            "agent_name": "recon-specialist",
+            "summary": "Recon start",
+        },
+    )
+
+    response = client.get(
+        f"/projects/{project['id']}/runs/{run['id']}/summary",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+
+    run_metadata = json.loads((Path(run["engagement_root"]) / "run.json").read_text(encoding="utf-8"))
+    assert run_metadata["current_action"] == payload["current"]
+    assert run_metadata["phase_waterfall"] == payload["phases"]
+    assert run_metadata["agents"] == payload["agents"]
+    assert run_metadata["current_action"]["summary"] == "Recon start"
+
+
+def test_run_summary_handles_runtime_lookup_unavailable_without_failing(monkeypatch):
+    from app import db as app_db
+    from app.db import database_path
+    from app.services.launcher import RUNTIME_PID_LOOKUP_UNAVAILABLE
+
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "https://target.example")
+    active_dir = setup_active_engagement(run)
+    (active_dir / "scope.json").write_text(
+        json.dumps({"hostname": "target.example", "status": "in_progress", "current_phase": "collect"}),
+        encoding="utf-8",
+    )
+    app_db.update_run_status(run["id"], "running")
+
+    with sqlite3.connect(database_path()) as connection:
+        connection.execute(
+            "UPDATE runs SET updated_at = '2026-03-25 00:00:00' WHERE id = ?",
+            (run["id"],),
+        )
+        connection.commit()
+
+    monkeypatch.setattr("app.services.runs.locate_runtime_pid", lambda _run: RUNTIME_PID_LOOKUP_UNAVAILABLE)
+
+    response = client.get(
+        f"/projects/{project['id']}/runs/{run['id']}/summary",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    assert response.json()["overview"]["current_phase"] == "collect"
+
+
 def test_run_summary_prefers_terminal_run_status_over_in_progress_scope():
     client = TestClient(app)
     token = register_and_login(client, "alice")

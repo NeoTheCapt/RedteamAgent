@@ -207,6 +207,39 @@ def test_list_runs_keeps_recent_running_process_during_startup_grace_window(monk
     assert runs_response.json()[0]["status"] == "running"
 
 
+def test_list_runs_preserves_running_status_when_runtime_lookup_is_unavailable(monkeypatch):
+    from app.services.launcher import RUNTIME_PID_LOOKUP_UNAVAILABLE
+
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+
+    create_run = client.post(
+        f"/projects/{project['id']}/runs",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"target": "https://example.com"},
+    )
+    assert create_run.status_code == 201
+    run = create_run.json()
+    db.update_run_status(run["id"], "running")
+
+    with sqlite3.connect(database_path()) as connection:
+        connection.execute(
+            "UPDATE runs SET updated_at = '2026-03-25 00:00:00' WHERE id = ?",
+            (run["id"],),
+        )
+        connection.commit()
+
+    monkeypatch.setattr("app.services.runs.locate_runtime_pid", lambda _run: RUNTIME_PID_LOOKUP_UNAVAILABLE)
+
+    runs_response = client.get(
+        f"/projects/{project['id']}/runs",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert runs_response.status_code == 200
+    assert runs_response.json()[0]["status"] == "running"
+
+
 def test_list_runs_marks_stalled_running_process_as_failed(monkeypatch):
     client = TestClient(app)
     token = register_and_login(client, "alice")

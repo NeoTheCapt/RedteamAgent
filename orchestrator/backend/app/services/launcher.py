@@ -52,6 +52,11 @@ def runtime_container_name(run: Run) -> str:
     return f"redteam-orch-run-{run.id:04d}"
 
 
+RUNTIME_PID_CONTAINER = -1
+RUNTIME_PID_LOOKUP_UNAVAILABLE = -2
+_CONTAINER_STATUS_LOOKUP_UNAVAILABLE = "__lookup_unavailable__"
+
+
 _LOOPBACK_RUNTIME_HOSTS = {"127.0.0.1", "localhost", "0.0.0.0", "::1"}
 _RUNTIME_HOST_GATEWAY_ALIAS = "host.docker.internal"
 
@@ -625,24 +630,30 @@ def _container_name_from_metadata(run: Run) -> str | None:
 
 
 def _container_running(container_name: str) -> bool:
-    result = subprocess.run(
-        ["docker", "inspect", "-f", "{{.State.Running}}", container_name],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-        text=True,
-        check=False,
-    )
+    try:
+        result = subprocess.run(
+            ["docker", "inspect", "-f", "{{.State.Running}}", container_name],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return False
     return result.returncode == 0 and result.stdout.strip() == "true"
 
 
 def _container_status(container_name: str) -> str | None:
-    result = subprocess.run(
-        ["docker", "inspect", "-f", "{{.State.Status}}", container_name],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-        text=True,
-        check=False,
-    )
+    try:
+        result = subprocess.run(
+            ["docker", "inspect", "-f", "{{.State.Status}}", container_name],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return _CONTAINER_STATUS_LOOKUP_UNAVAILABLE
     if result.returncode != 0:
         return None
     status = result.stdout.strip()
@@ -650,13 +661,16 @@ def _container_status(container_name: str) -> str | None:
 
 
 def _container_exit_code(container_name: str) -> int | None:
-    result = subprocess.run(
-        ["docker", "inspect", "-f", "{{.State.ExitCode}}", container_name],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-        text=True,
-        check=False,
-    )
+    try:
+        result = subprocess.run(
+            ["docker", "inspect", "-f", "{{.State.ExitCode}}", container_name],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return None
     if result.returncode != 0:
         return None
     try:
@@ -689,23 +703,25 @@ def locate_runtime_pid(run: Run) -> int | None:
         container_name = _container_name_from_metadata(run)
     if container_name:
         status = _container_status(container_name)
+        if status == _CONTAINER_STATUS_LOOKUP_UNAVAILABLE:
+            return RUNTIME_PID_LOOKUP_UNAVAILABLE
         if status in {"running", "restarting"}:
-            return -1
+            return RUNTIME_PID_CONTAINER
         if status == "created":
             try:
                 launcher_pid = int(payload.get("launcher_pid"))
             except (ValueError, TypeError):
                 launcher_pid = None
             if launcher_pid == os.getpid():
-                return -1
+                return RUNTIME_PID_CONTAINER
             return None
         if status is not None:
             return None
 
     try:
         output = subprocess.check_output(["ps", "eww", "-axo", "pid=,command="], text=True)
-    except subprocess.SubprocessError:
-        return None
+    except (subprocess.SubprocessError, OSError):
+        return RUNTIME_PID_LOOKUP_UNAVAILABLE
 
     needle = f"ORCHESTRATOR_RUN_ID={run.id}"
     for line in output.splitlines():
@@ -736,7 +752,7 @@ def stop_run_runtime(run: Run) -> None:
         )
 
     pid = locate_runtime_pid(run)
-    if pid is not None:
+    if isinstance(pid, int) and pid > 0:
         try:
             os.kill(pid, signal.SIGTERM)
         except ProcessLookupError:
