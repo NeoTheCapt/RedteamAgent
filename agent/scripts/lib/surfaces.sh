@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=/dev/null
+source "$SCRIPT_DIR/placeholders.sh"
+
 surface_file_path() {
     local eng_dir="${1:?engagement dir required}"
     printf '%s\n' "$eng_dir/surfaces.jsonl"
@@ -31,6 +35,14 @@ surface_validate_status() {
     esac
 }
 
+surface_validate_target() {
+    local target="${1:?target required}"
+    if contains_surface_placeholder "$target"; then
+        echo "invalid surface target placeholder: $target" >&2
+        return 1
+    fi
+}
+
 ensure_surface_file() {
     local eng_dir="${1:?engagement dir required}"
     local surface_file
@@ -51,6 +63,7 @@ upsert_surface_record() {
 
     surface_validate_type "$surface_type"
     surface_validate_status "$status"
+    surface_validate_target "$target"
     ensure_surface_file "$eng_dir"
     surface_file="$(surface_file_path "$eng_dir")"
     tmp_file="$(mktemp "${TMPDIR:-/tmp}/surfaces-jsonl.XXXXXX")"

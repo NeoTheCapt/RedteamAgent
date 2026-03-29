@@ -4,6 +4,8 @@ set -euo pipefail
 ENG_DIR="${1:?usage: append_surface_jsonl.sh <engagement_dir>}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=/dev/null
+source "$SCRIPT_DIR/lib/placeholders.sh"
 APPEND_SURFACE="$SCRIPT_DIR/append_surface.sh"
 
 if [[ ! -x "$APPEND_SURFACE" ]]; then
@@ -149,6 +151,12 @@ while IFS= read -r line; do
 
     if [[ -z "$normalized_type" || -z "$target" || -z "$source_name" || -z "$rationale" ]]; then
         echo "WARN: skipping invalid surface JSONL line" >&2
+        invalid_lines=$((invalid_lines + 1))
+        continue
+    fi
+
+    if contains_surface_placeholder "$target"; then
+        echo "WARN: skipping unresolved placeholder surface target: $target" >&2
         invalid_lines=$((invalid_lines + 1))
         continue
     fi
