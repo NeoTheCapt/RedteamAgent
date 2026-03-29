@@ -142,6 +142,25 @@ def _copy_sqlite_snapshot(path: Path, snapshot_dir: Path) -> Path:
     return snapshot_path
 
 
+def _read_sqlite_snapshot(path: Path, reader, default):
+    try:
+        with tempfile.TemporaryDirectory(prefix="run-summary-sqlite-") as temp_dir:
+            snapshot_path = _copy_sqlite_snapshot(path, Path(temp_dir))
+            with _connect_sqlite_readonly(snapshot_path) as connection:
+                return reader(connection)
+    except (OSError, sqlite3.Error):
+        return default
+
+
+def _should_retry_empty_sqlite_read(path: Path) -> bool:
+    try:
+        if any(Path(f"{path}{suffix}").exists() for suffix in ("-wal", "-shm")):
+            return True
+        return path.stat().st_size >= 16384
+    except OSError:
+        return False
+
+
 def _read_sqlite_with_fallback(path: Path, reader, default):
     if not path.exists():
         return default
@@ -168,13 +187,7 @@ def _read_sqlite_with_fallback(path: Path, reader, default):
 
         time.sleep(0.1)
 
-    try:
-        with tempfile.TemporaryDirectory(prefix="run-summary-sqlite-") as temp_dir:
-            snapshot_path = _copy_sqlite_snapshot(path, Path(temp_dir))
-            with _connect_sqlite_readonly(snapshot_path) as connection:
-                return reader(connection)
-    except (OSError, sqlite3.Error):
-        return default
+    return _read_sqlite_snapshot(path, reader, default)
 
 
 def _count_cases_for_db(path: Path) -> int:
@@ -293,6 +306,11 @@ def _load_cases_metrics(path: Path) -> dict:
         return metrics
 
     rows, processing_rows = payload
+    if not rows and _should_retry_empty_sqlite_read(path):
+        snapshot_payload = _read_sqlite_snapshot(path, _reader, None)
+        if snapshot_payload is not None:
+            rows, processing_rows = snapshot_payload
+
     type_rows: dict[str, Counter] = defaultdict(Counter)
     for case_type, status_name, count in rows:
         type_rows[case_type][status_name] += count
@@ -354,6 +372,11 @@ def _load_observed_paths(path: Path) -> list[ObservedPathRecord]:
         return []
 
     selected, rows = payload
+    if not rows and _should_retry_empty_sqlite_read(path):
+        snapshot_payload = _read_sqlite_snapshot(path, _reader, None)
+        if snapshot_payload is not None:
+            selected, rows = snapshot_payload
+
     records: list[ObservedPathRecord] = []
     for row in rows:
         payload = dict(zip(selected, row, strict=False))

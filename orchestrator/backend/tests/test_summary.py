@@ -221,6 +221,70 @@ def test_run_summary_uses_readonly_cases_fallback_when_live_sqlite_is_locked(mon
     assert payload["overview"]["current_phase"] == "consume-test"
 
 
+def test_run_summary_retries_suspiciously_empty_live_reads_with_snapshot(monkeypatch):
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "https://target.example")
+    active_dir = setup_active_engagement(run)
+
+    (active_dir / "scope.json").write_text(
+        json.dumps(
+            {
+                "target": "https://target.example",
+                "hostname": "target.example",
+                "status": "in_progress",
+                "phases_completed": ["recon"],
+                "current_phase": "consume_test",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    cases_db = active_dir / "cases.db"
+    with sqlite3.connect(cases_db) as connection:
+        connection.execute(
+            "CREATE TABLE cases (type TEXT NOT NULL, status TEXT NOT NULL, assigned_agent TEXT, method TEXT, url TEXT, source TEXT)"
+        )
+        connection.executemany(
+            "INSERT INTO cases (type, status, assigned_agent, method, url, source) VALUES (?, ?, ?, ?, ?, ?)",
+            [
+                ("api", "pending", None, "GET", f"https://target.example/api/{index}", "katana")
+                for index in range(240)
+            ],
+        )
+        connection.commit()
+
+    assert cases_db.stat().st_size >= 16384
+
+    empty_db = active_dir / "empty-live-view.db"
+    with sqlite3.connect(empty_db) as connection:
+        connection.execute(
+            "CREATE TABLE cases (type TEXT NOT NULL, status TEXT NOT NULL, assigned_agent TEXT, method TEXT, url TEXT, source TEXT)"
+        )
+        connection.commit()
+
+    real_connect = sqlite3.connect
+
+    def empty_live_connect(database, *args, **kwargs):
+        if str(database) == str(cases_db) and not kwargs.get("uri", False):
+            return real_connect(empty_db, *args, **kwargs)
+        return real_connect(database, *args, **kwargs)
+
+    monkeypatch.setattr(run_summary.sqlite3, "connect", empty_live_connect)
+
+    response = client.get(
+        f"/projects/{project['id']}/runs/{run['id']}/summary",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+
+    assert payload["coverage"]["total_cases"] == 240
+    assert payload["coverage"]["pending_cases"] == 240
+    assert any(item["type"] == "api" and item["total"] == 240 for item in payload["coverage"]["case_types"])
+
+
 def test_run_summary_falls_back_to_latest_engagement_without_active_file():
     client = TestClient(app)
     token = register_and_login(client, "alice")
@@ -1156,6 +1220,62 @@ def test_observed_paths_prefers_populated_cases_db_when_workspace_db_is_empty():
     assert payload[0]["status"] == "processing"
     assert any(item["url"] == "http://127.0.0.1:8000/robots.txt" for item in payload)
 
+
+
+def test_observed_paths_retries_suspiciously_empty_live_reads_with_snapshot(monkeypatch):
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "https://target.example")
+    active_dir = setup_active_engagement(run)
+
+    (active_dir / "scope.json").write_text(
+        json.dumps({"hostname": "target.example", "status": "in_progress", "current_phase": "consume_test"}),
+        encoding="utf-8",
+    )
+
+    cases_db = active_dir / "cases.db"
+    with sqlite3.connect(cases_db) as connection:
+        connection.execute(
+            "CREATE TABLE cases (method TEXT, url TEXT, type TEXT NOT NULL, status TEXT NOT NULL, assigned_agent TEXT, source TEXT)"
+        )
+        connection.executemany(
+            "INSERT INTO cases (method, url, type, status, assigned_agent, source) VALUES (?, ?, ?, ?, ?, ?)",
+            [
+                ("GET", f"https://target.example/api/{index}", "api", "pending", "", "katana")
+                for index in range(240)
+            ],
+        )
+        connection.commit()
+
+    assert cases_db.stat().st_size >= 16384
+
+    empty_db = active_dir / "empty-live-observed.db"
+    with sqlite3.connect(empty_db) as connection:
+        connection.execute(
+            "CREATE TABLE cases (method TEXT, url TEXT, type TEXT NOT NULL, status TEXT NOT NULL, assigned_agent TEXT, source TEXT)"
+        )
+        connection.commit()
+
+    real_connect = sqlite3.connect
+
+    def empty_live_connect(database, *args, **kwargs):
+        if str(database) == str(cases_db) and not kwargs.get("uri", False):
+            return real_connect(empty_db, *args, **kwargs)
+        return real_connect(database, *args, **kwargs)
+
+    monkeypatch.setattr(run_summary.sqlite3, "connect", empty_live_connect)
+
+    response = client.get(
+        f"/projects/{project['id']}/runs/{run['id']}/observed-paths",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+
+    assert len(payload) == 240
+    assert payload[0]["url"] == "https://target.example/api/0"
+    assert payload[0]["source"] == "katana"
 
 
 def test_run_summary_normalizes_loopback_runtime_artifacts_and_redacts_katana_headers():
