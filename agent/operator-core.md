@@ -113,9 +113,16 @@ jq '.phases_completed += ["<phase>"] | .current_phase = "<next>"' \
 
 When ANY agent discovers credentials:
 1. Write to auth.json immediately
-2. Try login, save token
-3. Trigger POST-AUTH RE-COLLECTION (restart Katana with auth)
-4. Dispatch exploit-developer to test authenticated access
+2. In the SAME turn, dispatch a bounded exploit-developer auth-validation task (do not stop after only logging `Credential validation dispatch`)
+3. Try login, save token
+4. Trigger POST-AUTH RE-COLLECTION (restart Katana with auth)
+5. Continue consume-test from the updated queue/auth state
+
+Auth-validation task requirements:
+- Use exploit-developer for the login/JWT acquisition attempt
+- Keep the task narrow: validate exactly the discovered credential(s), acquire session material if successful, and test one immediate authenticated foothold
+- If validation fails, log the failure and resume the queue instead of stalling
+- Any credential-validation status/log entry must be paired in the same turn with the actual exploit-developer dispatch or another advancing action
 
 ## Containerized Tool Execution
 
