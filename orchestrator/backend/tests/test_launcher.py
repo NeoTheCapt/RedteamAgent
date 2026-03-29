@@ -398,6 +398,123 @@ def test_auto_launch_auto_resumes_incomplete_exit(monkeypatch):
 
 
 
+def test_auto_launch_missing_container_auto_resumes_incomplete_runtime(monkeypatch):
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+
+    attempt = {"count": 0}
+    launched_commands: list[list[str]] = []
+
+    class ImmediateThread:
+        def __init__(self, *, target, args=(), daemon=None):
+            self._target = target
+            self._args = args
+
+        def start(self):
+            attempt["count"] += 1
+            run = self._args[0]
+            workspace = Path(run.engagement_root) / "workspace"
+            engagement_dir = workspace / "engagements" / "2026-03-29-000000-example-disappeared"
+            engagement_dir.mkdir(parents=True, exist_ok=True)
+            (workspace / "engagements" / ".active").write_text(
+                "engagements/2026-03-29-000000-example-disappeared\n",
+                encoding="utf-8",
+            )
+            process_log = Path(run.engagement_root) / "runtime" / "process.log"
+            process_log.write_text(
+                json.dumps({"type": "tool_use", "part": {"tool": "todowrite", "state": {"input": {}}}}) + "\n",
+                encoding="utf-8",
+            )
+            cases_db = engagement_dir / "cases.db"
+            if cases_db.exists():
+                cases_db.unlink()
+            with sqlite3.connect(cases_db) as connection:
+                connection.execute(
+                    "CREATE TABLE cases (id INTEGER PRIMARY KEY AUTOINCREMENT, status TEXT NOT NULL)"
+                )
+                if attempt["count"] == 1:
+                    (engagement_dir / "scope.json").write_text(
+                        json.dumps(
+                            {
+                                "status": "in_progress",
+                                "current_phase": "consume_test",
+                                "phases_completed": ["recon", "collect"],
+                            }
+                        )
+                        + "\n",
+                        encoding="utf-8",
+                    )
+                    connection.executemany(
+                        "INSERT INTO cases(status) VALUES (?)",
+                        [("pending",), ("done",)],
+                    )
+                else:
+                    (engagement_dir / "scope.json").write_text(
+                        json.dumps(
+                            {
+                                "status": "complete",
+                                "current_phase": "complete",
+                                "phases_completed": ["recon", "collect", "consume_test", "exploit", "report"],
+                            }
+                        )
+                        + "\n",
+                        encoding="utf-8",
+                    )
+                    (engagement_dir / "report.md").write_text("# report\n", encoding="utf-8")
+                    (engagement_dir / "surfaces.jsonl").write_text("", encoding="utf-8")
+                    connection.executemany(
+                        "INSERT INTO cases(status) VALUES (?)",
+                        [("done",), ("error",)],
+                    )
+                connection.commit()
+            self._target(*self._args)
+
+    class FakeLogFollower:
+        def poll(self):
+            return 0
+
+    statuses = iter(["running", None, "running", "exited"])
+    exit_codes = iter(["0"])
+
+    def fake_run(command, **kwargs):
+        if command[:3] == ["docker", "run", "-d"]:
+            launched_commands.append(command)
+            return subprocess.CompletedProcess(command, 0, stdout="container-123\n", stderr="")
+        if command[:4] == ["docker", "inspect", "-f", "{{.State.Status}}"]:
+            status = next(statuses)
+            if status is None:
+                return subprocess.CompletedProcess(command, 1, stdout="", stderr="Error: No such object\n")
+            return subprocess.CompletedProcess(command, 0, stdout=f"{status}\n", stderr="")
+        if command[:4] == ["docker", "inspect", "-f", "{{.State.ExitCode}}"]:
+            return subprocess.CompletedProcess(command, 0, stdout=f"{next(exit_codes)}\n", stderr="")
+        if command[:3] == ["docker", "rm", "-f"]:
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("app.services.launcher.subprocess.run", fake_run)
+    monkeypatch.setattr("app.services.launcher.subprocess.Popen", lambda *args, **kwargs: FakeLogFollower())
+    monkeypatch.setattr("app.services.launcher.Thread", ImmediateThread)
+    object.__setattr__(settings, "auto_launch_runs", True)
+
+    try:
+        run = create_run(client, token, project["id"], "https://launched.example")
+    finally:
+        object.__setattr__(settings, "auto_launch_runs", False)
+
+    latest = db.get_run_by_id(run["id"])
+    assert latest is not None
+    assert latest.status == "completed"
+    assert len(launched_commands) == 2
+    assert any("/resume" in " ".join(command) for command in launched_commands[1:])
+    metadata = json.loads((Path(run["engagement_root"]) / "run.json").read_text(encoding="utf-8"))
+    assert metadata["stop_reason_code"] == "completed"
+    assert metadata["auto_resume_count"] == 1
+    events = db.list_events_for_run(run["id"])
+    assert any(event.event_type == "run.resumed" for event in events)
+
+
+
 def test_auto_launch_missing_container_preserves_completed_artifacts(monkeypatch):
     client = TestClient(app)
     token = register_and_login(client, "alice")

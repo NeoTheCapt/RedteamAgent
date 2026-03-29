@@ -17,6 +17,7 @@ from .launcher import (
     RUNTIME_PID_LOOKUP_UNAVAILABLE,
     _active_engagement_dir,
     _last_logged_stop_metadata,
+    _maybe_auto_resume_run,
     _write_run_terminal_reason,
     engagement_completion_state,
     locate_runtime_pid,
@@ -177,7 +178,7 @@ def _load_queue_state(scope_path: Path | None) -> tuple[str, int, int, int]:
     return (current_phase, total_cases, pending_cases, processing_cases)
 
 
-def _reconcile_run_status(run: Run) -> Run:
+def _reconcile_run_status(run: Run, project: Project | None = None, user: User | None = None) -> Run:
     normalize_active_scope(run)
     pid = locate_runtime_pid(run)
     completion_ok, completion_reason = engagement_completion_state(run)
@@ -289,12 +290,28 @@ def _reconcile_run_status(run: Run) -> Run:
         if engagement_dir is not None:
             logged_reason_code, logged_reason_text = _last_logged_stop_metadata(engagement_dir / "log.md")
 
+        reason_code = logged_reason_code or "runtime_disappeared"
+        reason_text = logged_reason_text or "Runtime supervisor disappeared before the engagement reached a terminal state."
+        if project is not None and user is not None:
+            scope_path = _active_scope_path(run)
+            current_phase, _, _, _ = _load_queue_state(scope_path)
+            phase = current_phase.replace("_", "-") if current_phase else "unknown"
+            if _maybe_auto_resume_run(
+                project,
+                run,
+                user,
+                phase=phase,
+                reason_code=reason_code,
+                reason_text=reason_text,
+            ):
+                resumed = db.get_run_by_id(run.id)
+                return resumed if resumed is not None else run
+
         failed = db.update_run_status(run.id, "failed")
         _write_run_terminal_reason(
             failed,
-            reason_code=logged_reason_code or "runtime_disappeared",
-            reason_text=logged_reason_text
-            or "Runtime supervisor disappeared before the engagement reached a terminal state.",
+            reason_code=reason_code,
+            reason_text=reason_text,
         )
         stop_run_runtime(failed)
         return failed
@@ -303,7 +320,7 @@ def _reconcile_run_status(run: Run) -> Run:
 
 def list_runs_for_project(project_id: int, user: User) -> list[Run]:
     project = _project_or_404(project_id, user)
-    return [_reconcile_run_status(run) for run in db.list_runs_for_project(project.id)]
+    return [_reconcile_run_status(run, project=project, user=user) for run in db.list_runs_for_project(project.id)]
 
 
 def update_run_status(project_id: int, run_id: int, user: User, status_value: str) -> Run:

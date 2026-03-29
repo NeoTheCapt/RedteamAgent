@@ -64,6 +64,11 @@ _AUTO_RESUME_REASON_CODES = {
     "incomplete_stop",
     "queue_incomplete",
     "surface_coverage_incomplete",
+    # A missing supervisor/container can still leave a perfectly resumable
+    # in-progress engagement behind (for example after a backend restart or a
+    # detached launcher thread). Allow bounded /resume recovery for that case
+    # instead of hard-failing an otherwise healthy queue.
+    "runtime_disappeared",
 }
 _AUTO_RESUME_LIMIT = 2
 
