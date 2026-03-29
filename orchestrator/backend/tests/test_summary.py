@@ -1528,6 +1528,98 @@ def test_run_summary_normalizes_loopback_runtime_artifacts_and_redacts_katana_he
     assert '<redacted>' in katana_text
 
 
+def test_run_summary_normalizes_malformed_katana_jsonl_streams():
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "http://127.0.0.1:8000")
+    active_dir = setup_active_engagement(run)
+
+    (active_dir / "scope.json").write_text(
+        json.dumps(
+            {
+                "target": "http://host.docker.internal:8000",
+                "hostname": "host.docker.internal",
+                "port": 8000,
+                "scope": ["host.docker.internal", "*.host.docker.internal"],
+                "status": "in_progress",
+                "current_phase": "consume_test",
+            }
+        ),
+        encoding="utf-8",
+    )
+    scans_dir = active_dir / "scans"
+    scans_dir.mkdir(parents=True, exist_ok=True)
+
+    first = json.dumps(
+        {
+            "request": {"method": "GET", "endpoint": "http://host.docker.internal:8000/"},
+            "response": {
+                "headers": {"Content-Type": "text/html"},
+                "xhr_requests": [
+                    {
+                        "method": "GET",
+                        "endpoint": "http://host.docker.internal:8000/rest/admin/application-version",
+                        "headers": {
+                            "Authorization": "Bearer secret-jwt",
+                            "Cookie": "sid=secret-cookie",
+                        },
+                    }
+                ],
+            },
+        },
+        separators=(",", ":"),
+    )
+    second = json.dumps(
+        {
+            "request": {"method": "GET", "endpoint": "http://host.docker.internal:8000/main.js"},
+            "response": {
+                "headers": {
+                    "Feature-Policy": "payment 'self'",
+                    "Content-Type": "application/javascript; charset=UTF-8",
+                }
+            },
+        },
+        separators=(",", ":"),
+    )
+    third = json.dumps(
+        {
+            "request": {"method": "GET", "endpoint": "http://host.docker.internal:8000/rest/user/login"},
+            "response": {
+                "status_code": 200,
+                "headers": {"Content-Type": "application/json"},
+            },
+        },
+        separators=(",", ":"),
+    )
+    malformed_second = second.replace("Feature-Policy", f"Feature-Policy{chr(0)}").replace("payment 'self'", f"pa{chr(0)}yment 'self'")
+    (scans_dir / "katana_output.jsonl").write_text(first + third + "\n" + malformed_second + "\n", encoding="utf-8")
+
+    response = client.get(
+        f"/projects/{project['id']}/runs/{run['id']}/summary",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+
+    normalized = (scans_dir / "katana_output.jsonl").read_text(encoding="utf-8")
+    assert "\x00" not in normalized
+    assert "host.docker.internal" not in normalized
+    assert "secret-jwt" not in normalized
+    assert "secret-cookie" not in normalized
+    assert "<redacted>" in normalized
+
+    rows = [json.loads(line) for line in normalized.splitlines() if line.strip()]
+    assert len(rows) == 3
+    assert rows[0]["request"]["endpoint"] == "http://127.0.0.1:8000/"
+    assert rows[1]["request"]["endpoint"] == "http://127.0.0.1:8000/rest/user/login"
+    assert rows[2]["request"]["endpoint"] == "http://127.0.0.1:8000/main.js"
+    xhr_headers = rows[0]["response"]["xhr_requests"][0]["headers"]
+    assert xhr_headers["Authorization"] == "<redacted>"
+    assert xhr_headers["Cookie"] == "<redacted>"
+    assert rows[2]["response"]["headers"]["Feature-Policy"] == "payment 'self'"
+
+
+
 def test_run_summary_backfills_surface_candidates_from_process_log_without_duplicates():
     client = TestClient(app)
     token = register_and_login(client, "alice")
