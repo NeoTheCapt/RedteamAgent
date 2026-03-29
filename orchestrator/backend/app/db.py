@@ -481,11 +481,13 @@ def _write_run_metadata(run: Run) -> None:
         payload = json.loads(metadata_path.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
         payload = {}
+    payload["id"] = run.id
     payload["run_id"] = run.id
     payload["project_id"] = run.project_id
     payload["target"] = run.target
     payload["status"] = run.status
     payload["engagement_root"] = run.engagement_root
+    payload["created_at"] = run.created_at
     payload["updated_at"] = run.updated_at
     metadata_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 

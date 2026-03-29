@@ -598,12 +598,15 @@ def prepare_run_runtime(project: Project, run: Run) -> None:
         (seed_root_for(run) / "env.json").unlink()
 
     metadata = {
+        "id": run.id,
         "project_id": project.id,
         "project_slug": project.slug,
         "run_id": run.id,
         "target": run.target,
         "status": run.status,
         "engagement_root": run.engagement_root,
+        "created_at": run.created_at,
+        "updated_at": run.updated_at,
         "runtime_root": str(runtime_root_for(run)),
         "workspace_root": str(workspace_root_for(run)),
         "opencode_home_root": str(opencode_home_root_for(run)),
