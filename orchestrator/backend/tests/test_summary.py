@@ -1013,6 +1013,76 @@ def test_run_summary_keeps_case_types_during_transient_sqlite_lock():
     assert seen_non_empty
 
 
+def test_run_summary_keeps_case_counts_when_processing_agent_aggregation_is_malformed(monkeypatch):
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "https://target.example")
+    active_dir = setup_active_engagement(run)
+
+    (active_dir / "scope.json").write_text(
+        json.dumps({"hostname": "target.example", "status": "in_progress", "current_phase": "consume_test"}),
+        encoding="utf-8",
+    )
+
+    cases_db = active_dir / "cases.db"
+    with sqlite3.connect(cases_db) as connection:
+        connection.execute(
+            "CREATE TABLE cases (type TEXT NOT NULL, status TEXT NOT NULL, assigned_agent TEXT, method TEXT, url TEXT, source TEXT)"
+        )
+        connection.executemany(
+            "INSERT INTO cases (type, status, assigned_agent, method, url, source) VALUES (?, ?, ?, ?, ?, ?)",
+            [
+                ("api", "done", None, "GET", "https://target.example/api/version", "katana"),
+                ("api", "pending", None, "GET", "https://target.example/api/users", "katana-xhr"),
+                ("javascript", "processing", "source-analyzer", "GET", "https://target.example/main.js", "katana"),
+            ],
+        )
+        connection.commit()
+
+    real_connect = sqlite3.connect
+
+    class FaultyProcessingConnection:
+        def __init__(self, connection):
+            self._connection = connection
+
+        def execute(self, sql, *args, **kwargs):
+            if "SELECT assigned_agent, COUNT(*) AS count FROM cases WHERE status = 'processing'" in str(sql):
+                raise sqlite3.DatabaseError("database disk image is malformed")
+            return self._connection.execute(sql, *args, **kwargs)
+
+        def __getattr__(self, name):
+            return getattr(self._connection, name)
+
+        def __enter__(self):
+            self._connection.__enter__()
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return self._connection.__exit__(exc_type, exc, tb)
+
+    def flaky_connect(database, *args, **kwargs):
+        connection = real_connect(database, *args, **kwargs)
+        if str(database) == str(cases_db) and not kwargs.get("uri", False):
+            return FaultyProcessingConnection(connection)
+        return connection
+
+    monkeypatch.setattr(run_summary.sqlite3, "connect", flaky_connect)
+
+    response = client.get(
+        f"/projects/{project['id']}/runs/{run['id']}/summary",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+
+    assert payload["coverage"]["total_cases"] == 3
+    assert payload["coverage"]["completed_cases"] == 1
+    assert payload["coverage"]["pending_cases"] == 1
+    assert payload["coverage"]["processing_cases"] == 1
+    assert any(item["type"] == "api" and item["total"] == 2 for item in payload["coverage"]["case_types"])
+
+
 def test_observed_paths_returns_complete_case_list():
     client = TestClient(app)
     token = register_and_login(client, "alice")
@@ -1028,7 +1098,7 @@ def test_observed_paths_returns_complete_case_list():
     cases_db = active_dir / "cases.db"
     with sqlite3.connect(cases_db) as connection:
         connection.execute(
-            "CREATE TABLE cases (method TEXT, url TEXT, type TEXT NOT NULL, status TEXT NOT NULL, assigned_agent TEXT, source TEXT)"
+            "CREATE TABLE cases (id INTEGER PRIMARY KEY AUTOINCREMENT, method TEXT, url TEXT, type TEXT NOT NULL, status TEXT NOT NULL, assigned_agent TEXT, source TEXT)"
         )
         connection.executemany(
             "INSERT INTO cases (method, url, type, status, assigned_agent, source) VALUES (?, ?, ?, ?, ?, ?)",
@@ -1039,6 +1109,77 @@ def test_observed_paths_returns_complete_case_list():
             ],
         )
         connection.commit()
+
+    response = client.get(
+        f"/projects/{project['id']}/runs/{run['id']}/observed-paths",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+
+    assert len(payload) == 3
+    assert payload[0]["status"] == "processing"
+    assert payload[0]["method"] == "POST"
+    assert payload[0]["assigned_agent"] == "vulnerability-analyst"
+    assert any(item["url"] == "https://target.example/api/v1/users" and item["type"] == "api" for item in payload)
+
+
+def test_observed_paths_recovers_when_bulk_case_query_is_malformed(monkeypatch):
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "https://target.example")
+    active_dir = setup_active_engagement(run)
+
+    (active_dir / "scope.json").write_text(
+        json.dumps({"hostname": "target.example", "status": "in_progress", "current_phase": "collect"}),
+        encoding="utf-8",
+    )
+
+    cases_db = active_dir / "cases.db"
+    with sqlite3.connect(cases_db) as connection:
+        connection.execute(
+            "CREATE TABLE cases (id INTEGER PRIMARY KEY AUTOINCREMENT, method TEXT, url TEXT, type TEXT NOT NULL, status TEXT NOT NULL, assigned_agent TEXT, source TEXT)"
+        )
+        connection.executemany(
+            "INSERT INTO cases (method, url, type, status, assigned_agent, source) VALUES (?, ?, ?, ?, ?, ?)",
+            [
+                ("GET", "https://target.example/api/v1/users", "api", "done", "", "source-analyzer"),
+                ("POST", "https://target.example/api/v1/login", "api", "processing", "vulnerability-analyst", "source-analyzer"),
+                ("GET", "https://target.example/robots.txt", "data", "pending", "", "recon-specialist"),
+            ],
+        )
+        connection.commit()
+
+    real_connect = sqlite3.connect
+
+    class FaultyObservedPathsConnection:
+        def __init__(self, connection):
+            self._connection = connection
+
+        def execute(self, sql, *args, **kwargs):
+            query = str(sql)
+            if query.startswith("SELECT method, url, type, status, assigned_agent, source FROM cases ORDER BY"):
+                raise sqlite3.DatabaseError("database disk image is malformed")
+            return self._connection.execute(sql, *args, **kwargs)
+
+        def __getattr__(self, name):
+            return getattr(self._connection, name)
+
+        def __enter__(self):
+            self._connection.__enter__()
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return self._connection.__exit__(exc_type, exc, tb)
+
+    def flaky_connect(database, *args, **kwargs):
+        connection = real_connect(database, *args, **kwargs)
+        if str(database) == str(cases_db) and not kwargs.get("uri", False):
+            return FaultyObservedPathsConnection(connection)
+        return connection
+
+    monkeypatch.setattr(run_summary.sqlite3, "connect", flaky_connect)
 
     response = client.get(
         f"/projects/{project['id']}/runs/{run['id']}/observed-paths",

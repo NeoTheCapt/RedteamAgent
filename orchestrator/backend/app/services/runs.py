@@ -41,6 +41,11 @@ EARLY_PHASE_STALL_TIMEOUT_SECONDS = 180
 EARLY_PHASE_STALL_PHASES = {"unknown", "recon", "collect"}
 
 
+def _is_sqlite_corruption_error(exc: sqlite3.Error) -> bool:
+    message = str(exc).lower()
+    return any(token in message for token in ("malformed", "not a database", "disk image is malformed"))
+
+
 def _project_or_404(project_id: int, user: User) -> Project:
     project = db.get_project_by_id(project_id)
     if project is None or project.user_id != user.id:
@@ -141,13 +146,14 @@ def _latest_workflow_activity_at(run: Run, scope_path: Path | None) -> datetime 
     return latest
 
 
-def _load_queue_state(scope_path: Path | None) -> tuple[str, int, int, int]:
+def _load_queue_state(scope_path: Path | None) -> tuple[str, int, int, int, str]:
     current_phase = "unknown"
     total_cases = 0
     pending_cases = 0
     processing_cases = 0
+    queue_health = "ok"
     if scope_path is None or not scope_path.exists():
-        return (current_phase, total_cases, pending_cases, processing_cases)
+        return (current_phase, total_cases, pending_cases, processing_cases, queue_health)
 
     try:
         scope_payload = json.loads(scope_path.read_text(encoding="utf-8"))
@@ -157,27 +163,25 @@ def _load_queue_state(scope_path: Path | None) -> tuple[str, int, int, int]:
 
     cases_db = scope_path.parent / "cases.db"
     if not cases_db.exists():
-        return (current_phase, total_cases, pending_cases, processing_cases)
+        return (current_phase, total_cases, pending_cases, processing_cases, queue_health)
 
     try:
         with sqlite3.connect(cases_db, timeout=1.0) as connection:
             connection.execute("PRAGMA busy_timeout = 1000")
             total_row = connection.execute("SELECT COUNT(*) FROM cases").fetchone()
+            total_cases = int(total_row[0] or 0)
             pending_row = connection.execute(
                 "SELECT COUNT(*) FROM cases WHERE status = 'pending'"
             ).fetchone()
+            pending_cases = int(pending_row[0] or 0)
             processing_row = connection.execute(
                 "SELECT COUNT(*) FROM cases WHERE status = 'processing'"
             ).fetchone()
-            total_cases = int(total_row[0] or 0)
-            pending_cases = int(pending_row[0] or 0)
             processing_cases = int(processing_row[0] or 0)
-    except sqlite3.Error:
-        total_cases = 0
-        pending_cases = 0
-        processing_cases = 0
+    except sqlite3.Error as exc:
+        queue_health = "corrupt" if _is_sqlite_corruption_error(exc) else "error"
 
-    return (current_phase, total_cases, pending_cases, processing_cases)
+    return (current_phase, total_cases, pending_cases, processing_cases, queue_health)
 
 
 def _reconcile_run_status(run: Run, project: Project | None = None, user: User | None = None) -> Run:
@@ -199,7 +203,16 @@ def _reconcile_run_status(run: Run, project: Project | None = None, user: User |
 
     if pid is not None:
         scope_path = _active_scope_path(run)
-        current_phase, total_cases, pending_cases, processing_cases = _load_queue_state(scope_path)
+        current_phase, total_cases, pending_cases, processing_cases, queue_health = _load_queue_state(scope_path)
+        if queue_health == "corrupt":
+            failed = db.update_run_status(run.id, "failed")
+            _write_run_terminal_reason(
+                failed,
+                reason_code="cases_db_corrupt",
+                reason_text="cases.db became unreadable/corrupted while the run was active; queue state could not be trusted.",
+            )
+            stop_run_runtime(failed)
+            return failed
         workflow_activity_at = _latest_workflow_activity_at(run, scope_path)
         if workflow_activity_at is not None:
             workflow_age = datetime.now() - workflow_activity_at
@@ -296,7 +309,7 @@ def _reconcile_run_status(run: Run, project: Project | None = None, user: User |
         reason_text = logged_reason_text or "Runtime supervisor disappeared before the engagement reached a terminal state."
         if project is not None and user is not None:
             scope_path = _active_scope_path(run)
-            current_phase, _, _, _ = _load_queue_state(scope_path)
+            current_phase, _, _, _, _ = _load_queue_state(scope_path)
             phase = current_phase.replace("_", "-") if current_phase else "unknown"
             if _maybe_auto_resume_run(
                 project,
