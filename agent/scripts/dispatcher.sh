@@ -188,7 +188,7 @@ case "$ACTION" in
       RESPONSE_SNIPPET="${RESPONSE_SNIPPET//\'/\'\'}"
       PARAMS_KEY_SIG="${PARAMS_KEY_SIG//\'/\'\'}"
 
-      RESULT=$(sql "INSERT OR IGNORE INTO cases (
+      RESULT=$(sql "INSERT INTO cases (
           method, url, url_path,
           query_params, body_params, path_params, cookie_params,
           headers, body, content_type, content_length,
@@ -202,7 +202,29 @@ case "$ACTION" in
           ${RESPONSE_STATUS}, '${RESPONSE_HEADERS}', ${RESPONSE_SIZE}, '${RESPONSE_SNIPPET}',
           '${TYPE}', '${SOURCE}', 'pending', '${PARAMS_KEY_SIG}',
           NULL, NULL
-        );
+        )
+        ON CONFLICT(method, url_path, params_key_sig) DO UPDATE SET
+          url = excluded.url,
+          query_params = excluded.query_params,
+          body_params = excluded.body_params,
+          path_params = excluded.path_params,
+          cookie_params = excluded.cookie_params,
+          headers = excluded.headers,
+          body = excluded.body,
+          content_type = excluded.content_type,
+          content_length = excluded.content_length,
+          response_status = excluded.response_status,
+          response_headers = excluded.response_headers,
+          response_size = excluded.response_size,
+          response_snippet = excluded.response_snippet,
+          type = excluded.type,
+          source = excluded.source,
+          status = 'pending',
+          assigned_agent = NULL,
+          consumed_at = NULL
+        WHERE cases.type = 'unknown'
+          AND excluded.type != 'unknown'
+          AND cases.status IN ('pending', 'processing', 'error');
         SELECT changes();" )
 
       COUNT=$((COUNT + RESULT))
