@@ -26,6 +26,15 @@ if ! replace_finding_placeholder "$BODY_FILE" "$finding_id" "$tmp_file"; then
     exit 1
 fi
 
+candidate_title="$(extract_finding_title "$tmp_file")"
+existing_id="$(find_existing_finding_id_by_title "$FINDINGS_FILE" "$candidate_title")"
+if [[ -n "$existing_id" ]]; then
+    rm -f "$tmp_file"
+    printf 'duplicate finding title already present as %s: %s\n' "$existing_id" "$candidate_title" >&2
+    printf '%s\n' "$existing_id"
+    exit 0
+fi
+
 {
     printf '\n'
     cat "$tmp_file"
