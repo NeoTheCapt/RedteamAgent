@@ -28,6 +28,32 @@ expect_keep() {
   fi
 }
 
+matches_out_of_scope() {
+  local url="$1"
+  local regex
+  while IFS= read -r regex; do
+    [[ -n "$regex" ]] || continue
+    if printf '%s' "$url" | grep -Eq "$regex"; then
+      return 0
+    fi
+  done < <(katana_emit_out_of_scope_regexes)
+  return 1
+}
+
+expect_out_of_scope() {
+  local url="$1"
+  if ! matches_out_of_scope "$url"; then
+    fail "expected out-of-scope regex to match: $url"
+  fi
+}
+
+expect_keep_out_of_scope() {
+  local url="$1"
+  if matches_out_of_scope "$url"; then
+    fail "expected out-of-scope regex to keep: $url"
+  fi
+}
+
 expect_noise '/%7B%7Bhref%7D%7D'
 expect_noise "/'+L(i[8])+'"
 expect_noise '/application/vnd.ms-word.do'
@@ -50,5 +76,14 @@ expect_keep '/rest/user/login'
 expect_keep '/rest/products/42/reviews'
 expect_keep '/address/create'
 expect_keep '/track-result/new'
+
+expect_out_of_scope 'https://www.okx.com/cdn/assets/okfe/util/monitor/2.6.149/scripts/lib/'
+expect_out_of_scope 'https://www.okx.com/cdn/assets/okfe/okt/polyfill-automatic/Bun/'
+expect_out_of_scope 'http://127.0.0.1:8000/juice-shop/node_modules/express/lib/router/index.js'
+expect_out_of_scope 'http://127.0.0.1:8000/juice-shop/build/routes/assets/public/main.js'
+expect_out_of_scope 'http://127.0.0.1:8000/assets/public/images/chunk-24EZLZ4I.js'
+expect_out_of_scope 'http://127.0.0.1:8000/assets/i18n/assets/public/polyfills.js'
+expect_keep_out_of_scope 'http://127.0.0.1:8000/rest/user/login'
+expect_keep_out_of_scope 'https://www.okx.com/v3/users/support/common/check-country-limit'
 
 echo "katana noise contracts: ok"
