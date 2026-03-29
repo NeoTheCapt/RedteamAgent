@@ -783,7 +783,18 @@ def _load_runtime_model_verification(run_root: Path, project) -> dict:
     }
 
 
-def _sync_run_metadata_projection(run, run_root: Path, current: dict, phases: list[dict], agents: list[dict]) -> None:
+def _sync_run_metadata_projection(
+    run,
+    run_root: Path,
+    current: dict,
+    phases: list[dict],
+    agents: list[dict],
+    *,
+    current_phase: str,
+    findings_count: int,
+    active_agents: int,
+    available_agents: int,
+) -> None:
     metadata_path = run_root / "run.json"
     if not metadata_path.exists():
         return
@@ -801,6 +812,10 @@ def _sync_run_metadata_projection(run, run_root: Path, current: dict, phases: li
             "engagement_root": run.engagement_root,
             "created_at": run.created_at,
             "updated_at": run.updated_at,
+            "current_phase": current_phase,
+            "findings_count": findings_count,
+            "active_agents": active_agents,
+            "available_agents": available_agents,
             "current_action": current,
             "phase_waterfall": phases,
             "agents": agents,
@@ -829,14 +844,26 @@ def summarize_run(project_id: int, run_id: int, user: User) -> RunSummary:
     latest_task = next((event for event in reversed(events) if event.event_type.startswith("task.")), None)
     latest_phase = next((event for event in reversed(events) if event.event_type.startswith("phase.")), None)
     current = _current_activity(events, scope, processing_agents, run.status, str(run_metadata.get("stop_reason_text", "")))
-    _sync_run_metadata_projection(run, run_root, current, phases, agents)
+    active_agents = 0 if _is_terminal_run_status(run.status) else sum(1 for agent in agents if agent["status"] == "active")
+    available_agents = len(agents)
+    _sync_run_metadata_projection(
+        run,
+        run_root,
+        current,
+        phases,
+        agents,
+        current_phase=effective_current_phase,
+        findings_count=findings_count,
+        active_agents=active_agents,
+        available_agents=available_agents,
+    )
 
     return RunSummary(
         target=_build_target_card(run, scope, active_root),
         overview={
             "findings_count": findings_count,
-            "active_agents": 0 if _is_terminal_run_status(run.status) else sum(1 for agent in agents if agent["status"] == "active"),
-            "available_agents": len(agents),
+            "active_agents": active_agents,
+            "available_agents": available_agents,
             "current_phase": effective_current_phase,
             "updated_at": run.updated_at if _is_terminal_run_status(run.status) else getattr(latest_task or latest_phase, "created_at", run.updated_at),
         },
