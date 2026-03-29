@@ -19,6 +19,7 @@ stacktrace_internal_regex_request='{"url":"http://127.0.0.1:8000/juice-shop/node
 stacktrace_internal_source_request='{"url":"http://127.0.0.1:8000/juice-shop/node_modules/express/lib/router/styles.css","source_ref":"http://127.0.0.1:8000/juice-shop/node_modules/express/lib/router/index.js","tag":"link","attribute":"href","error":"cause=\"context deadline exceeded\" chain=\"hybrid: could not get dom\""}'
 js_regex_api_error_request='{"url":"http://127.0.0.1:8000/rest/user/login","source_ref":"http://127.0.0.1:8000/main.js","tag":"js","attribute":"regex","response_status":500}'
 js_regex_api_success_request='{"url":"http://127.0.0.1:8000/rest/user/whoami","source_ref":"http://127.0.0.1:8000/main.js","tag":"js","attribute":"regex","response_status":200}'
+csaf_port_path_noise_request='{"url":"http://127.0.0.1:8000/.well-known/csaf/3000/.well-known/csaf/main.js","source_ref":"http://127.0.0.1:8000/.well-known/csaf/provider-metadata.json","tag":"script","attribute":"src","error":"cause=\"context deadline exceeded\" chain=\"hybrid: could not get dom\""}'
 
 katana_line_should_ingest "$good"
 katana_line_should_ingest "$plain"
@@ -68,6 +69,11 @@ fi
 
 if katana_request_should_ingest "$js_regex_api_error_request"; then
   echo "[FAIL] js-regex API discovery returning >=400 should not be ingested" >&2
+  exit 1
+fi
+
+if katana_request_should_ingest "$csaf_port_path_noise_request"; then
+  echo "[FAIL] CSAF localhost-port artifact should not be ingested" >&2
   exit 1
 fi
 

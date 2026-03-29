@@ -74,6 +74,8 @@ expect_noise '/assets/public/assets/public/main.js'
 expect_noise '/Trident/assets/public/assets/public/main.js'
 expect_noise '/Trident/assets/public/assets/public/assets/public/chunk-4MIYPPGW.js'
 expect_noise '/assets/i18n/assets/public/polyfills.js'
+expect_noise '/.well-known/csaf/3000/.well-known/csaf/main.js'
+expect_noise '/.well-known/csaf/3000/.well-known/csaf/assets/public/chunk-LHKS7QUN.js'
 
 expect_keep '/rest/user/login'
 expect_keep '/rest/products/42/reviews'
@@ -88,6 +90,7 @@ expect_out_of_scope 'http://127.0.0.1:8000/assets/public/images/chunk-24EZLZ4I.j
 expect_out_of_scope 'http://127.0.0.1:8000/assets/public/assets/public/main.js'
 expect_out_of_scope 'http://127.0.0.1:8000/Trident/assets/public/assets/public/main.js'
 expect_out_of_scope 'http://127.0.0.1:8000/assets/i18n/assets/public/polyfills.js'
+expect_out_of_scope 'http://127.0.0.1:8000/.well-known/csaf/3000/.well-known/csaf/main.js'
 expect_keep_out_of_scope 'http://127.0.0.1:8000/rest/user/login'
 expect_keep_out_of_scope 'https://www.okx.com/v3/users/support/common/check-country-limit'
 

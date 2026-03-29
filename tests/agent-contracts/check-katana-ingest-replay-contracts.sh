@@ -249,6 +249,17 @@ rows = [
             "source": "http://host.docker.internal:8000/juice-shop/node_modules/express/lib/router/index.js"
         },
         "error": "cause=\"context deadline exceeded\" chain=\"hybrid: could not get dom\""
+    },
+    {
+        "timestamp": "2026-03-28T00:02:08Z",
+        "request": {
+            "method": "GET",
+            "endpoint": "http://host.docker.internal:8000/.well-known/csaf/3000/.well-known/csaf/main.js",
+            "tag": "script",
+            "attribute": "src",
+            "source": "http://host.docker.internal:8000/.well-known/csaf/provider-metadata.json"
+        },
+        "error": "cause=\"context deadline exceeded\" chain=\"hybrid: could not get dom\""
     }
 ]
 Path(sys.argv[1]).write_text("\n".join(json.dumps(row, separators=(",", ":")) for row in rows), encoding="utf-8")
@@ -261,7 +272,7 @@ filtered_cases="$(sqlite3 "$ENG_DIR/cases.db" 'select count(*) from cases;')"
   exit 1
 }
 sqlite3 "$ENG_DIR/cases.db" 'select url from cases;' | grep -q '/rest/admin/application-configuration'
-if sqlite3 "$ENG_DIR/cases.db" 'select url from cases;' | grep -q '%5C%22\|/%5C/index.html\|/assets/public/images/w\|/assets/public/images/chunk-24EZLZ4I.js\|/assets/public/images/assets/public/main.js\|/assets/i18n/assets/public/polyfills.js\|\*/kyc-verify\$\|/scripts/lib/\|/Bun/\|/juice-shop/node_modules/express/lib/router/index.js\|/juice-shop/node_modules/express/lib/router/styles.css'; then
+if sqlite3 "$ENG_DIR/cases.db" 'select url from cases;' | grep -q '%5C%22\|/%5C/index.html\|/assets/public/images/w\|/assets/public/images/chunk-24EZLZ4I.js\|/assets/public/images/assets/public/main.js\|/assets/i18n/assets/public/polyfills.js\|\*/kyc-verify\$\|/scripts/lib/\|/Bun/\|/juice-shop/node_modules/express/lib/router/index.js\|/juice-shop/node_modules/express/lib/router/styles.css\|/\.well-known/csaf/3000/\.well-known/csaf/main.js'; then
   echo "expected malformed katana discoveries to be filtered from replay" >&2
   exit 1
 fi
