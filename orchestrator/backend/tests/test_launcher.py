@@ -725,6 +725,54 @@ def test_engagement_completion_state_prefers_logged_stop_reason():
     )
 
 
+def test_engagement_completion_state_accepts_completed_status_alias():
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "https://example.com")
+
+    run_root = Path(run["engagement_root"])
+    workspace = run_root / "workspace"
+    engagement_dir = workspace / "engagements" / "2026-03-28-000000-example"
+    engagement_dir.mkdir(parents=True, exist_ok=True)
+    (workspace / "engagements" / ".active").write_text(
+        "engagements/2026-03-28-000000-example\n",
+        encoding="utf-8",
+    )
+    (engagement_dir / "scope.json").write_text(
+        json.dumps(
+            {
+                "status": "completed",
+                "current_phase": "complete",
+                "phases_completed": ["recon", "collect", "consume_test", "exploit", "report"],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (engagement_dir / "report.md").write_text("# report\n", encoding="utf-8")
+    (engagement_dir / "surfaces.jsonl").write_text("", encoding="utf-8")
+    with sqlite3.connect(engagement_dir / "cases.db") as connection:
+        connection.execute(
+            "CREATE TABLE cases (id INTEGER PRIMARY KEY AUTOINCREMENT, status TEXT NOT NULL)"
+        )
+        connection.executemany(
+            "INSERT INTO cases(status) VALUES (?)",
+            [("done",), ("error",)],
+        )
+        connection.commit()
+
+    from app import db as app_db
+    from app.services.launcher import engagement_completion_state
+
+    latest = app_db.get_run_by_id(run["id"])
+    assert latest is not None
+    assert engagement_completion_state(latest) == (True, "Engagement completed and finalized.")
+
+    normalized = json.loads((engagement_dir / "scope.json").read_text(encoding="utf-8"))
+    assert normalized["status"] == "complete"
+
+
 def test_auto_launch_marks_completed_only_when_engagement_is_finalized(monkeypatch):
     client = TestClient(app)
     token = register_and_login(client, "alice")

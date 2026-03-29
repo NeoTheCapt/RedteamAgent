@@ -241,6 +241,13 @@ def _rewrite_artifact_value(value, context: dict[str, str] | None, *, redact_hea
     return value
 
 
+def _canonical_scope_status(value: object) -> str:
+    normalized = str(value or "").strip().lower().replace("-", "_")
+    if normalized == "completed":
+        return "complete"
+    return normalized
+
+
 def _normalize_scope_file(scope_path: Path, *, run: Run | None = None) -> dict[str, object] | None:
     if not scope_path.exists():
         return None
@@ -252,6 +259,11 @@ def _normalize_scope_file(scope_path: Path, *, run: Run | None = None) -> dict[s
         return None
 
     changed = False
+    status_name = _canonical_scope_status(payload.get("status"))
+    if status_name and status_name != payload.get("status"):
+        payload["status"] = status_name
+        changed = True
+
     current_phase = _canonical_phase_name(payload.get("current_phase"))
     if current_phase != payload.get("current_phase"):
         payload["current_phase"] = current_phase
@@ -508,7 +520,7 @@ def engagement_completion_state(run: Run) -> tuple[bool, str]:
     if scope is None:
         return (False, "scope.json is unreadable.")
 
-    status_name = str(scope.get("status") or "").strip().lower()
+    status_name = _canonical_scope_status(scope.get("status"))
     current_phase = _canonical_phase_name(scope.get("current_phase"))
     completed_phases = {_canonical_phase_name(item) for item in scope.get("phases_completed", [])}
 
