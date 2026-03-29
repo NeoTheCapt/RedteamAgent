@@ -15,6 +15,7 @@ from fastapi import HTTPException, status
 
 from ..models.user import User
 from .events import list_events_for_run
+from .launcher import _loopback_display_context, _rewrite_artifact_value
 from .runs import _latest_workflow_activity_at, _project_or_404, _reconcile_run_status
 
 PHASE_ORDER = ["recon", "collect", "consume-test", "exploit", "report"]
@@ -352,7 +353,7 @@ def _load_cases_metrics(path: Path) -> dict:
     return metrics
 
 
-def _load_observed_paths(path: Path) -> list[ObservedPathRecord]:
+def _load_observed_paths(path: Path, context: dict[str, str] | None = None) -> list[ObservedPathRecord]:
     if not path.exists():
         return []
 
@@ -425,10 +426,11 @@ def _load_observed_paths(path: Path) -> list[ObservedPathRecord]:
         url = str(payload.get("url") or "").strip()
         if not url:
             continue
+        normalized_url = _rewrite_artifact_value(url, context)
         records.append(
             ObservedPathRecord(
                 method=str(payload.get("method") or "GET").strip() or "GET",
-                url=url,
+                url=str(normalized_url or url).strip(),
                 type=str(payload.get("type") or "unknown").strip() or "unknown",
                 status=str(payload.get("status") or "unknown").strip() or "unknown",
                 assigned_agent=str(payload.get("assigned_agent") or "").strip(),
@@ -761,9 +763,10 @@ def _current_activity(
 
 def _build_target_card(run, scope: dict, active_root: Path) -> dict:
     parsed = urlparse(run.target)
-    hostname = scope.get("hostname") or parsed.hostname or run.target
+    normalized_scope = _rewrite_artifact_value(scope, _loopback_display_context(run)) if isinstance(scope, dict) else scope
+    hostname = normalized_scope.get("hostname") or parsed.hostname or run.target
     display_path = parsed.path or "/"
-    raw_scope_entries = scope.get("scope", [])
+    raw_scope_entries = normalized_scope.get("scope", [])
     if isinstance(raw_scope_entries, dict):
         scope_entries = [
             *[str(item) for item in raw_scope_entries.get("in_scope", [])],
@@ -773,7 +776,7 @@ def _build_target_card(run, scope: dict, active_root: Path) -> dict:
         scope_entries = [str(item) for item in raw_scope_entries]
     else:
         scope_entries = []
-    target_status = scope.get("status") or run.status
+    target_status = normalized_scope.get("status") or run.status
     if run.status in {"failed", "completed"}:
         target_status = run.status
     return {
@@ -963,4 +966,4 @@ def list_observed_paths(project_id: int, run_id: int, user: User) -> list[Observ
     run = _run_or_404(project_id, run_id, user)
     run_root = Path(run.engagement_root)
     active_root = _active_engagement_root(run_root)
-    return _load_observed_paths(_resolve_cases_db(run_root, active_root))
+    return _load_observed_paths(_resolve_cases_db(run_root, active_root), _loopback_display_context(run))
