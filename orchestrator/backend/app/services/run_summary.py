@@ -531,8 +531,13 @@ def _build_phase_cards(scope: dict, events: list, agents: list[dict], run_status
 
 def _resolved_event_phase(event, scope_phase: str) -> str:
     explicit_phase = _normalize_phase(getattr(event, "phase", "unknown"))
+    event_type = getattr(event, "event_type", "")
     if explicit_phase != "unknown":
-        if scope_phase != "unknown" and _phase_index(explicit_phase) < _phase_index(scope_phase):
+        if (
+            event_type != "task.completed"
+            and scope_phase != "unknown"
+            and _phase_index(explicit_phase) < _phase_index(scope_phase)
+        ):
             return scope_phase
         return explicit_phase
     if scope_phase != "unknown":
