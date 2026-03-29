@@ -54,4 +54,15 @@ grep -q '"target": "GET http://127.0.0.1:8000/ftp/incident-support.kdbx"' "$ENG_
 grep -q '"surface_type": "workflow_token"' "$ENG_DIR/surfaces.jsonl"
 grep -q '"surface_type": "privileged_write"' "$ENG_DIR/surfaces.jsonl"
 
+before_count=$(wc -l < "$ENG_DIR/surfaces.jsonl")
+cat <<'EOF' | "$ROOT/agent/scripts/append_surface_jsonl.sh" "$ENG_DIR"
+{"surface_type":"account_recovery","target":"PUT http://127.0.0.1:8000/rest/continue-code-fixIt/apply/<continueCode>","source":"vulnerability-analyst","rationale":"templated continuation segment is not concrete","status":"discovered"}
+{"surface_type":"workflow_token","target":"GET /real/session/token","source":"source-analyzer","rationale":"concrete token endpoint remains importable","status":"discovered"}
+EOF
+
+after_count=$(wc -l < "$ENG_DIR/surfaces.jsonl")
+[[ "$after_count" -eq $((before_count + 1)) ]]
+! grep -q '<continueCode>' "$ENG_DIR/surfaces.jsonl"
+grep -q '"target": "GET /real/session/token"' "$ENG_DIR/surfaces.jsonl"
+
 echo "surface jsonl contracts: ok"

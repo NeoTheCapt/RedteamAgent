@@ -13,6 +13,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib/params.sh"
 source "$SCRIPT_DIR/lib/classify.sh"
 source "$SCRIPT_DIR/lib/db.sh"
+source "$SCRIPT_DIR/lib/placeholders.sh"
 
 # --- Validate arguments ---
 if [[ $# -lt 2 ]]; then
@@ -72,8 +73,8 @@ while IFS= read -r line; do
     url=$(printf '%s' "$url" | awk '{print $1}')
     method=$(printf '%s' "$method" | tr '[:lower:]' '[:upper:]')
 
-    # Skip URLs containing ffuf/fuzzing placeholders
-    if [[ "$url" == *"FUZZ"* || "$url" == *"PARAM"* || "$url" == *"{{"* ]]; then
+    # Skip unresolved placeholders and non-concrete queue entries
+    if contains_queue_placeholder "$url"; then
         continue
     fi
 
