@@ -2,7 +2,10 @@
 # scripts/lib/container.sh — Container execution layer for pentest tools
 # Source this file: . scripts/lib/container.sh
 
-. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/processes.sh"
+CONTAINER_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$CONTAINER_LIB_DIR/processes.sh"
+# shellcheck source=/dev/null
+. "$CONTAINER_LIB_DIR/noise.sh"
 
 REDTEAM_IMAGE="${REDTEAM_IMAGE:-kali-redteam:latest}"
 PROXY_IMAGE="${PROXY_IMAGE:-redteam-proxy:latest}"
@@ -429,6 +432,10 @@ start_katana() {
     if [[ "${KATANA_ENABLE_PATH_CLIMB}" == "1" ]]; then
         katana_args+=(-pc)
     fi
+    while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        katana_args+=(-cos "$line")
+    done < <(katana_emit_out_of_scope_regexes)
     if [ "$(runtime_mode)" = "local" ]; then
         if [ -z "$target" ]; then
             echo "ERROR: target URL required" >&2
@@ -484,8 +491,8 @@ start_katana() {
         -v "${ENGAGEMENT_DIR_ABS}:/engagement" \
         "$KATANA_IMAGE" \
         "${katana_args[@]}" \
-        "${scope_args[@]}" \
-        "${auth_args[@]}" \
+        "${scope_args[@]+"${scope_args[@]}"}" \
+        "${auth_args[@]+"${auth_args[@]}"}" \
         -elog /engagement/scans/katana_error.log \
         -o /engagement/scans/katana_output.jsonl
     echo "[katana] Started crawling $target"

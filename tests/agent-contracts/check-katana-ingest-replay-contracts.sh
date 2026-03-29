@@ -163,6 +163,50 @@ rows = [
         "error": "hybrid: response is nil"
     },
     {
+        "timestamp": "2026-03-28T00:02:03.100Z",
+        "request": {
+            "method": "GET",
+            "endpoint": "http://host.docker.internal:8000/%5C/index.html",
+            "tag": "html",
+            "attribute": "regex",
+            "source": "http://host.docker.internal:8000/chunk-LHKS7QUN.js"
+        },
+        "error": "cause=\"context deadline exceeded\" chain=\"hybrid: could not get dom\""
+    },
+    {
+        "timestamp": "2026-03-28T00:02:03.200Z",
+        "request": {
+            "method": "GET",
+            "endpoint": "http://host.docker.internal:8000/assets/public/images/chunk-24EZLZ4I.js",
+            "tag": "link",
+            "attribute": "href",
+            "source": "http://host.docker.internal:8000/assets/public/images/"
+        },
+        "error": "cause=\"context deadline exceeded\" chain=\"hybrid: could not get dom\""
+    },
+    {
+        "timestamp": "2026-03-28T00:02:03.300Z",
+        "request": {
+            "method": "GET",
+            "endpoint": "http://host.docker.internal:8000/assets/public/images/assets/public/main.js",
+            "tag": "script",
+            "attribute": "src",
+            "source": "http://host.docker.internal:8000/assets/public/images/assets/public/favicon_js.ico"
+        },
+        "error": "cause=\"context deadline exceeded\" chain=\"hybrid: could not get dom\""
+    },
+    {
+        "timestamp": "2026-03-28T00:02:03.400Z",
+        "request": {
+            "method": "GET",
+            "endpoint": "http://host.docker.internal:8000/assets/i18n/assets/public/polyfills.js",
+            "tag": "script",
+            "attribute": "src",
+            "source": "http://host.docker.internal:8000/assets/i18n/assets/public/favicon_js.ico"
+        },
+        "error": "cause=\"context deadline exceeded\" chain=\"hybrid: could not get dom\""
+    },
+    {
         "timestamp": "2026-03-28T00:02:04Z",
         "request": {
             "method": "GET",
@@ -195,7 +239,7 @@ filtered_cases="$(sqlite3 "$ENG_DIR/cases.db" 'select count(*) from cases;')"
   exit 1
 }
 sqlite3 "$ENG_DIR/cases.db" 'select url from cases;' | grep -q '/rest/admin/application-configuration'
-if sqlite3 "$ENG_DIR/cases.db" 'select url from cases;' | grep -q '%5C%22\|/assets/public/images/w\|\*/kyc-verify\$\|/scripts/lib/\|/Bun/'; then
+if sqlite3 "$ENG_DIR/cases.db" 'select url from cases;' | grep -q '%5C%22\|/%5C/index.html\|/assets/public/images/w\|/assets/public/images/chunk-24EZLZ4I.js\|/assets/public/images/assets/public/main.js\|/assets/i18n/assets/public/polyfills.js\|\*/kyc-verify\$\|/scripts/lib/\|/Bun/'; then
   echo "expected malformed katana discoveries to be filtered from replay" >&2
   exit 1
 fi

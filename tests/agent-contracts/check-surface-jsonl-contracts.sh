@@ -54,6 +54,14 @@ grep -q '"target": "GET http://127.0.0.1:8000/ftp/incident-support.kdbx"' "$ENG_
 grep -q '"surface_type": "workflow_token"' "$ENG_DIR/surfaces.jsonl"
 grep -q '"surface_type": "privileged_write"' "$ENG_DIR/surfaces.jsonl"
 
+cat <<'EOF' | "$ROOT/agent/scripts/append_surface_jsonl.sh" "$ENG_DIR"
+{"url":"https://okg-pub-hk.oss-accelerate.aliyuncs.com/upgradeapp/install-manifest2.plist","type":"asset-distribution","reason":"Public download API exposes external mobile install manifest host"}
+{"url":"https://static.coinall.ltd/","type":"cdn-asset-host","reason":"Public market-data API references external icon CDN host"}
+EOF
+
+grep -q '"target": "GET https://okg-pub-hk.oss-accelerate.aliyuncs.com/upgradeapp/install-manifest2.plist"' "$ENG_DIR/surfaces.jsonl"
+grep -q '"target": "GET https://static.coinall.ltd/"' "$ENG_DIR/surfaces.jsonl"
+
 before_count=$(wc -l < "$ENG_DIR/surfaces.jsonl")
 cat <<'EOF' | "$ROOT/agent/scripts/append_surface_jsonl.sh" "$ENG_DIR"
 {"surface_type":"account_recovery","target":"PUT http://127.0.0.1:8000/rest/continue-code-fixIt/apply/<continueCode>","source":"vulnerability-analyst","rationale":"templated continuation segment is not concrete","status":"discovered"}
