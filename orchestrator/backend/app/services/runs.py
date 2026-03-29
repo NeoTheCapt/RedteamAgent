@@ -19,6 +19,7 @@ from ..models.user import User
 from .launcher import (
     RUNTIME_PID_LOOKUP_UNAVAILABLE,
     _active_engagement_dir,
+    _clear_run_terminal_reason,
     _last_logged_stop_metadata,
     _maybe_auto_resume_run,
     _write_run_terminal_reason,
@@ -91,23 +92,29 @@ def _read_sqlite_with_fallback(path: Path, reader, default):
                 connection.execute("PRAGMA busy_timeout = 1000")
                 return reader(connection)
         except sqlite3.OperationalError as exc:
-            if not _is_sqlite_transient_error(exc):
+            if not _is_sqlite_transient_error(exc) and not _is_sqlite_corruption_error(exc):
                 return default
-        except sqlite3.Error:
-            return default
+        except sqlite3.Error as exc:
+            if not _is_sqlite_corruption_error(exc):
+                return default
 
         try:
             with _connect_sqlite_readonly(path) as connection:
                 return reader(connection)
         except sqlite3.OperationalError as exc:
-            if not _is_sqlite_transient_error(exc):
+            if not _is_sqlite_transient_error(exc) and not _is_sqlite_corruption_error(exc):
                 return default
-        except sqlite3.Error:
-            return default
+        except sqlite3.Error as exc:
+            if not _is_sqlite_corruption_error(exc):
+                return default
+
+        snapshot_value = _read_sqlite_snapshot(path, reader, default)
+        if snapshot_value is not default:
+            return snapshot_value
 
         time.sleep(0.1)
 
-    return _read_sqlite_snapshot(path, reader, default)
+    return default
 
 
 def _project_or_404(project_id: int, user: User) -> Project:
@@ -352,7 +359,10 @@ def _reconcile_run_status(run: Run, project: Project | None = None, user: User |
                 stop_run_runtime(failed)
                 return failed
         if run.status != "running":
-            return db.update_run_status(run.id, "running")
+            refreshed = db.update_run_status(run.id, "running")
+            _clear_run_terminal_reason(refreshed)
+            return refreshed
+        _clear_run_terminal_reason(run)
         return run
 
     if run.status == "completed":
