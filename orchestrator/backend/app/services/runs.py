@@ -28,7 +28,11 @@ from .launcher import (
 
 ALLOWED_STATUSES = {"queued", "running", "completed", "failed"}
 RUN_STARTUP_GRACE_SECONDS = 90
-RUN_STALL_TIMEOUT_SECONDS = 600
+# The local fixed-target optimization loop only treats a live run as stale after
+# 15 minutes of confirmed buggy behavior. Keep the backend watchdog aligned with
+# that contract so long-running consume-test work is not failed a full cycle too
+# early.
+RUN_STALL_TIMEOUT_SECONDS = 900
 EARLY_PHASE_STALL_TIMEOUT_SECONDS = 180
 EARLY_PHASE_STALL_PHASES = {"unknown", "recon", "collect"}
 
