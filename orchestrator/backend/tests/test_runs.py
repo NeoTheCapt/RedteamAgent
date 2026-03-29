@@ -505,11 +505,13 @@ def test_list_runs_marks_corrupt_cases_db_failed(monkeypatch):
 
     def flaky_connect(database, *args, **kwargs):
         connection = real_connect(database, *args, **kwargs)
-        if str(database) == str(cases_db) and not kwargs.get("uri", False):
+        database_str = str(database)
+        if database_str == str(cases_db) or database_str == f"file:{cases_db}?mode=ro":
             return FaultyQueueConnection(connection)
         return connection
 
     monkeypatch.setattr("app.services.runs.sqlite3.connect", flaky_connect)
+    monkeypatch.setattr("app.services.runs._read_sqlite_snapshot", lambda _path, _reader, default: default)
     monkeypatch.setattr("app.services.runs.locate_runtime_pid", lambda _run: 12345)
     stopped: list[int] = []
     monkeypatch.setattr("app.services.runs.stop_run_runtime", lambda reconciled_run: stopped.append(reconciled_run.id))
@@ -524,6 +526,99 @@ def test_list_runs_marks_corrupt_cases_db_failed(monkeypatch):
     metadata = json.loads((run_root / "run.json").read_text(encoding="utf-8"))
     assert metadata["stop_reason_code"] == "cases_db_corrupt"
     assert "queue state could not be trusted" in metadata["stop_reason_text"]
+
+
+def test_list_runs_keeps_running_when_readwrite_cases_db_looks_corrupt_but_readonly_fallback_succeeds(monkeypatch):
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+
+    create_run = client.post(
+        f"/projects/{project['id']}/runs",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"target": "https://example.com"},
+    )
+    assert create_run.status_code == 201
+    run = create_run.json()
+    db.update_run_status(run["id"], "running")
+
+    run_root = Path(run["engagement_root"])
+    runtime_dir = run_root / "runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    process_log = runtime_dir / "process.log"
+    process_log.write_text("consume-test still working\n", encoding="utf-8")
+
+    workspace = run_root / "workspace"
+    engagement_dir = workspace / "engagements" / "2026-03-28-000000-example"
+    engagement_dir.mkdir(parents=True, exist_ok=True)
+    (workspace / "engagements" / ".active").write_text(
+        "engagements/2026-03-28-000000-example\n",
+        encoding="utf-8",
+    )
+    (engagement_dir / "scope.json").write_text(
+        json.dumps(
+            {
+                "status": "in_progress",
+                "current_phase": "consume_test",
+                "phases_completed": ["recon", "collect"],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    with sqlite3.connect(engagement_dir / "cases.db") as connection:
+        connection.execute(
+            "CREATE TABLE cases (id INTEGER PRIMARY KEY AUTOINCREMENT, status TEXT NOT NULL)"
+        )
+        connection.executemany(
+            "INSERT INTO cases(status) VALUES (?)",
+            [("processing",), ("done",)],
+        )
+        connection.commit()
+
+    real_connect = sqlite3.connect
+    cases_db = engagement_dir / "cases.db"
+
+    class FaultyReadWriteConnection:
+        def __init__(self, connection):
+            self._connection = connection
+
+        def execute(self, sql, *args, **kwargs):
+            query = str(sql)
+            if str(self._connection.execute("PRAGMA database_list").fetchone()[2]) == str(cases_db) and query == "SELECT COUNT(*) FROM cases WHERE status = 'processing'":
+                raise sqlite3.DatabaseError("database disk image is malformed")
+            return self._connection.execute(sql, *args, **kwargs)
+
+        def __getattr__(self, name):
+            return getattr(self._connection, name)
+
+        def __enter__(self):
+            self._connection.__enter__()
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return self._connection.__exit__(exc_type, exc, tb)
+
+    def flaky_connect(database, *args, **kwargs):
+        connection = real_connect(database, *args, **kwargs)
+        if str(database) == str(cases_db) and not kwargs.get("uri", False):
+            return FaultyReadWriteConnection(connection)
+        return connection
+
+    monkeypatch.setattr("app.services.runs.sqlite3.connect", flaky_connect)
+    monkeypatch.setattr("app.services.runs.locate_runtime_pid", lambda _run: 12345)
+    stopped: list[int] = []
+    monkeypatch.setattr("app.services.runs.stop_run_runtime", lambda reconciled_run: stopped.append(reconciled_run.id))
+
+    runs_response = client.get(
+        f"/projects/{project['id']}/runs",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert runs_response.status_code == 200
+    assert runs_response.json()[0]["status"] == "running"
+    assert stopped == []
+    metadata = json.loads((run_root / "run.json").read_text(encoding="utf-8"))
+    assert metadata.get("stop_reason_code") is None
 
 
 def test_list_runs_marks_stalled_run_failed_even_if_cases_sqlite_wal_churns(monkeypatch):

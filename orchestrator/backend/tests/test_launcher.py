@@ -1055,3 +1055,159 @@ def test_init_only_zero_exit_is_marked_failed(monkeypatch):
     latest = db.get_run_by_id(run["id"])
     assert latest is not None
     assert latest.status == "failed"
+
+
+def test_start_run_runtime_clears_stale_terminal_reason(monkeypatch):
+    from app.services import launcher
+
+    client = TestClient(app)
+    token = register_and_login(client, "alice-clear-stop-reason")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "https://clear-stop-reason.example")
+
+    run_model = db.get_run_by_id(run["id"])
+    project_model = db.get_project_by_id(project["id"])
+    user_model = db.get_user_by_username("alice-clear-stop-reason")
+    assert run_model is not None
+    assert project_model is not None
+    assert user_model is not None
+
+    metadata_path = Path(run["engagement_root"]) / "run.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata["stop_reason_code"] = "queue_stalled"
+    metadata["stop_reason_text"] = "Runtime produced no new output before stall timeout elapsed."
+    metadata_path.write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
+
+    class FakeLogFollower:
+        def poll(self):
+            return 0
+
+    def fake_run(command, **kwargs):
+        if command[:3] == ["docker", "run", "-d"]:
+            return subprocess.CompletedProcess(command, 0, stdout="container-123\n", stderr="")
+        if command[:3] == ["docker", "rm", "-f"]:
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("app.services.launcher.subprocess.run", fake_run)
+    monkeypatch.setattr("app.services.launcher.subprocess.Popen", lambda *args, **kwargs: FakeLogFollower())
+    monkeypatch.setattr("app.services.launcher.Thread", lambda *args, **kwargs: SimpleNamespace(start=lambda: None))
+
+    started = launcher.start_run_runtime(project_model, run_model, user_model)
+    assert started.status == "running"
+
+    refreshed = json.loads(metadata_path.read_text(encoding="utf-8"))
+    assert "stop_reason_code" not in refreshed
+    assert "stop_reason_text" not in refreshed
+
+
+def test_auto_launch_allows_third_resume_attempt(monkeypatch):
+    client = TestClient(app)
+    token = register_and_login(client, "alice-third-resume")
+    project = create_project(client, token)
+
+    attempt = {"count": 0}
+    launched_commands: list[list[str]] = []
+
+    class ImmediateThread:
+        def __init__(self, *, target, args=(), daemon=None):
+            self._target = target
+            self._args = args
+
+        def start(self):
+            attempt["count"] += 1
+            run = self._args[0]
+            workspace = Path(run.engagement_root) / "workspace"
+            engagement_dir = workspace / "engagements" / "2026-03-30-000000-example-third-resume"
+            engagement_dir.mkdir(parents=True, exist_ok=True)
+            (workspace / "engagements" / ".active").write_text(
+                "engagements/2026-03-30-000000-example-third-resume\n",
+                encoding="utf-8",
+            )
+            process_log = Path(run.engagement_root) / "runtime" / "process.log"
+            process_log.write_text(
+                json.dumps({"type": "tool_use", "part": {"tool": "todowrite", "state": {"input": {}}}}) + "\n",
+                encoding="utf-8",
+            )
+            cases_db = engagement_dir / "cases.db"
+            if cases_db.exists():
+                cases_db.unlink()
+            with sqlite3.connect(cases_db) as connection:
+                connection.execute(
+                    "CREATE TABLE cases (id INTEGER PRIMARY KEY AUTOINCREMENT, status TEXT NOT NULL)"
+                )
+                if attempt["count"] < 3:
+                    (engagement_dir / "scope.json").write_text(
+                        json.dumps(
+                            {
+                                "status": "in_progress",
+                                "current_phase": "consume_test",
+                                "phases_completed": ["recon", "collect"],
+                            }
+                        )
+                        + "\n",
+                        encoding="utf-8",
+                    )
+                    connection.executemany(
+                        "INSERT INTO cases(status) VALUES (?)",
+                        [("pending",), ("done",)],
+                    )
+                else:
+                    (engagement_dir / "scope.json").write_text(
+                        json.dumps(
+                            {
+                                "status": "complete",
+                                "current_phase": "complete",
+                                "phases_completed": ["recon", "collect", "consume_test", "exploit", "report"],
+                            }
+                        )
+                        + "\n",
+                        encoding="utf-8",
+                    )
+                    (engagement_dir / "report.md").write_text("# report\n", encoding="utf-8")
+                    (engagement_dir / "surfaces.jsonl").write_text("", encoding="utf-8")
+                    connection.executemany(
+                        "INSERT INTO cases(status) VALUES (?)",
+                        [("done",), ("error",)],
+                    )
+                connection.commit()
+            self._target(*self._args)
+
+    class FakeLogFollower:
+        def poll(self):
+            return 0
+
+    statuses = iter(["running", "exited", "running", "exited", "running", "exited"])
+    exit_codes = iter(["0", "0", "0"])
+
+    def fake_run(command, **kwargs):
+        if command[:3] == ["docker", "run", "-d"]:
+            launched_commands.append(command)
+            return subprocess.CompletedProcess(command, 0, stdout="container-123\n", stderr="")
+        if command[:4] == ["docker", "inspect", "-f", "{{.State.Status}}"]:
+            return subprocess.CompletedProcess(command, 0, stdout=f"{next(statuses)}\n", stderr="")
+        if command[:4] == ["docker", "inspect", "-f", "{{.State.ExitCode}}"]:
+            return subprocess.CompletedProcess(command, 0, stdout=f"{next(exit_codes)}\n", stderr="")
+        if command[:3] == ["docker", "rm", "-f"]:
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("app.services.launcher.subprocess.run", fake_run)
+    monkeypatch.setattr("app.services.launcher.subprocess.Popen", lambda *args, **kwargs: FakeLogFollower())
+    monkeypatch.setattr("app.services.launcher.Thread", ImmediateThread)
+    object.__setattr__(settings, "auto_launch_runs", True)
+
+    try:
+        run = create_run(client, token, project["id"], "https://third-resume.example")
+    finally:
+        object.__setattr__(settings, "auto_launch_runs", False)
+
+    latest = db.get_run_by_id(run["id"])
+    assert latest is not None
+    assert latest.status == "completed"
+    assert len(launched_commands) == 3
+    metadata = json.loads((Path(run["engagement_root"]) / "run.json").read_text(encoding="utf-8"))
+    assert metadata["stop_reason_code"] == "completed"
+    assert metadata["auto_resume_count"] == 2
+    events = db.list_events_for_run(run["id"])
+    assert len([event for event in events if event.event_type == "run.resumed"]) == 2
