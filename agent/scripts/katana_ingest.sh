@@ -99,6 +99,9 @@ ingest_request() {
     if is_katana_noise_path "$url_path"; then
         return 0
     fi
+    if is_katana_low_signal_realtime_url "$url"; then
+        return 0
+    fi
 
     query_params=$(extract_query_params "$url")
     path_params=$(extract_path_params "$url_path")

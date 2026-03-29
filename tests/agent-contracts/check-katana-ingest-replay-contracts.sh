@@ -65,15 +65,18 @@ PY
 KATANA_INGEST_SKIP_START=1 KATANA_INGEST_ONESHOT=1 "$ROOT/agent/scripts/katana_ingest.sh" "$ENG_DIR" >/dev/null
 
 total_cases="$(sqlite3 "$ENG_DIR/cases.db" 'select count(*) from cases;')"
-[[ "$total_cases" -ge 3 ]] || {
-  echo "expected katana replay to ingest top-level + xhr requests, got $total_cases cases" >&2
+[[ "$total_cases" -ge 2 ]] || {
+  echo "expected katana replay to ingest top-level + high-signal xhr requests, got $total_cases cases" >&2
   exit 1
 }
 
 sqlite3 "$ENG_DIR/cases.db" 'select source from cases order by source;' | grep -qx 'katana'
 sqlite3 "$ENG_DIR/cases.db" 'select source from cases order by source;' | grep -qx 'katana-xhr'
 sqlite3 "$ENG_DIR/cases.db" 'select url from cases order by url;' | grep -q '/rest/admin/application-version'
-sqlite3 "$ENG_DIR/cases.db" 'select url from cases order by url;' | grep -q '/socket.io/'
+if sqlite3 "$ENG_DIR/cases.db" 'select url from cases order by url;' | grep -q '/socket.io/'; then
+  echo "expected katana replay to suppress low-signal socket.io polling discoveries" >&2
+  exit 1
+fi
 root_path="$(sqlite3 "$ENG_DIR/cases.db" "select url_path from cases where source='katana' order by id limit 1;")"
 [[ "$root_path" == "/" ]] || {
   echo "expected top-level katana request to normalize to /, got: $root_path" >&2
