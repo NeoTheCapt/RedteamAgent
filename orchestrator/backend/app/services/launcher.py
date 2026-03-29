@@ -345,6 +345,42 @@ def _terminal_reason(
     return ("runtime_exit_failure", f"Runtime exited with non-zero status {return_code}.", "Runtime exited with failure.")
 
 
+def _terminal_reason_from_artifacts(run: Run) -> tuple[bool, str, str, str]:
+    completion_ok, completion_reason = engagement_completion_state(run)
+    init_only_exit = _init_only_exit(run)
+    succeeded = completion_ok and not init_only_exit
+    if succeeded:
+        return (succeeded, *_terminal_reason(
+            succeeded=True,
+            return_code=0,
+            completion_reason=completion_reason,
+            init_only_exit=init_only_exit,
+        ))
+
+    engagement_dir = _active_engagement_dir(run)
+    queue_reason = ""
+    if engagement_dir is not None:
+        pending_cases, processing_cases = _count_remaining_cases(engagement_dir / "cases.db")
+        if pending_cases or processing_cases:
+            queue_reason = f"Queue still has pending={pending_cases} processing={processing_cases}."
+
+    inferred_reason = queue_reason or completion_reason
+    if init_only_exit or inferred_reason:
+        return (succeeded, *_terminal_reason(
+            succeeded=False,
+            return_code=0,
+            completion_reason=inferred_reason,
+            init_only_exit=init_only_exit,
+        ))
+    return (succeeded, *_terminal_reason(
+        succeeded=False,
+        return_code=None,
+        completion_reason=completion_reason,
+        init_only_exit=init_only_exit,
+        disappeared=True,
+    ))
+
+
 def _sync_agent_source_into_workspace(run: Run) -> None:
     source_root = Path(settings.agent_source_dir)
     workspace_root = workspace_root_for(run)
@@ -812,15 +848,9 @@ def _supervise_container(
             break
         if status is None:
             phase, _ = _heartbeat_context(run)
-            reason_code, reason_text, summary = _terminal_reason(
-                succeeded=False,
-                return_code=None,
-                completion_reason="",
-                init_only_exit=False,
-                disappeared=True,
-            )
-            _append_runtime_event(run, "run.failed", phase, summary)
-            terminal = db.update_run_status(run.id, "failed")
+            succeeded, reason_code, reason_text, summary = _terminal_reason_from_artifacts(run)
+            _append_runtime_event(run, "run.completed" if succeeded else "run.failed", phase, summary)
+            terminal = db.update_run_status(run.id, "completed" if succeeded else "failed")
             _write_run_terminal_reason(terminal, reason_code=reason_code, reason_text=reason_text)
             break
         time.sleep(heartbeat_interval)
