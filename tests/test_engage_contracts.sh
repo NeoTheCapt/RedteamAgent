@@ -84,6 +84,16 @@ if ! grep -q 'Never launch long multi-endpoint bundles, unbounded loops, or back
 fi
 pass "operator prompt forbids unbounded surface follow-up probing"
 
+if ! grep -q 'do not stop after only writing a log entry like `Credential validation dispatch`' "$OPERATOR_TXT"; then
+  fail "operator prompt does not forbid log-only credential validation stalls"
+fi
+pass "operator prompt forbids log-only credential validation stalls"
+
+if ! grep -q 'If credentials are discovered during consume-test, write them to auth.json and in that SAME turn dispatch a bounded exploit-developer auth-validation task' "$ENGAGE_MD"; then
+  fail "engage command is missing same-turn credential validation guidance"
+fi
+pass "engage command requires same-turn credential validation"
+
 if ! grep -q 'authorized lab mirrors resolved inside the harness' "$OPERATOR_TXT"; then
   fail "operator prompt is missing explicit branded-target lab-mirror authorization guidance"
 fi
