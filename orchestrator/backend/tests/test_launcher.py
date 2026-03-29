@@ -377,6 +377,46 @@ def test_auto_launch_injects_project_model_and_provider_env(monkeypatch):
     assert "OPENAI_MODEL=gpt-5.4" in joined
 
 
+def test_start_run_runtime_rewrites_loopback_target_for_container_command(monkeypatch):
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+
+    captured: dict[str, list[str]] = {}
+
+    class FakeLogFollower:
+        def poll(self):
+            return 0
+
+    def fake_run(command, **kwargs):
+        if command[:3] == ["docker", "run", "-d"]:
+            captured["command"] = command
+            return subprocess.CompletedProcess(command, 0, stdout="container-123\n", stderr="")
+        if command[:3] == ["docker", "rm", "-f"]:
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("app.services.launcher.subprocess.run", fake_run)
+    monkeypatch.setattr("app.services.launcher.subprocess.Popen", lambda *args, **kwargs: FakeLogFollower())
+    monkeypatch.setattr("app.services.launcher.Thread", lambda *args, **kwargs: SimpleNamespace(start=lambda: None))
+    object.__setattr__(settings, "auto_launch_runs", True)
+
+    try:
+        run = create_run(client, token, project["id"], "http://127.0.0.1:8000")
+    finally:
+        object.__setattr__(settings, "auto_launch_runs", False)
+
+    assert run["status"] == "running"
+    command = captured["command"]
+    joined = " ".join(command)
+    assert "/autoengage http://host.docker.internal:8000" in joined
+    assert "/autoengage http://127.0.0.1:8000" not in joined
+
+    metadata = json.loads(Path(run["engagement_root"], "run.json").read_text(encoding="utf-8"))
+    assert metadata["target"] == "http://127.0.0.1:8000"
+
+
+
 def test_process_metadata_redacts_sensitive_env(monkeypatch):
     client = TestClient(app)
     token = register_and_login(client, "alice")
