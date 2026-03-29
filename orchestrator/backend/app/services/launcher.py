@@ -248,6 +248,10 @@ def _canonical_scope_status(value: object) -> str:
     return normalized
 
 
+def _should_persist_loopback_rewrite(run: Run | None) -> bool:
+    return run is None or run.status in {"failed", "completed"}
+
+
 def _normalize_scope_file(scope_path: Path, *, run: Run | None = None) -> dict[str, object] | None:
     if not scope_path.exists():
         return None
@@ -276,15 +280,16 @@ def _normalize_scope_file(scope_path: Path, *, run: Run | None = None) -> dict[s
             payload["phases_completed"] = normalized
             changed = True
 
+    disk_payload = payload
     context = _loopback_display_context(run)
-    rewritten_payload = _rewrite_artifact_value(payload, context)
-    if rewritten_payload != payload:
-        payload = rewritten_payload
+    returned_payload = _rewrite_artifact_value(payload, context)
+    if returned_payload != payload and _should_persist_loopback_rewrite(run):
+        disk_payload = returned_payload
         changed = True
 
     if changed:
-        scope_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
-    return payload
+        scope_path.write_text(json.dumps(disk_payload, indent=2) + "\n", encoding="utf-8")
+    return returned_payload
 
 
 def _active_name_to_engagement_dir(workspace: Path, active_name: str) -> Path:
@@ -851,7 +856,8 @@ def normalize_active_scope(run: Run) -> None:
     _normalize_text_artifact(engagement_dir / "findings.md", context)
     _normalize_text_artifact(engagement_dir / "report.md", context)
     _normalize_jsonl_artifact(engagement_dir / "scans" / "katana_output.jsonl", context, redact_headers=True)
-    _normalize_cases_db(engagement_dir / "cases.db", context)
+    if _should_persist_loopback_rewrite(run):
+        _normalize_cases_db(engagement_dir / "cases.db", context)
 
 
 def _write_run_terminal_reason(run: Run, *, reason_code: str, reason_text: str) -> None:
