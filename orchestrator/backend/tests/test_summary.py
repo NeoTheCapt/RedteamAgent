@@ -402,6 +402,76 @@ def test_run_summary_keeps_late_source_analyzer_log_projection_in_consume_test()
     assert all(not (item["phase"] == "recon" and item["state"] == "active") for item in payload["phases"])
 
 
+def test_run_summary_prefers_processing_agents_over_stale_runtime_phase_and_completed_operator_task():
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "http://127.0.0.1:8000")
+    active_dir = setup_active_engagement(run)
+    (active_dir / "scope.json").write_text(
+        json.dumps(
+            {
+                "hostname": "127.0.0.1",
+                "status": "in_progress",
+                "phases_completed": ["recon", "collect"],
+                "current_phase": "consume_test",
+            }
+        ),
+        encoding="utf-8",
+    )
+    with sqlite3.connect(active_dir / "cases.db") as connection:
+        connection.execute(
+            "CREATE TABLE cases (method TEXT, url TEXT, type TEXT NOT NULL, status TEXT NOT NULL, assigned_agent TEXT, source TEXT)"
+        )
+        connection.executemany(
+            "INSERT INTO cases (method, url, type, status, assigned_agent, source) VALUES (?, ?, ?, ?, ?, ?)",
+            [
+                ("GET", "http://127.0.0.1:8000/api/users", "api", "processing", "vulnerability-analyst", "katana"),
+                ("GET", "http://127.0.0.1:8000/api/orders", "api", "processing", "vulnerability-analyst", "katana-xhr"),
+                ("GET", "http://127.0.0.1:8000/app.js", "javascript", "processing", "source-analyzer", "katana"),
+            ],
+        )
+        connection.commit()
+
+    for event in [
+        {
+            "event_type": "phase.completed",
+            "phase": "recon",
+            "task_name": "recon",
+            "agent_name": "operator",
+            "summary": "recon completed",
+        },
+        {
+            "event_type": "task.completed",
+            "phase": "consume-test",
+            "task_name": "bash",
+            "agent_name": "operator",
+            "summary": "Log final consume batch dispatch completed",
+        },
+    ]:
+        response = client.post(
+            f"/projects/{project['id']}/runs/{run['id']}/events",
+            headers={"Authorization": f"Bearer {token}"},
+            json=event,
+        )
+        assert response.status_code == 201
+
+    response = client.get(
+        f"/projects/{project['id']}/runs/{run['id']}/summary",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+
+    assert payload["overview"]["current_phase"] == "consume-test"
+    assert payload["current"]["phase"] == "consume-test"
+    assert payload["current"]["agent_name"] == "vulnerability-analyst"
+    assert payload["current"]["summary"] == "Processing 2 queued case(s)"
+    assert any(item["phase"] == "consume-test" and item["state"] == "active" for item in payload["phases"])
+    assert all(not (item["phase"] == "recon" and item["state"] == "active") for item in payload["phases"])
+
+
+
 def test_run_summary_prefers_live_exploit_phase_over_stale_scope_phase():
     client = TestClient(app)
     token = register_and_login(client, "alice")

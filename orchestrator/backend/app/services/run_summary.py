@@ -218,6 +218,13 @@ def _normalize_phase(phase: str | None) -> str:
     return normalized
 
 
+def _phase_index(phase: str) -> int:
+    try:
+        return PHASE_ORDER.index(phase)
+    except ValueError:
+        return -1
+
+
 def _event_phase(event) -> str:
     phase = _normalize_phase(getattr(event, "phase", "unknown"))
     if phase != "unknown":
@@ -428,7 +435,7 @@ def _latest_active_task_phase(events: list, scope_phase: str) -> str:
     return _resolved_event_phase(latest_active, scope_phase)
 
 
-def _effective_current_phase(scope: dict, events: list, run_status: str) -> str:
+def _effective_current_phase(scope: dict, events: list, processing_agents: list[dict], run_status: str) -> str:
     scope_phase = _normalize_phase(scope.get("current_phase")) if scope else "unknown"
     if _is_terminal_run_status(run_status):
         return scope_phase
@@ -436,17 +443,6 @@ def _effective_current_phase(scope: dict, events: list, run_status: str) -> str:
     active_task_phase = _latest_active_task_phase(events, scope_phase)
     if active_task_phase != "unknown":
         return active_task_phase
-
-    latest_runtime_phase = next(
-        (
-            _event_phase(event)
-            for event in reversed(events)
-            if getattr(event, "event_type", "") in {"phase.started", "phase.completed"} and _event_phase(event) != "unknown"
-        ),
-        "unknown",
-    )
-    if latest_runtime_phase != "unknown":
-        return latest_runtime_phase
 
     latest_task_phase = next(
         (
@@ -459,6 +455,28 @@ def _effective_current_phase(scope: dict, events: list, run_status: str) -> str:
     )
     if latest_task_phase != "unknown":
         return latest_task_phase
+
+    processing_phase = next(
+        (
+            _fallback_agent_phase(agent.get("agent_name", ""), scope_phase)
+            for agent in sorted(processing_agents or [], key=lambda item: (-int(item.get("count", 0)), item.get("agent_name", "")))
+            if _fallback_agent_phase(agent.get("agent_name", ""), scope_phase) != "unknown"
+        ),
+        "unknown",
+    )
+    if processing_phase != "unknown":
+        return processing_phase
+
+    latest_runtime_phase = next(
+        (
+            _event_phase(event)
+            for event in reversed(events)
+            if getattr(event, "event_type", "") in {"phase.started", "phase.completed"} and _event_phase(event) != "unknown"
+        ),
+        "unknown",
+    )
+    if latest_runtime_phase != "unknown":
+        return latest_runtime_phase
 
     return scope_phase
 
@@ -601,7 +619,13 @@ def _build_agent_cards(
     return cards
 
 
-def _current_activity(events: list, scope: dict, run_status: str, stop_reason_text: str = "") -> dict:
+def _current_activity(
+    events: list,
+    scope: dict,
+    processing_agents: list[dict],
+    run_status: str,
+    stop_reason_text: str = "",
+) -> dict:
     scope_phase = _normalize_phase(scope.get("current_phase")) if scope else "unknown"
     if _is_terminal_run_status(run_status):
         terminal_summary = stop_reason_text.strip() or (
@@ -633,6 +657,20 @@ def _current_activity(events: list, scope: dict, run_status: str, stop_reason_te
             "task_name": getattr(latest_active, "task_name", ""),
             "agent_name": getattr(latest_active, "agent_name", ""),
             "summary": getattr(latest_active, "summary", "Waiting for events"),
+        }
+
+    if processing_agents:
+        primary = max(
+            processing_agents,
+            key=lambda item: (int(item.get("count", 0)), _phase_index(_fallback_agent_phase(item.get("agent_name", ""), scope_phase))),
+        )
+        agent_name = primary.get("agent_name", "")
+        count = int(primary.get("count", 0))
+        return {
+            "phase": _fallback_agent_phase(agent_name, scope_phase),
+            "task_name": agent_name,
+            "agent_name": agent_name,
+            "summary": f"Processing {count} queued case(s)",
         }
 
     latest_task = next((event for event in reversed(events) if event.event_type.startswith("task.")), None)
@@ -743,16 +781,17 @@ def summarize_run(project_id: int, run_id: int, user: User) -> RunSummary:
     scope = _load_json(active_root / "scope.json")
     run_metadata = _load_json(run_root / "run.json")
     cases = _load_cases_metrics(cases_db)
+    processing_agents = cases.get("processing_agents", [])
     surfaces = _load_surface_metrics(active_root / "surfaces.jsonl")
     findings_count = _count_findings(active_root / "findings.md")
     events = list_events_for_run(project_id, run_id, user)
-    effective_current_phase = _effective_current_phase(scope, events, run.status)
-    agents = _build_agent_cards(events, scope, cases.get("processing_agents", []), run.status)
+    effective_current_phase = _effective_current_phase(scope, events, processing_agents, run.status)
+    agents = _build_agent_cards(events, scope, processing_agents, run.status)
     phases = _build_phase_cards(scope, events, agents, run.status, effective_current_phase)
 
     latest_task = next((event for event in reversed(events) if event.event_type.startswith("task.")), None)
     latest_phase = next((event for event in reversed(events) if event.event_type.startswith("phase.")), None)
-    current = _current_activity(events, scope, run.status, str(run_metadata.get("stop_reason_text", "")))
+    current = _current_activity(events, scope, processing_agents, run.status, str(run_metadata.get("stop_reason_text", "")))
 
     return RunSummary(
         target=_build_target_card(run, scope, active_root),
