@@ -63,6 +63,14 @@ KATANA_OUTPUT="$ENGAGEMENT_DIR/scans/katana_output.jsonl"
 touch "$KATANA_OUTPUT"
 
 count=0
+LAST_OFFSET=0
+INGEST_REMAINDER=""
+
+maybe_log_progress() {
+    if (( count > 0 && count % 50 == 0 )); then
+        echo "[katana_ingest] Ingested $count cases so far..."
+    fi
+}
 
 ingest_request() {
     local method="${1:-GET}"
@@ -72,7 +80,7 @@ ingest_request() {
     local source_name="${5:-katana}"
     local body_params="{}"
     local cookie_params="{}"
-    local query_params path_params url_path case_type params_sig
+    local query_params path_params url_path case_type params_sig inserted
 
     [[ -n "$url" ]] || return 0
     method=$(printf '%s' "$method" | tr '[:lower:]' '[:upper:]')
@@ -97,16 +105,19 @@ ingest_request() {
     case_type=$(classify_type "$method" "$url_path" "$content_type" "")
     params_sig=$(generate_params_sig "$query_params" "$body_params")
 
-    db_insert_case "$DB_PATH" \
+    if ! inserted="$(db_insert_case "$DB_PATH" \
         "$method" "$url" "$url_path" \
         "$query_params" "$body_params" "$path_params" "$cookie_params" \
         "" "" "$content_type" "0" \
         "$resp_status" "" "0" "" \
-        "$case_type" "$source_name" "$params_sig"
+        "$case_type" "$source_name" "$params_sig")"; then
+        return 0
+    fi
 
-    count=$((count + 1))
-    if (( count % 50 == 0 )); then
-        echo "[katana_ingest] Ingested $count cases so far..."
+    inserted=$(printf '%s' "$inserted" | tr -d '[:space:]')
+    if [[ "$inserted" =~ ^[0-9]+$ ]] && (( inserted > 0 )); then
+        count=$((count + inserted))
+        maybe_log_progress
     fi
 }
 
@@ -168,36 +179,95 @@ ingest_katana_line() {
     )
 }
 
-ingest_output_snapshot() {
+read_new_output_bytes() {
     local output_file="$1"
-    local line
+    local current_size lines_file remainder_file line
+
+    current_size="$(wc -c < "$output_file" | tr -d '[:space:]')"
+    current_size="${current_size:-0}"
+
+    if (( current_size < LAST_OFFSET )); then
+        LAST_OFFSET=0
+        INGEST_REMAINDER=""
+    fi
+
+    if (( current_size == LAST_OFFSET )); then
+        return 0
+    fi
+
+    lines_file="$(mktemp)"
+    remainder_file="$(mktemp)"
+
+    python3 - "$output_file" "$LAST_OFFSET" "$current_size" "$INGEST_REMAINDER" "$lines_file" "$remainder_file" <<'PY'
+from pathlib import Path
+import sys
+
+output_path = Path(sys.argv[1])
+start = int(sys.argv[2])
+end = int(sys.argv[3])
+carry = sys.argv[4].encode("utf-8")
+lines_path = Path(sys.argv[5])
+remainder_path = Path(sys.argv[6])
+
+data = carry + output_path.read_bytes()[start:end]
+lines = []
+cursor = 0
+while True:
+    newline = data.find(b"\n", cursor)
+    if newline < 0:
+        remainder = data[cursor:]
+        break
+    line = data[cursor:newline]
+    if line.endswith(b"\r"):
+        line = line[:-1]
+    lines.append(line)
+    cursor = newline + 1
+else:
+    remainder = b""
+
+if lines:
+    lines_path.write_bytes(b"\n".join(lines) + b"\n")
+else:
+    lines_path.write_bytes(b"")
+remainder_path.write_bytes(remainder)
+PY
+
+    LAST_OFFSET="$current_size"
     while IFS= read -r line || [[ -n "$line" ]]; do
+        [[ -n "$line" ]] || continue
         ingest_katana_line "$line"
-    done < "$output_file"
+    done < "$lines_file"
+
+    if [[ -s "$remainder_file" ]]; then
+        INGEST_REMAINDER="$(cat "$remainder_file")"
+    else
+        INGEST_REMAINDER=""
+    fi
+
+    rm -f "$lines_file" "$remainder_file"
 }
 
 # --- Start Katana container unless explicitly skipped for re-ingest/verification ---
 if [[ "${KATANA_INGEST_SKIP_START:-0}" != "1" ]]; then
-    start_katana "$TARGET" "${EXTRA_FLAGS[@]}"
+    start_katana "$TARGET" "${EXTRA_FLAGS[@]+"${EXTRA_FLAGS[@]}"}"
 fi
 
 # --- Monitor output and ingest ---
 echo "[katana_ingest] Monitoring $KATANA_OUTPUT for crawl results..."
 
 if [[ "${KATANA_INGEST_ONESHOT:-0}" == "1" ]]; then
-    ingest_output_snapshot "$KATANA_OUTPUT"
+    read_new_output_bytes "$KATANA_OUTPUT"
+    if [[ -n "$INGEST_REMAINDER" ]]; then
+        ingest_katana_line "$INGEST_REMAINDER"
+        INGEST_REMAINDER=""
+    fi
 else
-    # Katana may leave the newest JSON row unterminated for long stretches. Re-scan the file
-    # whenever its size changes so already-written crawl results are ingested without waiting
-    # for a trailing newline.
-    last_size=""
+    # Katana may leave the newest JSON row unterminated for long stretches. Read only the
+    # newly appended bytes on each size change and carry an unfinished trailing row forward
+    # until it is completed, instead of re-ingesting the whole file.
     poll_seconds="${KATANA_INGEST_POLL_SECONDS:-2}"
     while true; do
-        current_size="$(wc -c < "$KATANA_OUTPUT" | tr -d '[:space:]')"
-        if [[ "$current_size" != "$last_size" ]]; then
-            ingest_output_snapshot "$KATANA_OUTPUT"
-            last_size="$current_size"
-        fi
+        read_new_output_bytes "$KATANA_OUTPUT"
         sleep "$poll_seconds"
     done
 fi
