@@ -226,7 +226,7 @@ def test_list_runs_marks_stalled_running_process_as_failed(monkeypatch):
     runtime_dir.mkdir(parents=True, exist_ok=True)
     process_log = runtime_dir / "process.log"
     process_log.write_text("stalled\n", encoding="utf-8")
-    old_age = datetime.now().timestamp() - 240
+    old_age = datetime.now().timestamp() - 950
     os.utime(process_log, (old_age, old_age))
 
     monkeypatch.setattr("app.services.runs.locate_runtime_pid", lambda _run: 12345)
@@ -261,7 +261,7 @@ def test_list_runs_marks_processing_queue_stall_failed_even_if_crawler_files_kee
     runtime_dir.mkdir(parents=True, exist_ok=True)
     process_log = runtime_dir / "process.log"
     process_log.write_text("consume-test stalled\n", encoding="utf-8")
-    old_epoch = datetime.now().timestamp() - 700
+    old_epoch = datetime.now().timestamp() - 950
     os.utime(process_log, (old_epoch, old_epoch))
 
     workspace = run_root / "workspace"
@@ -328,7 +328,7 @@ def test_list_runs_marks_pending_queue_stall_failed_even_if_only_exploit_artifac
     runtime_dir.mkdir(parents=True, exist_ok=True)
     process_log = runtime_dir / "process.log"
     process_log.write_text("exploit dispatched\n", encoding="utf-8")
-    old_epoch = datetime.now().timestamp() - 700
+    old_epoch = datetime.now().timestamp() - 950
     os.utime(process_log, (old_epoch, old_epoch))
 
     workspace = run_root / "workspace"
@@ -380,6 +380,70 @@ def test_list_runs_marks_pending_queue_stall_failed_even_if_only_exploit_artifac
     metadata = json.loads((run_root / "run.json").read_text(encoding="utf-8"))
     assert metadata["stop_reason_code"] == "queue_stalled"
     assert "pending queue items remained undispatched" in metadata["stop_reason_text"]
+
+
+def test_list_runs_keeps_processing_queue_under_15_minute_watchdog_running(monkeypatch):
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+
+    create_run = client.post(
+        f"/projects/{project['id']}/runs",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"target": "https://example.com"},
+    )
+    assert create_run.status_code == 201
+    run = create_run.json()
+    db.update_run_status(run["id"], "running")
+
+    run_root = Path(run["engagement_root"])
+    runtime_dir = run_root / "runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    process_log = runtime_dir / "process.log"
+    process_log.write_text("consume-test still working\n", encoding="utf-8")
+    old_epoch = datetime.now().timestamp() - 700
+    os.utime(process_log, (old_epoch, old_epoch))
+
+    workspace = run_root / "workspace"
+    engagement_dir = workspace / "engagements" / "2026-03-28-000000-example"
+    (engagement_dir / "scans").mkdir(parents=True, exist_ok=True)
+    (workspace / "engagements" / ".active").write_text(
+        "engagements/2026-03-28-000000-example\n",
+        encoding="utf-8",
+    )
+    scope_path = engagement_dir / "scope.json"
+    scope_path.write_text(
+        json.dumps(
+            {
+                "status": "in_progress",
+                "current_phase": "consume_test",
+                "phases_completed": ["recon", "collect"],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    os.utime(scope_path, (old_epoch, old_epoch))
+    (engagement_dir / "log.md").write_text("processing queue\n", encoding="utf-8")
+    os.utime(engagement_dir / "log.md", (old_epoch, old_epoch))
+    with sqlite3.connect(engagement_dir / "cases.db") as connection:
+        connection.execute(
+            "CREATE TABLE cases (id INTEGER PRIMARY KEY AUTOINCREMENT, status TEXT NOT NULL)"
+        )
+        connection.execute("INSERT INTO cases(status) VALUES ('processing')")
+        connection.commit()
+
+    monkeypatch.setattr("app.services.runs.locate_runtime_pid", lambda _run: 12345)
+    stopped: list[int] = []
+    monkeypatch.setattr("app.services.runs.stop_run_runtime", lambda reconciled_run: stopped.append(reconciled_run.id))
+
+    runs_response = client.get(
+        f"/projects/{project['id']}/runs",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert runs_response.status_code == 200
+    assert runs_response.json()[0]["status"] == "running"
+    assert stopped == []
 
 
 def test_list_runs_revives_live_failed_run(monkeypatch):
