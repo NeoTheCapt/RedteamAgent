@@ -56,6 +56,14 @@ katana_request_should_ingest() {
     content_type="$(printf '%s' "$request_json" | jq -r '.content_type // empty' 2>/dev/null || true)"
     error_text="$(printf '%s' "$request_json" | jq -r '.error // empty' 2>/dev/null || true)"
 
+    if [[ -n "$error_text" ]] \
+        && katana_error_is_recoverable_discovery "$error_text" \
+        && [[ "$tag" == "html" ]] \
+        && [[ "$attribute" == "regex" ]] \
+        && is_katana_internal_source_path "$url_path"; then
+        return 1
+    fi
+
     if is_katana_noise_source "$source_ref" "$tag" "$attribute" "$content_type" "$error_text"; then
         return 1
     fi
