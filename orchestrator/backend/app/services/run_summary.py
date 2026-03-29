@@ -783,6 +783,29 @@ def _load_runtime_model_verification(run_root: Path, project) -> dict:
     }
 
 
+def _sync_run_metadata_projection(run, run_root: Path, current: dict, phases: list[dict], agents: list[dict]) -> None:
+    metadata_path = run_root / "run.json"
+    if not metadata_path.exists():
+        return
+    try:
+        payload = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        payload = {}
+    payload.update(
+        {
+            "run_id": run.id,
+            "target": run.target,
+            "status": run.status,
+            "engagement_root": run.engagement_root,
+            "updated_at": run.updated_at,
+            "current_action": current,
+            "phase_waterfall": phases,
+            "agents": agents,
+        }
+    )
+    metadata_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
 def summarize_run(project_id: int, run_id: int, user: User) -> RunSummary:
     run = _run_or_404(project_id, run_id, user)
     project = _project_or_404(project_id, user)
@@ -803,6 +826,7 @@ def summarize_run(project_id: int, run_id: int, user: User) -> RunSummary:
     latest_task = next((event for event in reversed(events) if event.event_type.startswith("task.")), None)
     latest_phase = next((event for event in reversed(events) if event.event_type.startswith("phase.")), None)
     current = _current_activity(events, scope, processing_agents, run.status, str(run_metadata.get("stop_reason_text", "")))
+    _sync_run_metadata_projection(run, run_root, current, phases, agents)
 
     return RunSummary(
         target=_build_target_card(run, scope, active_root),

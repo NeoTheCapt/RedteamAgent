@@ -14,6 +14,7 @@ from ..models.project import Project
 from ..models.run import Run
 from ..models.user import User
 from .launcher import (
+    RUNTIME_PID_LOOKUP_UNAVAILABLE,
     _active_engagement_dir,
     _last_logged_stop_metadata,
     _write_run_terminal_reason,
@@ -180,6 +181,8 @@ def _reconcile_run_status(run: Run) -> Run:
     normalize_active_scope(run)
     pid = locate_runtime_pid(run)
     completion_ok, completion_reason = engagement_completion_state(run)
+    if pid == RUNTIME_PID_LOOKUP_UNAVAILABLE and not completion_ok:
+        return run
     if completion_ok:
         completed = run if run.status == "completed" else db.update_run_status(run.id, "completed")
         _write_run_terminal_reason(
@@ -187,7 +190,7 @@ def _reconcile_run_status(run: Run) -> Run:
             reason_code="completed",
             reason_text="Run completed successfully.",
         )
-        if pid is not None:
+        if pid not in {None, RUNTIME_PID_LOOKUP_UNAVAILABLE}:
             stop_run_runtime(completed)
         return completed
 
