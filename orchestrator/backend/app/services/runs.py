@@ -22,8 +22,10 @@ from .launcher import (
     engagement_completion_state,
     locate_runtime_pid,
     normalize_active_scope,
+    opencode_home_root_for,
     prepare_run_runtime,
     process_log_path_for,
+    process_metadata_path_for,
     start_run_runtime,
     stop_run_runtime,
 )
@@ -104,19 +106,19 @@ def _path_mtime(path: Path) -> datetime | None:
 def _latest_runtime_activity_at(run: Run) -> datetime | None:
     latest = _path_mtime(process_log_path_for(run))
 
-    scope_path = _active_scope_path(run)
-    if scope_path is None or not scope_path.exists():
-        return latest
+    process_metadata = _path_mtime(process_metadata_path_for(run))
+    if process_metadata is not None and (latest is None or process_metadata > latest):
+        latest = process_metadata
 
-    active_dir = scope_path.parent
-    for path in active_dir.rglob("*"):
-        if not path.is_file():
-            continue
-        candidate = _path_mtime(path)
-        if candidate is None:
-            continue
-        if latest is None or candidate > latest:
-            latest = candidate
+    opencode_logs_root = opencode_home_root_for(run) / "log"
+    if opencode_logs_root.exists():
+        for path in opencode_logs_root.glob("*.log"):
+            candidate = _path_mtime(path)
+            if candidate is None:
+                continue
+            if latest is None or candidate > latest:
+                latest = candidate
+
     return latest
 
 
