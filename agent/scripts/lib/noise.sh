@@ -49,6 +49,37 @@ is_katana_internal_source_path() {
     esac
 }
 
+is_katana_javascript_source_ref() {
+    local source_ref="${1:-}"
+    local source_path
+    source_path="$(_katana_urlish_path "$source_ref")"
+    source_path="$(printf '%s' "$source_path" | tr '[:upper:]' '[:lower:]')"
+
+    case "$source_path" in
+        *.js|*.mjs|*.cjs|*.jsx|*.js.map|*.mjs.map|*.cjs.map|*.jsx.map)
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+is_katana_api_like_path() {
+    local path="${1:-}"
+    local path_lower
+    path_lower="$(printf '%s' "$path" | tr '[:upper:]' '[:lower:]')"
+
+    case "$path_lower" in
+        /api/*|/rest/*|/graphql*|/graphiql*|/priapi/*|/v[0-9]/*)
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
 is_katana_noise_source() {
     local source_ref="${1:-}"
     local _tag="${2:-}"
