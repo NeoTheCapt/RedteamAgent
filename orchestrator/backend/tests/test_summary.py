@@ -1261,3 +1261,65 @@ def test_run_summary_normalizes_loopback_runtime_artifacts_and_redacts_katana_he
     assert "secret-jwt" not in katana_text
     assert "secret-cookie" not in katana_text
     assert '<redacted>' in katana_text
+
+
+def test_run_summary_backfills_surface_candidates_from_process_log_without_duplicates():
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "https://target.example")
+    active_dir = setup_active_engagement(run)
+
+    (active_dir / "scope.json").write_text(
+        json.dumps(
+            {
+                "target": "https://target.example",
+                "hostname": "target.example",
+                "port": 443,
+                "scope": ["target.example", "*.target.example"],
+                "status": "in_progress",
+                "current_phase": "recon",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (active_dir / "surfaces.jsonl").write_text("", encoding="utf-8")
+
+    process_log = Path(run["engagement_root"], "runtime", "process.log")
+    process_log.parent.mkdir(parents=True, exist_ok=True)
+    process_log.write_text(
+        json.dumps(
+            {
+                "type": "tool_use",
+                "part": {
+                    "state": {
+                        "output": (
+                            "[source-analyzer] #### Surface Candidates\n"
+                            "[source-analyzer] {\"surface_type\":\"account_recovery\",\"target\":\"GET /rest/user/security-question?email=... + POST /rest/user/reset-password\",\"source\":\"source-analyzer\",\"rationale\":\"bundle implements recover-by-email security-question lookup and password reset flow\",\"evidence_ref\":\"main.js\",\"status\":\"discovered\"}\n"
+                            "[source-analyzer] {\"surface_type\":\"workflow_token\",\"target\":\"2FA tmpToken -> /2fa/enter\",\"source\":\"source-analyzer\",\"rationale\":\"login handler stores tmpToken before redirecting into the MFA workflow\",\"evidence_ref\":\"main.js\",\"status\":\"discovered\"}\n"
+                            "\n"
+                            "[source-analyzer] #### Findings\n"
+                        )
+                    }
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    for _ in range(2):
+        response = client.get(
+            f"/projects/{project['id']}/runs/{run['id']}/summary",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert response.status_code == 200
+
+    payload = response.json()
+    assert payload["coverage"]["total_surfaces"] == 2
+    assert any(item["type"] == "account_recovery" and item["count"] == 1 for item in payload["coverage"]["surface_types"])
+    assert any(item["type"] == "workflow_token" and item["count"] == 1 for item in payload["coverage"]["surface_types"])
+
+    surfaces_rows = [json.loads(line) for line in (active_dir / "surfaces.jsonl").read_text(encoding="utf-8").splitlines() if line.strip()]
+    assert len(surfaces_rows) == 2
+    assert {row["surface_type"] for row in surfaces_rows} == {"account_recovery", "workflow_token"}
