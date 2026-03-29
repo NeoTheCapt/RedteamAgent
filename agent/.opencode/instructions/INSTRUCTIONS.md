@@ -166,6 +166,11 @@ General:
   ```
 - NEVER curl the same URL more than once. If you already fetched it, use the local copy.
 - At the start of source analysis, download ALL JS files in one batch, then analyze locally.
+- NEVER inspect OpenCode's own tool-output store (`/root/.local/share/opencode`, `tool-output/`, or `tool_*` include handles)
+  with `grep`, `read`, or `glob` during unattended runs. Those paths can trigger approval-gated
+  `external_directory` checks and hang the run. If a tool response is truncated, immediately rerun the
+  command so it writes to an engagement-local file under `downloads/`, `scans/`, or `$ENGAGEMENT_DIR/tmp.*`,
+  then inspect that local file instead.
 
 **Use wordlists and tools for discovery:**
 - For >10 paths to check, create a temporary wordlist and use `ffuf` instead of curl loops.
