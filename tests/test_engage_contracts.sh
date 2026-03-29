@@ -68,3 +68,33 @@ if ! grep -q "core loop starts only after /engage initialization completes" "$OP
   fail "operator prompt does not explicitly delay the core loop until init completes"
 fi
 pass "operator prompt delays the core loop until initialization completes"
+
+if ! grep -q "Reuse existing evidence before issuing new probes\." "$OPERATOR_TXT"; then
+  fail "operator prompt is missing bounded surface follow-up guidance"
+fi
+pass "operator prompt requires reusing existing evidence before new probes"
+
+if ! grep -q -- '--connect-timeout 5' "$OPERATOR_TXT" || ! grep -q -- '--max-time 20' "$OPERATOR_TXT"; then
+  fail "operator prompt is missing explicit timeout bounds for ad-hoc run_tool curl validation"
+fi
+pass "operator prompt requires explicit curl timeout bounds during surface follow-up"
+
+if ! grep -q 'Never launch long multi-endpoint bundles, unbounded loops, or background probes during surface-coverage follow-up\.' "$OPERATOR_TXT"; then
+  fail "operator prompt still allows unbounded surface follow-up probing"
+fi
+pass "operator prompt forbids unbounded surface follow-up probing"
+
+if ! grep -q 'authorized lab mirrors resolved inside the harness' "$OPERATOR_TXT"; then
+  fail "operator prompt is missing explicit branded-target lab-mirror authorization guidance"
+fi
+pass "operator prompt treats branded orchestrator targets as authorized lab mirrors"
+
+if ! grep -q 'authorized lab mirrors/local simulations' "$ROOT/agent/.opencode/commands/autoengage.md"; then
+  fail "autoengage command is missing branded-target authorization guidance"
+fi
+pass "autoengage command documents branded-target authorization handling"
+
+if ! grep -q 'authorized lab mirror/local simulation' "$ENGAGE_MD"; then
+  fail "engage command is missing branded-target authorization guidance"
+fi
+pass "engage command treats public-looking orchestrated targets as in-scope lab mirrors"
