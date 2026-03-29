@@ -8,6 +8,8 @@ import signal
 import sqlite3
 import subprocess
 import time
+from collections import deque
+from datetime import datetime
 from threading import Thread
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
@@ -342,12 +344,100 @@ def _path_mtime(path: Path) -> float | None:
         return None
 
 
+def _parse_runtime_activity_timestamp(value: object) -> float | None:
+    if isinstance(value, (int, float)):
+        candidate = float(value)
+        if candidate > 1_000_000_000_000:
+            candidate /= 1000.0
+        return candidate if candidate > 0 else None
+
+    if not isinstance(value, str):
+        return None
+
+    text = value.strip()
+    if not text:
+        return None
+
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%SZ"):
+        try:
+            return datetime.strptime(text, fmt).timestamp()
+        except ValueError:
+            continue
+
+    try:
+        normalized = text.replace("Z", "+00:00")
+        return datetime.fromisoformat(normalized).timestamp()
+    except ValueError:
+        return None
+
+
+def _iter_runtime_activity_timestamps(payload):
+    if isinstance(payload, dict):
+        for key, value in payload.items():
+            if key in {"timestamp", "created_at", "updated_at", "started_at", "ended_at", "completed_at"}:
+                parsed = _parse_runtime_activity_timestamp(value)
+                if parsed is not None:
+                    yield parsed
+            yield from _iter_runtime_activity_timestamps(value)
+    elif isinstance(payload, list):
+        for item in payload:
+            yield from _iter_runtime_activity_timestamps(item)
+
+
+_TEXT_LOG_TIMESTAMP_PATTERN = re.compile(r"\b(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)\b")
+
+
+def _latest_process_log_activity_at(path: Path, *, max_lines: int = 400) -> float | None:
+    if not path.exists() or not path.is_file():
+        return None
+
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as handle:
+            lines = deque(handle, maxlen=max_lines)
+    except OSError:
+        return None
+
+    latest = None
+    for raw_line in lines:
+        stripped = raw_line.strip()
+        if stripped.startswith("{"):
+            try:
+                payload = json.loads(stripped)
+            except json.JSONDecodeError:
+                payload = None
+            if payload is not None:
+                for candidate in _iter_runtime_activity_timestamps(payload):
+                    if latest is None or candidate > latest:
+                        latest = candidate
+                continue
+
+        text_match = _TEXT_LOG_TIMESTAMP_PATTERN.search(stripped)
+        if text_match is None:
+            continue
+        candidate = _parse_runtime_activity_timestamp(text_match.group(1))
+        if candidate is not None and (latest is None or candidate > latest):
+            latest = candidate
+
+    if latest is not None:
+        return latest
+    return _path_mtime(path)
+
+
 def _latest_running_runtime_activity_at(run: Run) -> float | None:
-    latest = _path_mtime(process_log_path_for(run))
+    latest = _latest_process_log_activity_at(process_log_path_for(run))
 
     process_metadata = _path_mtime(process_metadata_path_for(run))
     if process_metadata is not None and (latest is None or process_metadata > latest):
         latest = process_metadata
+
+    opencode_logs_root = opencode_home_root_for(run) / "log"
+    if opencode_logs_root.exists():
+        for path in opencode_logs_root.glob("*.log"):
+            candidate = _latest_process_log_activity_at(path)
+            if candidate is None:
+                continue
+            if latest is None or candidate > latest:
+                latest = candidate
 
     return latest
 

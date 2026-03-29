@@ -279,6 +279,162 @@ def test_supervise_container_stops_live_stalled_runtime(monkeypatch):
     assert metadata["stop_reason_text"] == "Runtime produced no new output before stall timeout elapsed."
 
 
+def test_supervise_container_ignores_replayed_process_log_mtime_when_json_timestamps_are_stale(monkeypatch):
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "https://stalled-replay.example")
+    db.update_run_status(run["id"], "running")
+
+    run_row = db.get_run_by_id(run["id"])
+    assert run_row is not None
+    project_row = db.get_project_by_id(project["id"])
+    assert project_row is not None
+    user_row = db.get_user_by_id(project_row.user_id)
+    assert user_row is not None
+
+    run_root = Path(run["engagement_root"])
+    process_log = run_root / "runtime" / "process.log"
+    process_log.parent.mkdir(parents=True, exist_ok=True)
+    stale_timestamp_ms = int((datetime.now().timestamp() - 950) * 1000)
+    process_log.write_text(
+        json.dumps({"type": "step_start", "timestamp": stale_timestamp_ms, "sessionID": "ses_old"}) + "\n",
+        encoding="utf-8",
+    )
+    process_log.touch()
+
+    workspace = run_root / "workspace"
+    engagement_dir = workspace / "engagements" / "2026-03-30-000000-stalled-replay"
+    engagement_dir.mkdir(parents=True, exist_ok=True)
+    (workspace / "engagements" / ".active").write_text(
+        "engagements/2026-03-30-000000-stalled-replay\n",
+        encoding="utf-8",
+    )
+    (engagement_dir / "scope.json").write_text(
+        json.dumps(
+            {
+                "status": "in_progress",
+                "current_phase": "exploit",
+                "phases_completed": ["recon", "collect", "consume_test"],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    with sqlite3.connect(engagement_dir / "cases.db") as connection:
+        connection.execute(
+            "CREATE TABLE cases (id INTEGER PRIMARY KEY AUTOINCREMENT, status TEXT NOT NULL)"
+        )
+        connection.execute("INSERT INTO cases(status) VALUES ('done')")
+        connection.commit()
+
+    monkeypatch.setattr("app.services.launcher._container_status", lambda _name: "running")
+    monkeypatch.setattr("app.services.launcher._maybe_auto_resume_run", lambda *args, **kwargs: False)
+    stopped: list[int] = []
+    monkeypatch.setattr("app.services.launcher.stop_run_runtime", lambda stalled_run: stopped.append(stalled_run.id))
+
+    from app.services.launcher import _supervise_container
+
+    _supervise_container(
+        run_row,
+        project_row,
+        user_row,
+        f"redteam-orch-run-{run['id']:04d}",
+        None,
+        io.BytesIO(),
+        heartbeat_interval=0,
+    )
+
+    latest = db.get_run_by_id(run["id"])
+    assert latest is not None
+    assert latest.status == "failed"
+    assert stopped == [run["id"]]
+    metadata = json.loads((run_root / "run.json").read_text(encoding="utf-8"))
+    assert metadata["stop_reason_code"] == "queue_stalled"
+    assert metadata["stop_reason_text"] == "Runtime produced no new output before stall timeout elapsed."
+
+
+def test_supervise_container_ignores_replayed_opencode_log_mtime_when_text_timestamps_are_stale(monkeypatch):
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "https://stalled-opencode-replay.example")
+    db.update_run_status(run["id"], "running")
+
+    run_row = db.get_run_by_id(run["id"])
+    assert run_row is not None
+    project_row = db.get_project_by_id(project["id"])
+    assert project_row is not None
+    user_row = db.get_user_by_id(project_row.user_id)
+    assert user_row is not None
+
+    run_root = Path(run["engagement_root"])
+    process_log = run_root / "runtime" / "process.log"
+    process_log.parent.mkdir(parents=True, exist_ok=True)
+    process_log.write_text("stale runtime output\n", encoding="utf-8")
+    import os
+    old_epoch = datetime.now().timestamp() - 950
+    os.utime(process_log, (old_epoch, old_epoch))
+
+    opencode_log = run_root / "opencode-home" / "log" / "2026-03-30T000000.log"
+    opencode_log.parent.mkdir(parents=True, exist_ok=True)
+    opencode_log.write_text(
+        "INFO  2026-03-29T20:14:17 +0ms service=session.processor process\n",
+        encoding="utf-8",
+    )
+    opencode_log.touch()
+
+    workspace = run_root / "workspace"
+    engagement_dir = workspace / "engagements" / "2026-03-30-000000-stalled-opencode-replay"
+    engagement_dir.mkdir(parents=True, exist_ok=True)
+    (workspace / "engagements" / ".active").write_text(
+        "engagements/2026-03-30-000000-stalled-opencode-replay\n",
+        encoding="utf-8",
+    )
+    (engagement_dir / "scope.json").write_text(
+        json.dumps(
+            {
+                "status": "in_progress",
+                "current_phase": "exploit",
+                "phases_completed": ["recon", "collect", "consume_test"],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    with sqlite3.connect(engagement_dir / "cases.db") as connection:
+        connection.execute(
+            "CREATE TABLE cases (id INTEGER PRIMARY KEY AUTOINCREMENT, status TEXT NOT NULL)"
+        )
+        connection.execute("INSERT INTO cases(status) VALUES ('done')")
+        connection.commit()
+
+    monkeypatch.setattr("app.services.launcher._container_status", lambda _name: "running")
+    monkeypatch.setattr("app.services.launcher._maybe_auto_resume_run", lambda *args, **kwargs: False)
+    stopped: list[int] = []
+    monkeypatch.setattr("app.services.launcher.stop_run_runtime", lambda stalled_run: stopped.append(stalled_run.id))
+
+    from app.services.launcher import _supervise_container
+
+    _supervise_container(
+        run_row,
+        project_row,
+        user_row,
+        f"redteam-orch-run-{run['id']:04d}",
+        None,
+        io.BytesIO(),
+        heartbeat_interval=0,
+    )
+
+    latest = db.get_run_by_id(run["id"])
+    assert latest is not None
+    assert latest.status == "failed"
+    assert stopped == [run["id"]]
+    metadata = json.loads((run_root / "run.json").read_text(encoding="utf-8"))
+    assert metadata["stop_reason_code"] == "queue_stalled"
+    assert metadata["stop_reason_text"] == "Runtime produced no new output before stall timeout elapsed."
+
+
 def test_auto_launch_missing_container_uses_incomplete_queue_artifacts(monkeypatch):
     client = TestClient(app)
     token = register_and_login(client, "alice")
