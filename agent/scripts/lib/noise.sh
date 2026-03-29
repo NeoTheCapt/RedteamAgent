@@ -1,5 +1,13 @@
 #!/usr/bin/env bash
 
+katana_emit_out_of_scope_regexes() {
+    cat <<'EOF'
+https?://[^?#]*(?:%5[cC]|\\|%22|"|%27|'|\{\{|\}\}|%7[bB]%7[bB]|%7[dD]%7[dD]|%2[aA]|\*)
+https?://[^/]+/(?:assets|cdn/assets|cdnpre/assets|cdn/i18n)/(?:[^?#]*/)?(?:images?|img|icons?|fonts?|i18n)(?:/|$)
+https?://[^?#]+\.(?:png|jpe?g|gif|webp|bmp|ico|svg|avif|mp3|mp4|wav|ogg|pdf|zip|gz|woff2?|ttf|eot|wasm(?:\.br|\.gz)?)(?:$|[?#])
+EOF
+}
+
 _katana_urlish_path() {
     local value="${1:-}"
     value="${value#*://}"
@@ -77,6 +85,12 @@ is_katana_noise_path() {
 
     case "$path_lower" in
         /assets/*/|/cdn/assets/*/|/cdnpre/assets/*/|/cdn/i18n/*/)
+            return 0
+            ;;
+        /assets/*/images/*|/assets/*/img/*|/assets/*/icons/*|/assets/*/fonts/*|/assets/i18n/*)
+            return 0
+            ;;
+        /cdn/assets/*/images/*|/cdn/assets/*/img/*|/cdn/assets/*/icons/*|/cdn/assets/*/fonts/*|/cdnpre/assets/*/images/*|/cdnpre/assets/*/img/*|/cdnpre/assets/*/icons/*|/cdnpre/assets/*/fonts/*|/cdn/i18n/*)
             return 0
             ;;
     esac
