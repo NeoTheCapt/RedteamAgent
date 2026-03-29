@@ -731,6 +731,10 @@ def test_run_summary_projects_current_state_into_run_metadata():
     assert run_metadata["current_action"] == payload["current"]
     assert run_metadata["phase_waterfall"] == payload["phases"]
     assert run_metadata["agents"] == payload["agents"]
+    assert run_metadata["current_phase"] == payload["overview"]["current_phase"]
+    assert run_metadata["findings_count"] == payload["overview"]["findings_count"]
+    assert run_metadata["active_agents"] == payload["overview"]["active_agents"]
+    assert run_metadata["available_agents"] == payload["overview"]["available_agents"]
     assert run_metadata["current_action"]["summary"] == "Recon start"
 
 
