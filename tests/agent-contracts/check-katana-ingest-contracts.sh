@@ -17,11 +17,14 @@ binary_source_noise_request='{"url":"https://example.test/assets/public/images/w
 wasm_source_noise_request='{"url":"https://example.test/cdn/assets/okfe/okt/polyfill-automatic/Bun/","source_ref":"https://example.test/cdn/assets/okfe/okt/polyfill-automatic/f220424697ac3c8ba96a.wasm.br","tag":"html","attribute":"regex","error":"hybrid: response is nil"}'
 stacktrace_internal_regex_request='{"url":"http://127.0.0.1:8000/juice-shop/node_modules/express/lib/router/index.js","source_ref":"http://127.0.0.1:8000/redirect?to=https","tag":"html","attribute":"regex","error":"cause=\"context deadline exceeded\" chain=\"hybrid: could not get dom\""}'
 stacktrace_internal_source_request='{"url":"http://127.0.0.1:8000/juice-shop/node_modules/express/lib/router/styles.css","source_ref":"http://127.0.0.1:8000/juice-shop/node_modules/express/lib/router/index.js","tag":"link","attribute":"href","error":"cause=\"context deadline exceeded\" chain=\"hybrid: could not get dom\""}'
+js_regex_api_error_request='{"url":"http://127.0.0.1:8000/rest/user/login","source_ref":"http://127.0.0.1:8000/main.js","tag":"js","attribute":"regex","response_status":500}'
+js_regex_api_success_request='{"url":"http://127.0.0.1:8000/rest/user/whoami","source_ref":"http://127.0.0.1:8000/main.js","tag":"js","attribute":"regex","response_status":200}'
 
 katana_line_should_ingest "$good"
 katana_line_should_ingest "$plain"
 katana_line_should_ingest "$recoverable"
 katana_request_should_ingest "$good_request"
+katana_request_should_ingest "$js_regex_api_success_request"
 
 if katana_line_should_ingest "$hard_error"; then
   echo "[FAIL] non-recoverable katana error line should not be ingested" >&2
@@ -60,6 +63,11 @@ fi
 
 if katana_request_should_ingest "$stacktrace_internal_source_request"; then
   echo "[FAIL] follow-on discovery from internal stack-trace source path should not be ingested" >&2
+  exit 1
+fi
+
+if katana_request_should_ingest "$js_regex_api_error_request"; then
+  echo "[FAIL] js-regex API discovery returning >=400 should not be ingested" >&2
   exit 1
 fi
 
