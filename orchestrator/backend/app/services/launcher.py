@@ -723,6 +723,35 @@ def _normalize_text_artifact(path: Path, context: dict[str, str] | None) -> None
         path.write_text(rewritten, encoding="utf-8")
 
 
+_JSONL_DISALLOWED_CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
+
+
+def _sanitize_jsonl_text(value: str) -> str:
+    if not value:
+        return value
+    return _JSONL_DISALLOWED_CONTROL_CHARS.sub("", value)
+
+
+def _decode_json_stream(value: str) -> list[object] | None:
+    stripped = value.strip()
+    if not stripped:
+        return []
+
+    decoder = json.JSONDecoder()
+    payloads: list[object] = []
+    remaining = stripped
+
+    while remaining:
+        try:
+            payload, index = decoder.raw_decode(remaining)
+        except json.JSONDecodeError:
+            return None
+        payloads.append(payload)
+        remaining = remaining[index:].lstrip()
+
+    return payloads
+
+
 def _normalize_jsonl_artifact(path: Path, context: dict[str, str] | None, *, redact_headers: bool = False) -> None:
     if context is None or not path.exists():
         return
@@ -737,16 +766,24 @@ def _normalize_jsonl_artifact(path: Path, context: dict[str, str] | None, *, red
         if not stripped:
             rewritten_lines.append(line)
             continue
-        try:
-            payload = json.loads(stripped)
-        except json.JSONDecodeError:
-            rewritten_line = _rewrite_loopback_text(line, context)
-        else:
+
+        sanitized = _sanitize_jsonl_text(line)
+        payloads = _decode_json_stream(sanitized)
+        if payloads is None:
+            rewritten_line = _rewrite_loopback_text(sanitized, context)
+            if rewritten_line != line:
+                changed = True
+            rewritten_lines.append(rewritten_line)
+            continue
+
+        if len(payloads) != 1 or sanitized != line:
+            changed = True
+        for payload in payloads:
             rewritten_payload = _rewrite_artifact_value(payload, context, redact_headers=redact_headers)
             rewritten_line = json.dumps(rewritten_payload, separators=(",", ":"))
-        if rewritten_line != line:
-            changed = True
-        rewritten_lines.append(rewritten_line)
+            if len(payloads) == 1 and rewritten_line != line:
+                changed = True
+            rewritten_lines.append(rewritten_line)
 
     if changed:
         rewritten = "\n".join(rewritten_lines)
