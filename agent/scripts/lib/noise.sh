@@ -34,6 +34,21 @@ is_katana_binary_source_ref() {
     esac
 }
 
+is_katana_internal_source_path() {
+    local path="${1:-}"
+    local path_lower
+    path_lower="$(printf '%s' "$path" | tr '[:upper:]' '[:lower:]')"
+
+    case "$path_lower" in
+        */build/routes/*|*/node_modules/*)
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
 is_katana_noise_source() {
     local source_ref="${1:-}"
     local _tag="${2:-}"
@@ -53,7 +68,7 @@ is_katana_noise_source() {
     # Those rows have no trustworthy response metadata and poison the crawl queue.
     local source_path
     source_path="$(_katana_urlish_path "$source_ref")"
-    if is_katana_noise_path "$source_path"; then
+    if is_katana_noise_path "$source_path" || is_katana_internal_source_path "$source_path"; then
         return 0
     fi
 
