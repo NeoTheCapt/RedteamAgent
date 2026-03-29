@@ -89,6 +89,42 @@ update_finding_count() {
     mv "$tmp_file" "$findings_file"
 }
 
+extract_finding_title() {
+    local input_file="${1:?input file required}"
+
+    sed -nE 's/^## \[(FINDING-ID|FINDING-[A-Z]{2}-[0-9]{3})\][[:space:]]+(.+)$/\2/p' "$input_file" | head -1
+}
+
+normalize_finding_title() {
+    local raw_title="${1-}"
+
+    printf '%s' "$raw_title" \
+        | tr '[:upper:]' '[:lower:]' \
+        | tr '\t' ' ' \
+        | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//'
+}
+
+find_existing_finding_id_by_title() {
+    local findings_file="${1:?findings file required}"
+    local raw_title="${2-}"
+    local wanted normalized_title line finding_id title
+
+    normalized_title="$(normalize_finding_title "$raw_title")"
+    [[ -n "$normalized_title" ]] || return 0
+
+    while IFS= read -r line; do
+        if [[ "$line" =~ ^##\ \[(FINDING-[A-Z]{2}-[0-9]{3})\][[:space:]]+(.+)$ ]]; then
+            finding_id="${BASH_REMATCH[1]}"
+            title="${BASH_REMATCH[2]}"
+            wanted="$(normalize_finding_title "$title")"
+            if [[ "$wanted" == "$normalized_title" ]]; then
+                printf '%s\n' "$finding_id"
+                return 0
+            fi
+        fi
+    done < "$findings_file"
+}
+
 replace_finding_placeholder() {
     local input_file="${1:?input file required}"
     local finding_id="${2:?finding id required}"

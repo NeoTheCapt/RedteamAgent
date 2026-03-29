@@ -37,6 +37,23 @@ if [[ -n "$duplicate_ids" ]]; then
     done <<<"$duplicate_ids"
 fi
 
+duplicate_titles="$({
+    while IFS= read -r line; do
+        if [[ "$line" =~ ^##\ \[(FINDING-[A-Z]{2}-[0-9]{3})\][[:space:]]+(.+)$ ]]; then
+            title="${BASH_REMATCH[2]}"
+            normalized_title="$(printf '%s' "$title" | tr '[:upper:]' '[:lower:]' | tr '\t' ' ' | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//')"
+            printf '%s\t%s\n' "$normalized_title" "$title"
+        fi
+    done < "$FINDINGS_FILE"
+} | awk -F '\t' 'seen[$1]++ == 1 { print $2 }')"
+
+if [[ -n "$duplicate_titles" ]]; then
+    report_failure "Duplicate finding titles:"
+    while IFS= read -r title; do
+        [[ -n "$title" ]] && report_failure "  - $title"
+    done <<<"$duplicate_titles"
+fi
+
 if [[ "$failures" -ne 0 ]]; then
     exit 1
 fi
