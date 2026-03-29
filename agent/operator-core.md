@@ -160,6 +160,12 @@ This allocates the next prefixed ID under a lock and updates `Finding Count`.
 - **Impact**: what an attacker can achieve
 ```
 
+Duplicate-finding guard:
+- If YOU directly confirm a new issue, append it yourself exactly once via `append_finding.sh` before you return.
+- If a subagent/task result already names a concrete finding ID like `FINDING-EX-001` or `FINDING-VA-002`, treat that finding as already recorded unless you verify it is absent from `findings.md`.
+- When consuming subagent output, never rewrite/restate the same confirmed issue into a second finding just to change wording, severity, or detail level. Update log/surfaces/intel/case outcomes instead.
+- Before appending any finding after a subagent returns, grep `findings.md` for the finding ID and the primary endpoint/path to avoid duplicates.
+
 report-writer renumbers to sequential FINDING-001~N in final report.
 
 OWASP Quick Ref: A01=Access Control, A02=Crypto, A03=Injection, A04=Insecure Design, A05=Misconfig, A08=Data Integrity.
