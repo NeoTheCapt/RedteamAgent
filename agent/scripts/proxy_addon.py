@@ -189,21 +189,35 @@ class CaseCollector:
         if any(seg in ct for seg in _EXT_FORM_CT):
             return "form"
 
-        # static asset types by extension
+        # Response content-type should override extension-based asset guesses.
+        # This prevents SPA fallback HTML from being treated as javascript/stylesheet
+        # just because the requested path ends with .js/.css.
         _, ext = os.path.splitext(base_path)
-        if ext in _EXT_JS:
-            return "javascript"
-        if ext in _EXT_CSS:
-            return "stylesheet"
-        if ext in _EXT_PAGE or "text/html" in ct:
+        if "text/html" in ct or "application/xhtml" in ct or "image/svg+xml" in ct:
             return "page"
-        if ext in _EXT_DATA or "application/json" in ct or "text/xml" in ct or "application/xml" in ct:
+        if "application/json" in ct or "text/xml" in ct or "application/xml" in ct or "text/csv" in ct or "application/pdf" in ct or "text/plain" in ct or "application/ld+json" in ct or "text/markdown" in ct:
             return "data"
-        if ext in _EXT_IMAGE or ct.startswith("image/"):
+        if ct.startswith("image/") and "svg" not in ct:
             return "image"
-        if ext in _EXT_VIDEO or ct.startswith("video/"):
+        if ct.startswith("video/") or ct.startswith("audio/"):
             return "video"
-        if ext in _EXT_FONT or ct.startswith("font/"):
+        if ct.startswith("font/") or "application/vnd.ms-fontobject" in ct:
+            return "font"
+        if any(seg in ct for seg in ("zip", "gzip", "tar", "rar", "7z", "bzip")):
+            return "archive"
+        if ext in _EXT_JS or "text/javascript" in ct or "application/javascript" in ct:
+            return "javascript"
+        if ext in _EXT_CSS or "text/css" in ct:
+            return "stylesheet"
+        if ext in _EXT_PAGE:
+            return "page"
+        if ext in _EXT_DATA:
+            return "data"
+        if ext in _EXT_IMAGE:
+            return "image"
+        if ext in _EXT_VIDEO:
+            return "video"
+        if ext in _EXT_FONT:
             return "font"
         if ext in _EXT_ARCHIVE:
             return "archive"
