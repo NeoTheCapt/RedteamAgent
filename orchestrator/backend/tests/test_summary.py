@@ -402,6 +402,78 @@ def test_run_summary_keeps_late_source_analyzer_log_projection_in_consume_test()
     assert all(not (item["phase"] == "recon" and item["state"] == "active") for item in payload["phases"])
 
 
+def test_run_summary_keeps_active_recon_labeled_subagent_work_inside_advanced_scope_phase():
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "http://127.0.0.1:8000")
+    active_dir = setup_active_engagement(run)
+    (active_dir / "scope.json").write_text(
+        json.dumps(
+            {
+                "hostname": "127.0.0.1",
+                "status": "in_progress",
+                "phases_completed": ["recon", "collect"],
+                "current_phase": "consume_test",
+            }
+        ),
+        encoding="utf-8",
+    )
+    with sqlite3.connect(active_dir / "cases.db") as connection:
+        connection.execute(
+            "CREATE TABLE cases (method TEXT, url TEXT, type TEXT NOT NULL, status TEXT NOT NULL, assigned_agent TEXT, source TEXT)"
+        )
+        connection.executemany(
+            "INSERT INTO cases (method, url, type, status, assigned_agent, source) VALUES (?, ?, ?, ?, ?, ?)",
+            [
+                ("GET", "http://127.0.0.1:8000/profile", "page", "processing", "vulnerability-analyst", "katana"),
+                ("GET", "http://127.0.0.1:8000/settings", "page", "processing", "vulnerability-analyst", "katana-xhr"),
+            ],
+        )
+        connection.commit()
+
+    for event in [
+        {
+            "event_type": "task.started",
+            "phase": "consume-test",
+            "task_name": "bash",
+            "agent_name": "operator",
+            "summary": "Dispatch page batch",
+        },
+        {
+            "event_type": "task.started",
+            "phase": "recon",
+            "task_name": "source-analyzer",
+            "agent_name": "source-analyzer",
+            "summary": "Source analysis start",
+        },
+    ]:
+        response = client.post(
+            f"/projects/{project['id']}/runs/{run['id']}/events",
+            headers={"Authorization": f"Bearer {token}"},
+            json=event,
+        )
+        assert response.status_code == 201
+
+    response = client.get(
+        f"/projects/{project['id']}/runs/{run['id']}/summary",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+
+    assert payload["overview"]["current_phase"] == "consume-test"
+    assert payload["current"]["phase"] == "consume-test"
+    assert payload["current"]["agent_name"] == "source-analyzer"
+    assert any(
+        item["agent_name"] == "source-analyzer" and item["status"] == "active" and item["phase"] == "consume-test"
+        for item in payload["agents"]
+    )
+    assert any(item["phase"] == "consume-test" and item["state"] == "active" for item in payload["phases"])
+    assert all(not (item["phase"] == "recon" and item["state"] == "active") for item in payload["phases"])
+
+
+
 def test_run_summary_prefers_processing_agents_over_stale_runtime_phase_and_completed_operator_task():
     client = TestClient(app)
     token = register_and_login(client, "alice")
