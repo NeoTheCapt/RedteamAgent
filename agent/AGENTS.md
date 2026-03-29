@@ -98,7 +98,8 @@ PARALLEL: Independent tasks → parallel. Dependent → sequential.
    - every non-empty fetched batch MUST be followed by exactly one matching subagent task in the same loop pass
    - `api`, `graphql`, `form`, `upload`, and `websocket` batches MUST dispatch `vulnerability-analyst`
    - `page`, `data`, `javascript`, `stylesheet`, and `unknown` batches MUST dispatch `source-analyzer`
-   - if you fetched multiple non-empty batches, launch every corresponding subagent task before moving on
+   - consume-test dispatch is SERIALIZED: fetch and dispatch exactly one non-empty batch at a time, wait for that subagent result, record its `### Case Outcomes`, then fetch the next batch
+   - do NOT launch overlapping `task` calls inside the same consume-test pass, even when multiple fetched batch files are non-empty
    - never leave fetched cases in `processing` without a dispatched subagent task
    - after each dispatched subagent returns, immediately consume its `### Case Outcomes` and run the required `done` / `requeue` updates before the next fetch cycle
    Before leaving Test phase, run `./scripts/check_surface_coverage.sh "$DIR"`.
