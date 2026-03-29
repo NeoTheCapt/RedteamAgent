@@ -63,6 +63,7 @@ _AUTO_RESUME_REASON_CODES = {
     "engagement_incomplete",
     "incomplete_stop",
     "queue_incomplete",
+    "queue_stalled",
     "surface_coverage_incomplete",
     # A missing supervisor/container can still leave a perfectly resumable
     # in-progress engagement behind (for example after a backend restart or a
@@ -71,6 +72,10 @@ _AUTO_RESUME_REASON_CODES = {
     "runtime_disappeared",
 }
 _AUTO_RESUME_LIMIT = 2
+
+RUN_STALL_TIMEOUT_SECONDS = 900
+EARLY_PHASE_STALL_TIMEOUT_SECONDS = 180
+EARLY_PHASE_STALL_PHASES = {"unknown", "recon", "collect"}
 
 
 def _rewrite_runtime_target(target: str) -> str:
@@ -309,6 +314,138 @@ def _count_remaining_cases(cases_db: Path) -> tuple[int, int]:
     except sqlite3.Error:
         return (0, 0)
     return (int(pending[0] or 0), int(processing[0] or 0))
+
+
+def _path_mtime(path: Path) -> float | None:
+    if not path.exists() or not path.is_file():
+        return None
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return None
+
+
+def _latest_running_runtime_activity_at(run: Run) -> float | None:
+    latest = _path_mtime(process_log_path_for(run))
+
+    process_metadata = _path_mtime(process_metadata_path_for(run))
+    if process_metadata is not None and (latest is None or process_metadata > latest):
+        latest = process_metadata
+
+    return latest
+
+
+def _latest_running_workflow_activity_at(engagement_dir: Path | None) -> float | None:
+    if engagement_dir is None:
+        return None
+
+    latest = None
+    for path in (
+        engagement_dir / "scope.json",
+        engagement_dir / "log.md",
+        engagement_dir / "findings.md",
+        engagement_dir / "report.md",
+    ):
+        candidate = _path_mtime(path)
+        if candidate is None:
+            continue
+        if latest is None or candidate > latest:
+            latest = candidate
+    return latest
+
+
+def _load_running_queue_state(engagement_dir: Path | None) -> tuple[str, int, int, int]:
+    current_phase = "unknown"
+    total_cases = 0
+    pending_cases = 0
+    processing_cases = 0
+    if engagement_dir is None:
+        return (current_phase, total_cases, pending_cases, processing_cases)
+
+    scope_path = engagement_dir / "scope.json"
+    if scope_path.exists():
+        try:
+            scope_payload = json.loads(scope_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            scope_payload = {}
+        current_phase = _canonical_phase_name(scope_payload.get("current_phase"))
+
+    cases_db = engagement_dir / "cases.db"
+    if not cases_db.exists():
+        return (current_phase, total_cases, pending_cases, processing_cases)
+
+    try:
+        with sqlite3.connect(cases_db, timeout=1.0) as connection:
+            connection.execute("PRAGMA busy_timeout = 1000")
+            total_row = connection.execute("SELECT COUNT(*) FROM cases").fetchone()
+            pending_row = connection.execute(
+                "SELECT COUNT(*) FROM cases WHERE status = 'pending'"
+            ).fetchone()
+            processing_row = connection.execute(
+                "SELECT COUNT(*) FROM cases WHERE status = 'processing'"
+            ).fetchone()
+            total_cases = int(total_row[0] or 0)
+            pending_cases = int(pending_row[0] or 0)
+            processing_cases = int(processing_row[0] or 0)
+    except sqlite3.Error:
+        total_cases = 0
+        pending_cases = 0
+        processing_cases = 0
+
+    return (current_phase, total_cases, pending_cases, processing_cases)
+
+
+def _running_container_stall_reason(run: Run) -> tuple[str, str, str] | None:
+    engagement_dir = _active_engagement_dir(run)
+    current_phase, total_cases, pending_cases, processing_cases = _load_running_queue_state(engagement_dir)
+
+    workflow_activity_at = _latest_running_workflow_activity_at(engagement_dir)
+    if workflow_activity_at is not None:
+        workflow_age = time.time() - workflow_activity_at
+        if (
+            current_phase not in EARLY_PHASE_STALL_PHASES
+            and processing_cases > 0
+            and workflow_age >= RUN_STALL_TIMEOUT_SECONDS
+        ):
+            return (
+                current_phase,
+                "queue_stalled",
+                "Workflow produced no new process/log progress before stall timeout elapsed while queue items remained in processing.",
+            )
+        if (
+            current_phase not in EARLY_PHASE_STALL_PHASES
+            and pending_cases > 0
+            and processing_cases == 0
+            and workflow_age >= RUN_STALL_TIMEOUT_SECONDS
+        ):
+            return (
+                current_phase,
+                "queue_stalled",
+                "Workflow produced no new dispatch/log progress before stall timeout elapsed while pending queue items remained undispatched.",
+            )
+
+    runtime_activity_at = _latest_running_runtime_activity_at(run)
+    if runtime_activity_at is None:
+        return None
+
+    runtime_age = time.time() - runtime_activity_at
+    if runtime_age >= RUN_STALL_TIMEOUT_SECONDS:
+        return (
+            current_phase,
+            "queue_stalled",
+            "Runtime produced no new output before stall timeout elapsed.",
+        )
+    if (
+        current_phase in EARLY_PHASE_STALL_PHASES
+        and total_cases == 0
+        and runtime_age >= EARLY_PHASE_STALL_TIMEOUT_SECONDS
+    ):
+        return (
+            current_phase,
+            "recon_stalled",
+            "Runtime stalled in early recon/collect without producing any observed paths.",
+        )
+    return None
 
 
 def _surface_completion_ok(surface_file: Path) -> bool:
@@ -1400,6 +1537,25 @@ def _supervise_container(
         if status in {"running", "restarting"}:
             phase, summary = _heartbeat_context(run)
             _append_runtime_event(run, "run.heartbeat", phase, summary)
+
+            live_stall = _running_container_stall_reason(run)
+            if live_stall is not None:
+                phase, reason_code, reason_text = live_stall
+                stop_run_runtime(run)
+                refreshed = db.get_run_by_id(run.id) or run
+                if not _maybe_auto_resume_run(
+                    project,
+                    refreshed,
+                    user,
+                    phase=phase,
+                    reason_code=reason_code,
+                    reason_text=reason_text,
+                ):
+                    _append_runtime_event(refreshed, "run.failed", phase, reason_text)
+                    terminal = db.update_run_status(run.id, "failed")
+                    _write_run_terminal_reason(terminal, reason_code=reason_code, reason_text=reason_text)
+                break
+
             time.sleep(heartbeat_interval)
             continue
         if status == "created":
