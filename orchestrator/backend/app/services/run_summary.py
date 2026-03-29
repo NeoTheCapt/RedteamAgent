@@ -15,7 +15,7 @@ from fastapi import HTTPException, status
 
 from ..models.user import User
 from .events import list_events_for_run
-from .runs import _project_or_404, _reconcile_run_status
+from .runs import _latest_workflow_activity_at, _project_or_404, _reconcile_run_status
 
 PHASE_ORDER = ["recon", "collect", "consume-test", "exploit", "report"]
 PHASE_LABELS = {
@@ -824,6 +824,22 @@ def _sync_run_metadata_projection(
     metadata_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
+def _overview_updated_at(run, active_root: Path, latest_task, latest_phase) -> str:
+    if _is_terminal_run_status(run.status):
+        return str(run.updated_at)
+
+    candidates: list[str] = []
+    for value in (getattr(latest_task, "created_at", None), getattr(latest_phase, "created_at", None), getattr(run, "updated_at", None)):
+        if value:
+            candidates.append(str(value))
+
+    workflow_activity_at = _latest_workflow_activity_at(run, active_root / "scope.json")
+    if workflow_activity_at is not None:
+        candidates.append(workflow_activity_at.strftime("%Y-%m-%d %H:%M:%S"))
+
+    return max(candidates) if candidates else ""
+
+
 def summarize_run(project_id: int, run_id: int, user: User) -> RunSummary:
     run = _run_or_404(project_id, run_id, user)
     project = _project_or_404(project_id, user)
@@ -865,7 +881,7 @@ def summarize_run(project_id: int, run_id: int, user: User) -> RunSummary:
             "active_agents": active_agents,
             "available_agents": available_agents,
             "current_phase": effective_current_phase,
-            "updated_at": run.updated_at if _is_terminal_run_status(run.status) else getattr(latest_task or latest_phase, "created_at", run.updated_at),
+            "updated_at": _overview_updated_at(run, active_root, latest_task, latest_phase),
         },
         runtime_model=_load_runtime_model_verification(run_root, project),
         coverage={
