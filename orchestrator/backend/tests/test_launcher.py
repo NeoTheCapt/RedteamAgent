@@ -279,6 +279,89 @@ def test_supervise_container_stops_live_stalled_runtime(monkeypatch):
     assert metadata["stop_reason_text"] == "Runtime produced no new output before stall timeout elapsed."
 
 
+def test_running_container_stall_reason_keeps_early_collect_alive_when_rw_cases_db_is_locked_but_readonly_fallback_succeeds(monkeypatch):
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "https://collect-lock.example")
+    db.update_run_status(run["id"], "running")
+
+    run_row = db.get_run_by_id(run["id"])
+    assert run_row is not None
+
+    run_root = Path(run["engagement_root"])
+    process_log = run_root / "runtime" / "process.log"
+    process_log.parent.mkdir(parents=True, exist_ok=True)
+    process_log.write_text("collect still working\n", encoding="utf-8")
+    old_epoch = datetime.now().timestamp() - 200
+    import os
+    os.utime(process_log, (old_epoch, old_epoch))
+
+    workspace = run_root / "workspace"
+    engagement_dir = workspace / "engagements" / "2026-03-30-000000-collect-lock"
+    engagement_dir.mkdir(parents=True, exist_ok=True)
+    (workspace / "engagements" / ".active").write_text(
+        "engagements/2026-03-30-000000-collect-lock\n",
+        encoding="utf-8",
+    )
+    (engagement_dir / "scope.json").write_text(
+        json.dumps(
+            {
+                "status": "in_progress",
+                "current_phase": "collect",
+                "phases_completed": ["recon"],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    cases_db = engagement_dir / "cases.db"
+    with sqlite3.connect(cases_db) as connection:
+        connection.execute(
+            "CREATE TABLE cases (id INTEGER PRIMARY KEY AUTOINCREMENT, status TEXT NOT NULL)"
+        )
+        connection.executemany(
+            "INSERT INTO cases(status) VALUES (?)",
+            [("pending",), ("processing",), ("done",)],
+        )
+        connection.commit()
+
+    real_connect = sqlite3.connect
+
+    class LockedProcessingConnection:
+        def __init__(self, connection):
+            self._connection = connection
+
+        def execute(self, sql, *args, **kwargs):
+            if str(sql) == "SELECT COUNT(*) FROM cases WHERE status = 'processing'":
+                raise sqlite3.OperationalError("database is locked")
+            return self._connection.execute(sql, *args, **kwargs)
+
+        def __getattr__(self, name):
+            return getattr(self._connection, name)
+
+        def __enter__(self):
+            self._connection.__enter__()
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return self._connection.__exit__(exc_type, exc, tb)
+
+    def flaky_connect(database, *args, **kwargs):
+        connection = real_connect(database, *args, **kwargs)
+        if str(database) == str(cases_db) and not kwargs.get("uri", False):
+            return LockedProcessingConnection(connection)
+        return connection
+
+    monkeypatch.setattr("app.services.launcher.sqlite3.connect", flaky_connect)
+
+    from app.services.launcher import _running_container_stall_reason
+
+    assert _running_container_stall_reason(run_row) is None
+
+
+
 def test_supervise_container_ignores_replayed_process_log_mtime_when_json_timestamps_are_stale(monkeypatch):
     client = TestClient(app)
     token = register_and_login(client, "alice")
