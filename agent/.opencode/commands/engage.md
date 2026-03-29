@@ -283,8 +283,9 @@ After approval:
 Follow the case-dispatching skill methodology. For each cycle:
 1. `./scripts/dispatcher.sh "$DIR/cases.db" reset-stale 10`
 2. `./scripts/dispatcher.sh "$DIR/cases.db" stats`
-3. Fetch batch by type → dispatch to appropriate agent → mark done → requeue new endpoints
-4. Continue until queue empty + producers stopped
+3. Fetch and dispatch exactly one non-empty batch at a time → wait for that single subagent result → mark done / requeue any outcomes → then fetch the next batch
+4. Do NOT launch overlapping `task` calls inside consume-test, even if multiple batch types are ready at once
+5. Continue until queue empty + producers stopped
 
 Before leaving Test phase, run:
 `./scripts/check_collection_health.sh "$DIR"`
