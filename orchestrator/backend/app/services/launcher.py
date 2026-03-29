@@ -467,6 +467,7 @@ def _normalize_cases_db(path: Path, context: dict[str, str] | None) -> None:
 
 
 _SURFACE_AGENT_PREFIX = re.compile(r"^\[[^\]]+\]\s*")
+_SURFACE_PLACEHOLDER_PATTERN = re.compile(r"(%3c[^/%\s]+%3e|<[^>\s]+>|FUZZ|PARAM|\{\{|\}\})", re.IGNORECASE)
 _VALID_SURFACE_TYPES = {
     "auth_entry",
     "account_recovery",
@@ -478,6 +479,12 @@ _VALID_SURFACE_TYPES = {
     "workflow_token",
 }
 _VALID_SURFACE_STATUSES = {"discovered", "covered", "not_applicable", "deferred"}
+
+
+def _surface_target_contains_placeholder(value: str) -> bool:
+    if not value:
+        return False
+    return _SURFACE_PLACEHOLDER_PATTERN.search(value) is not None
 
 
 def _iter_runtime_text_fragments(payload):
@@ -527,6 +534,8 @@ def _extract_surface_candidates_from_text(text: str) -> list[dict[str, str]]:
             status = "discovered"
         if not target or not source or not rationale:
             continue
+        if _surface_target_contains_placeholder(target):
+            continue
 
         records.append(
             {
@@ -542,13 +551,90 @@ def _extract_surface_candidates_from_text(text: str) -> list[dict[str, str]]:
     return records
 
 
+def _canonicalize_surface_record(record: dict[str, str], context: dict[str, str] | None) -> dict[str, str]:
+    normalized = _rewrite_artifact_value(record, context)
+    if not isinstance(normalized, dict):
+        return record
+    canonical = dict(normalized)
+    surface_type = str(canonical.get("surface_type") or "").strip().lower().replace("-", "_")
+    status = str(canonical.get("status") or "discovered").strip().lower().replace("-", "_")
+    canonical["surface_type"] = surface_type
+    canonical["status"] = status if status in _VALID_SURFACE_STATUSES else "discovered"
+    canonical["target"] = str(canonical.get("target") or "").strip()
+    canonical["source"] = str(canonical.get("source") or "").strip()
+    canonical["rationale"] = str(canonical.get("rationale") or "").strip()
+    canonical["evidence_ref"] = str(canonical.get("evidence_ref") or "").strip()
+    return canonical
+
+
+def _dedupe_surface_jsonl(path: Path, context: dict[str, str] | None) -> None:
+    if not path.exists():
+        return
+
+    try:
+        original = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return
+
+    trailing_newline = original.endswith("\n")
+    rewritten_rows: list[str] = []
+    seen_positions: dict[tuple[str, str], int] = {}
+    changed = False
+
+    for line in original.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        try:
+            payload = json.loads(stripped)
+        except json.JSONDecodeError:
+            rewritten_line = _rewrite_loopback_text(line, context)
+            if rewritten_line != line:
+                changed = True
+            rewritten_rows.append(rewritten_line)
+            continue
+        if not isinstance(payload, dict):
+            rewritten_line = json.dumps(payload, separators=(",", ":"))
+            if rewritten_line != line:
+                changed = True
+            rewritten_rows.append(rewritten_line)
+            continue
+
+        canonical = _canonicalize_surface_record(payload, context)
+        if _surface_target_contains_placeholder(canonical.get("target", "")):
+            changed = True
+            continue
+        rewritten_line = json.dumps(canonical, separators=(",", ":"))
+        if rewritten_line != line:
+            changed = True
+        key = (canonical.get("surface_type", ""), canonical.get("target", ""))
+        if all(key):
+            if key in seen_positions:
+                rewritten_rows[seen_positions[key]] = rewritten_line
+                changed = True
+            else:
+                seen_positions[key] = len(rewritten_rows)
+                rewritten_rows.append(rewritten_line)
+        else:
+            rewritten_rows.append(rewritten_line)
+
+    rewritten = "\n".join(rewritten_rows)
+    if rewritten and trailing_newline:
+        rewritten += "\n"
+    elif original and trailing_newline and not rewritten_rows:
+        rewritten = ""
+
+    if changed or rewritten != original:
+        path.write_text(rewritten, encoding="utf-8")
+
+
 def _backfill_surfaces_from_process_log(run: Run, engagement_dir: Path) -> None:
     process_log = process_log_path_for(run)
     if not process_log.exists():
         return
 
+    context = _loopback_display_context(run)
     surfaces_path = engagement_dir / "surfaces.jsonl"
-    existing_rows: list[dict] = []
     existing_keys: set[tuple[str, str]] = set()
     if surfaces_path.exists():
         try:
@@ -559,11 +645,10 @@ def _backfill_surfaces_from_process_log(run: Run, engagement_dir: Path) -> None:
                 row = json.loads(stripped)
                 if not isinstance(row, dict):
                     continue
-                existing_rows.append(row)
-                surface_type = str(row.get("surface_type") or "").strip().lower().replace("-", "_")
-                target = str(row.get("target") or "").strip()
-                if surface_type and target:
-                    existing_keys.add((surface_type, target))
+                canonical = _canonicalize_surface_record(row, context)
+                key = (canonical.get("surface_type", ""), canonical.get("target", ""))
+                if all(key):
+                    existing_keys.add(key)
         except json.JSONDecodeError:
             return
 
@@ -581,11 +666,12 @@ def _backfill_surfaces_from_process_log(run: Run, engagement_dir: Path) -> None:
                 if "#### Surface Candidates" not in text:
                     continue
                 for record in _extract_surface_candidates_from_text(text):
-                    key = (record["surface_type"], record["target"])
+                    canonical = _canonicalize_surface_record(record, context)
+                    key = (canonical["surface_type"], canonical["target"])
                     if key in existing_keys:
                         continue
                     existing_keys.add(key)
-                    appended_rows.append(record)
+                    appended_rows.append(canonical)
     except OSError:
         return
 
@@ -609,12 +695,12 @@ def normalize_active_scope(run: Run) -> None:
     context = _loopback_display_context(run)
     _normalize_scope_file(engagement_dir / "scope.json", run=run)
     _backfill_surfaces_from_process_log(run, engagement_dir)
+    _dedupe_surface_jsonl(engagement_dir / "surfaces.jsonl", context)
     if context is None:
         return
 
     _normalize_text_artifact(engagement_dir / "findings.md", context)
     _normalize_text_artifact(engagement_dir / "report.md", context)
-    _normalize_jsonl_artifact(engagement_dir / "surfaces.jsonl", context)
     _normalize_jsonl_artifact(engagement_dir / "scans" / "katana_output.jsonl", context, redact_headers=True)
     _normalize_cases_db(engagement_dir / "cases.db", context)
 
