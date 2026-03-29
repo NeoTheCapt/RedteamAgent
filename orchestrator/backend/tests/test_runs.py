@@ -1052,6 +1052,73 @@ def test_list_runs_marks_completed_scope_as_completed_even_if_runtime_is_still_a
     assert stopped == [run["id"]]
 
 
+def test_list_runs_marks_completed_scope_alias_as_completed(monkeypatch):
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+
+    create_run = client.post(
+        f"/projects/{project['id']}/runs",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"target": "https://example.com"},
+    )
+    assert create_run.status_code == 201
+    run = create_run.json()
+    db.update_run_status(run["id"], "running")
+
+    run_root = Path(run["engagement_root"])
+    workspace = run_root / "workspace"
+    engagement_dir = workspace / "engagements" / "2026-03-28-000000-example-alias"
+    engagement_dir.mkdir(parents=True, exist_ok=True)
+    (workspace / "engagements" / ".active").write_text(
+        "engagements/2026-03-28-000000-example-alias\n",
+        encoding="utf-8",
+    )
+    scope_path = engagement_dir / "scope.json"
+    scope_path.write_text(
+        json.dumps(
+            {
+                "status": "completed",
+                "current_phase": "complete",
+                "phases_completed": ["recon", "collect", "consume_test", "exploit", "report"],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (engagement_dir / "report.md").write_text("# Report\n", encoding="utf-8")
+    (engagement_dir / "surfaces.jsonl").write_text(
+        json.dumps({"surface_type": "api_documentation", "target": "GET /api-docs/", "status": "covered"}) + "\n",
+        encoding="utf-8",
+    )
+    with sqlite3.connect(engagement_dir / "cases.db") as connection:
+        connection.execute(
+            "CREATE TABLE cases (id INTEGER PRIMARY KEY AUTOINCREMENT, status TEXT NOT NULL)"
+        )
+        connection.executemany(
+            "INSERT INTO cases(status) VALUES (?)",
+            [("done",), ("error",)],
+        )
+        connection.commit()
+
+    monkeypatch.setattr("app.services.runs.locate_runtime_pid", lambda _run: 12345)
+    stopped: list[int] = []
+    monkeypatch.setattr("app.services.runs.stop_run_runtime", lambda reconciled_run: stopped.append(reconciled_run.id))
+
+    runs_response = client.get(
+        f"/projects/{project['id']}/runs",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert runs_response.status_code == 200
+    assert runs_response.json()[0]["status"] == "completed"
+    normalized = json.loads(scope_path.read_text(encoding="utf-8"))
+    assert normalized["status"] == "complete"
+    metadata = json.loads((run_root / "run.json").read_text(encoding="utf-8"))
+    assert metadata["stop_reason_code"] == "completed"
+    assert metadata["stop_reason_text"] == "Run completed successfully."
+    assert stopped == [run["id"]]
+
+
 def test_list_runs_marks_completed_scope_as_completed_when_runtime_has_already_exited(monkeypatch):
     client = TestClient(app)
     token = register_and_login(client, "alice")
@@ -1222,6 +1289,97 @@ def test_list_runs_normalizes_scope_phase_aliases(monkeypatch):
     assert runs_response.status_code == 200
     normalized = json.loads(scope_path.read_text(encoding="utf-8"))
     assert normalized["current_phase"] == "consume_test"
+
+
+def test_list_runs_keeps_running_when_queue_query_hits_transient_lock_and_readonly_fallback_succeeds(monkeypatch):
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+
+    create_run = client.post(
+        f"/projects/{project['id']}/runs",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"target": "https://example.com"},
+    )
+    assert create_run.status_code == 201
+    run = create_run.json()
+    db.update_run_status(run["id"], "running")
+
+    run_root = Path(run["engagement_root"])
+    runtime_dir = run_root / "runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    process_log = runtime_dir / "process.log"
+    process_log.write_text("collect still working\n", encoding="utf-8")
+
+    workspace = run_root / "workspace"
+    engagement_dir = workspace / "engagements" / "2026-03-28-000000-example-lock"
+    engagement_dir.mkdir(parents=True, exist_ok=True)
+    (workspace / "engagements" / ".active").write_text(
+        "engagements/2026-03-28-000000-example-lock\n",
+        encoding="utf-8",
+    )
+    (engagement_dir / "scope.json").write_text(
+        json.dumps(
+            {
+                "status": "in_progress",
+                "current_phase": "collect",
+                "phases_completed": ["recon"],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    cases_db = engagement_dir / "cases.db"
+    with sqlite3.connect(cases_db) as connection:
+        connection.execute(
+            "CREATE TABLE cases (id INTEGER PRIMARY KEY AUTOINCREMENT, status TEXT NOT NULL)"
+        )
+        connection.executemany(
+            "INSERT INTO cases(status) VALUES (?)",
+            [("pending",), ("processing",), ("done",)],
+        )
+        connection.commit()
+
+    real_connect = sqlite3.connect
+
+    class LockedProcessingConnection:
+        def __init__(self, connection):
+            self._connection = connection
+
+        def execute(self, sql, *args, **kwargs):
+            if str(sql) == "SELECT COUNT(*) FROM cases WHERE status = 'processing'":
+                raise sqlite3.OperationalError("database is locked")
+            return self._connection.execute(sql, *args, **kwargs)
+
+        def __getattr__(self, name):
+            return getattr(self._connection, name)
+
+        def __enter__(self):
+            self._connection.__enter__()
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return self._connection.__exit__(exc_type, exc, tb)
+
+    def flaky_connect(database, *args, **kwargs):
+        connection = real_connect(database, *args, **kwargs)
+        if str(database) == str(cases_db) and not kwargs.get("uri", False):
+            return LockedProcessingConnection(connection)
+        return connection
+
+    monkeypatch.setattr("app.services.runs.sqlite3.connect", flaky_connect)
+    monkeypatch.setattr("app.services.runs.locate_runtime_pid", lambda _run: 12345)
+    stopped: list[int] = []
+    monkeypatch.setattr("app.services.runs.stop_run_runtime", lambda reconciled_run: stopped.append(reconciled_run.id))
+
+    runs_response = client.get(
+        f"/projects/{project['id']}/runs",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert runs_response.status_code == 200
+    assert runs_response.json()[0]["status"] == "running"
+    assert stopped == []
+
 
 
 def test_list_runs_marks_early_recon_stall_failed_even_if_pid_is_alive(monkeypatch):
