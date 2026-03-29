@@ -466,6 +466,141 @@ def _normalize_cases_db(path: Path, context: dict[str, str] | None) -> None:
         return
 
 
+_SURFACE_AGENT_PREFIX = re.compile(r"^\[[^\]]+\]\s*")
+_VALID_SURFACE_TYPES = {
+    "auth_entry",
+    "account_recovery",
+    "object_reference",
+    "privileged_write",
+    "file_handling",
+    "dynamic_render",
+    "api_documentation",
+    "workflow_token",
+}
+_VALID_SURFACE_STATUSES = {"discovered", "covered", "not_applicable", "deferred"}
+
+
+def _iter_runtime_text_fragments(payload):
+    if isinstance(payload, str):
+        yield payload
+        return
+    if isinstance(payload, dict):
+        for value in payload.values():
+            yield from _iter_runtime_text_fragments(value)
+        return
+    if isinstance(payload, list):
+        for item in payload:
+            yield from _iter_runtime_text_fragments(item)
+
+
+def _extract_surface_candidates_from_text(text: str) -> list[dict[str, str]]:
+    records: list[dict[str, str]] = []
+    in_surface_section = False
+
+    for raw_line in text.splitlines():
+        stripped = _SURFACE_AGENT_PREFIX.sub("", raw_line.strip())
+        if not stripped:
+            continue
+        if stripped == "#### Surface Candidates":
+            in_surface_section = True
+            continue
+        if stripped.startswith("### ") or stripped.startswith("#### "):
+            in_surface_section = False
+            continue
+        if not in_surface_section or not stripped.startswith("{"):
+            continue
+        try:
+            payload = json.loads(stripped)
+        except json.JSONDecodeError:
+            continue
+
+        surface_type = str(payload.get("surface_type") or "").strip().lower().replace("-", "_")
+        target = str(payload.get("target") or "").strip()
+        source = str(payload.get("source") or payload.get("agent") or "").strip()
+        rationale = str(payload.get("rationale") or payload.get("reason") or payload.get("notes") or "").strip()
+        evidence_ref = str(payload.get("evidence_ref") or payload.get("evidence") or "").strip()
+        status = str(payload.get("status") or "discovered").strip().lower().replace("-", "_")
+
+        if surface_type not in _VALID_SURFACE_TYPES:
+            continue
+        if status not in _VALID_SURFACE_STATUSES:
+            status = "discovered"
+        if not target or not source or not rationale:
+            continue
+
+        records.append(
+            {
+                "surface_type": surface_type,
+                "target": target,
+                "source": source,
+                "rationale": rationale,
+                "evidence_ref": evidence_ref,
+                "status": status,
+            }
+        )
+
+    return records
+
+
+def _backfill_surfaces_from_process_log(run: Run, engagement_dir: Path) -> None:
+    process_log = process_log_path_for(run)
+    if not process_log.exists():
+        return
+
+    surfaces_path = engagement_dir / "surfaces.jsonl"
+    existing_rows: list[dict] = []
+    existing_keys: set[tuple[str, str]] = set()
+    if surfaces_path.exists():
+        try:
+            for line in surfaces_path.read_text(encoding="utf-8", errors="replace").splitlines():
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                row = json.loads(stripped)
+                if not isinstance(row, dict):
+                    continue
+                existing_rows.append(row)
+                surface_type = str(row.get("surface_type") or "").strip().lower().replace("-", "_")
+                target = str(row.get("target") or "").strip()
+                if surface_type and target:
+                    existing_keys.add((surface_type, target))
+        except json.JSONDecodeError:
+            return
+
+    appended_rows: list[dict[str, str]] = []
+    try:
+        for raw_line in process_log.read_text(encoding="utf-8", errors="replace").splitlines():
+            stripped = raw_line.strip()
+            if not stripped:
+                continue
+            try:
+                payload = json.loads(stripped)
+            except json.JSONDecodeError:
+                continue
+            for text in _iter_runtime_text_fragments(payload):
+                if "#### Surface Candidates" not in text:
+                    continue
+                for record in _extract_surface_candidates_from_text(text):
+                    key = (record["surface_type"], record["target"])
+                    if key in existing_keys:
+                        continue
+                    existing_keys.add(key)
+                    appended_rows.append(record)
+    except OSError:
+        return
+
+    if not appended_rows:
+        return
+
+    surfaces_path.parent.mkdir(parents=True, exist_ok=True)
+    existing_text = surfaces_path.read_text(encoding="utf-8", errors="replace") if surfaces_path.exists() else ""
+    with surfaces_path.open("a", encoding="utf-8") as handle:
+        if existing_text and not existing_text.endswith("\n"):
+            handle.write("\n")
+        for row in appended_rows:
+            handle.write(json.dumps(row, separators=(",", ":")) + "\n")
+
+
 def normalize_active_scope(run: Run) -> None:
     engagement_dir = _active_engagement_dir(run)
     if engagement_dir is None:
@@ -473,6 +608,7 @@ def normalize_active_scope(run: Run) -> None:
 
     context = _loopback_display_context(run)
     _normalize_scope_file(engagement_dir / "scope.json", run=run)
+    _backfill_surfaces_from_process_log(run, engagement_dir)
     if context is None:
         return
 
