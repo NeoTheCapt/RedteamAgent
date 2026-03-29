@@ -200,6 +200,174 @@ def test_auto_launch_emits_runtime_heartbeat_when_process_is_still_running(monke
     assert "No active engagement directory found." == metadata["stop_reason_text"]
 
 
+def test_auto_launch_missing_container_uses_incomplete_queue_artifacts(monkeypatch):
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+
+    class ImmediateThread:
+        def __init__(self, *, target, args=(), daemon=None):
+            self._target = target
+            self._args = args
+
+        def start(self):
+            run = self._args[0]
+            workspace = Path(run.engagement_root) / "workspace"
+            engagement_dir = workspace / "engagements" / "2026-03-29-000000-example-queue"
+            engagement_dir.mkdir(parents=True, exist_ok=True)
+            (workspace / "engagements" / ".active").write_text(
+                "engagements/2026-03-29-000000-example-queue\n",
+                encoding="utf-8",
+            )
+            (engagement_dir / "scope.json").write_text(
+                json.dumps(
+                    {
+                        "status": "in_progress",
+                        "current_phase": "consume_test",
+                        "phases_completed": ["recon", "collect"],
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            with sqlite3.connect(engagement_dir / "cases.db") as connection:
+                connection.execute(
+                    "CREATE TABLE cases (id INTEGER PRIMARY KEY AUTOINCREMENT, status TEXT NOT NULL)"
+                )
+                connection.executemany(
+                    "INSERT INTO cases(status) VALUES (?)",
+                    [("pending",), ("done",)],
+                )
+                connection.commit()
+            process_log = Path(run.engagement_root) / "runtime" / "process.log"
+            process_log.write_text(
+                json.dumps({"type": "tool_use", "part": {"tool": "todowrite", "state": {"input": {}}}}) + "\n",
+                encoding="utf-8",
+            )
+            self._target(*self._args)
+
+    class FakeLogFollower:
+        def poll(self):
+            return 0
+
+    statuses = iter(["running", None])
+
+    def fake_run(command, **kwargs):
+        if command[:3] == ["docker", "run", "-d"]:
+            return subprocess.CompletedProcess(command, 0, stdout="container-123\n", stderr="")
+        if command[:4] == ["docker", "inspect", "-f", "{{.State.Status}}"]:
+            status = next(statuses)
+            if status is None:
+                return subprocess.CompletedProcess(command, 1, stdout="", stderr="Error: No such object\n")
+            return subprocess.CompletedProcess(command, 0, stdout=f"{status}\n", stderr="")
+        if command[:3] == ["docker", "rm", "-f"]:
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("app.services.launcher.subprocess.run", fake_run)
+    monkeypatch.setattr("app.services.launcher.subprocess.Popen", lambda *args, **kwargs: FakeLogFollower())
+    monkeypatch.setattr("app.services.launcher.Thread", ImmediateThread)
+    object.__setattr__(settings, "auto_launch_runs", True)
+
+    try:
+        run = create_run(client, token, project["id"], "https://launched.example")
+    finally:
+        object.__setattr__(settings, "auto_launch_runs", False)
+
+    latest = db.get_run_by_id(run["id"])
+    assert latest is not None
+    assert latest.status == "failed"
+    metadata = json.loads((Path(run["engagement_root"]) / "run.json").read_text(encoding="utf-8"))
+    assert metadata["stop_reason_code"] == "queue_incomplete"
+    assert metadata["stop_reason_text"] == "Queue still has pending=1 processing=0."
+
+
+
+def test_auto_launch_missing_container_preserves_completed_artifacts(monkeypatch):
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+
+    class ImmediateThread:
+        def __init__(self, *, target, args=(), daemon=None):
+            self._target = target
+            self._args = args
+
+        def start(self):
+            run = self._args[0]
+            workspace = Path(run.engagement_root) / "workspace"
+            engagement_dir = workspace / "engagements" / "2026-03-29-000000-example-complete"
+            engagement_dir.mkdir(parents=True, exist_ok=True)
+            (workspace / "engagements" / ".active").write_text(
+                "engagements/2026-03-29-000000-example-complete\n",
+                encoding="utf-8",
+            )
+            (engagement_dir / "scope.json").write_text(
+                json.dumps(
+                    {
+                        "status": "complete",
+                        "current_phase": "complete",
+                        "phases_completed": ["recon", "collect", "consume_test", "exploit", "report"],
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            (engagement_dir / "report.md").write_text("# report\n", encoding="utf-8")
+            (engagement_dir / "surfaces.jsonl").write_text("", encoding="utf-8")
+            with sqlite3.connect(engagement_dir / "cases.db") as connection:
+                connection.execute(
+                    "CREATE TABLE cases (id INTEGER PRIMARY KEY AUTOINCREMENT, status TEXT NOT NULL)"
+                )
+                connection.executemany(
+                    "INSERT INTO cases(status) VALUES (?)",
+                    [("done",), ("error",)],
+                )
+                connection.commit()
+            process_log = Path(run.engagement_root) / "runtime" / "process.log"
+            process_log.write_text(
+                json.dumps({"type": "tool_use", "part": {"tool": "todowrite", "state": {"input": {}}}}) + "\n",
+                encoding="utf-8",
+            )
+            self._target(*self._args)
+
+    class FakeLogFollower:
+        def poll(self):
+            return 0
+
+    statuses = iter(["running", None])
+
+    def fake_run(command, **kwargs):
+        if command[:3] == ["docker", "run", "-d"]:
+            return subprocess.CompletedProcess(command, 0, stdout="container-123\n", stderr="")
+        if command[:4] == ["docker", "inspect", "-f", "{{.State.Status}}"]:
+            status = next(statuses)
+            if status is None:
+                return subprocess.CompletedProcess(command, 1, stdout="", stderr="Error: No such object\n")
+            return subprocess.CompletedProcess(command, 0, stdout=f"{status}\n", stderr="")
+        if command[:3] == ["docker", "rm", "-f"]:
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("app.services.launcher.subprocess.run", fake_run)
+    monkeypatch.setattr("app.services.launcher.subprocess.Popen", lambda *args, **kwargs: FakeLogFollower())
+    monkeypatch.setattr("app.services.launcher.Thread", ImmediateThread)
+    object.__setattr__(settings, "auto_launch_runs", True)
+
+    try:
+        run = create_run(client, token, project["id"], "https://launched.example")
+    finally:
+        object.__setattr__(settings, "auto_launch_runs", False)
+
+    latest = db.get_run_by_id(run["id"])
+    assert latest is not None
+    assert latest.status == "completed"
+    metadata = json.loads((Path(run["engagement_root"]) / "run.json").read_text(encoding="utf-8"))
+    assert metadata["stop_reason_code"] == "completed"
+    assert metadata["stop_reason_text"] == "Run completed successfully."
+
+
+
 def test_engagement_completion_state_prefers_logged_stop_reason():
     client = TestClient(app)
     token = register_and_login(client, "alice")
