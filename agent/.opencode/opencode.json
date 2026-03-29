@@ -85,7 +85,7 @@
       "edit": false,
       "bash": true,
       "glob": true,
-      "grep": true
+      "grep": false
     },
     "vulnerability-analyst": {
       "description": "Analyzes scan results, identifies vulnerability patterns, prioritizes attack paths.",
