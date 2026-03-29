@@ -268,6 +268,23 @@ def _load_queue_state(scope_path: Path | None) -> tuple[str, int, int, int, str]
     return (current_phase, total_cases, pending_cases, processing_cases, queue_health)
 
 
+def _format_db_timestamp(value: datetime) -> str:
+    return value.replace(microsecond=0).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _sync_run_updated_at_from_activity(run: Run, *candidates: datetime | None) -> Run:
+    latest_candidate = max((candidate for candidate in candidates if candidate is not None), default=None)
+    if latest_candidate is None:
+        return run
+
+    current_updated_at = _parse_db_timestamp(run.updated_at) or _parse_db_timestamp(run.created_at)
+    latest_candidate = latest_candidate.replace(microsecond=0)
+    if current_updated_at is not None and latest_candidate <= current_updated_at:
+        return run
+
+    return db.set_run_updated_at(run.id, _format_db_timestamp(latest_candidate))
+
+
 def _reconcile_run_status(run: Run, project: Project | None = None, user: User | None = None) -> Run:
     normalize_active_scope(run)
     pid = locate_runtime_pid(run)
@@ -361,6 +378,8 @@ def _reconcile_run_status(run: Run, project: Project | None = None, user: User |
                 )
                 stop_run_runtime(failed)
                 return failed
+        if run.status == "running":
+            run = _sync_run_updated_at_from_activity(run, workflow_activity_at, last_activity_at)
         if run.status != "running":
             refreshed = db.update_run_status(run.id, "running")
             _clear_run_terminal_reason(refreshed)
