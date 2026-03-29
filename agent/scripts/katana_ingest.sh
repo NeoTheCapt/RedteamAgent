@@ -11,6 +11,7 @@ source "$SCRIPT_DIR/lib/db.sh"
 source "$SCRIPT_DIR/lib/container.sh"
 source "$SCRIPT_DIR/lib/katana.sh"
 source "$SCRIPT_DIR/lib/noise.sh"
+source "$SCRIPT_DIR/lib/loopback_scope.sh"
 
 # --- Validate arguments ---
 if [[ $# -lt 1 ]]; then
@@ -75,6 +76,15 @@ ingest_request() {
 
     [[ -n "$url" ]] || return 0
     method=$(printf '%s' "$method" | tr '[:lower:]' '[:upper:]')
+
+    local normalized_url
+    normalized_url="$(normalize_target_for_scope "$ENGAGEMENT_DIR" "$url")" || {
+        if [[ $? -eq 10 ]]; then
+            return 0
+        fi
+        return 0
+    }
+    url="$normalized_url"
 
     url_path=$(extract_url_path "$url")
     [[ -n "$url_path" ]] || return 0
