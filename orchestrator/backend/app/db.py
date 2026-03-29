@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
+import time
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
@@ -17,15 +19,52 @@ class UsernameAlreadyExistsError(Exception):
     pass
 
 
+_INIT_LOCK = threading.Lock()
+_INITIALIZED_DB_PATH: Path | None = None
+_DB_OPEN_RETRY_ATTEMPTS = 5
+_DB_OPEN_RETRY_DELAY_SECONDS = 0.05
+
+
 def database_path() -> Path:
-    return settings.data_dir / "orchestrator.sqlite3"
+    return (settings.data_dir / "orchestrator.sqlite3").resolve()
+
+
+def _is_retryable_open_error(exc: sqlite3.OperationalError) -> bool:
+    return "unable to open database file" in str(exc).lower()
+
+
+def _connect_database(*, timeout: float = 5.0) -> sqlite3.Connection:
+    db_path = database_path()
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+
+    last_error: sqlite3.OperationalError | None = None
+    for attempt in range(_DB_OPEN_RETRY_ATTEMPTS):
+        try:
+            return sqlite3.connect(db_path, timeout=timeout)
+        except sqlite3.OperationalError as exc:
+            if not _is_retryable_open_error(exc) or attempt == _DB_OPEN_RETRY_ATTEMPTS - 1:
+                raise
+            last_error = exc
+            time.sleep(_DB_OPEN_RETRY_DELAY_SECONDS)
+
+    assert last_error is not None
+    raise last_error
 
 
 def init_db() -> None:
-    settings.data_dir.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(database_path()) as connection:
-        connection.execute("PRAGMA foreign_keys = ON")
-        connection.execute(
+    global _INITIALIZED_DB_PATH
+    current_db_path = database_path()
+    if _INITIALIZED_DB_PATH == current_db_path:
+        return
+
+    with _INIT_LOCK:
+        current_db_path = database_path()
+        if _INITIALIZED_DB_PATH == current_db_path:
+            return
+        settings.data_dir.mkdir(parents=True, exist_ok=True)
+        with _connect_database() as connection:
+            connection.execute("PRAGMA foreign_keys = ON")
+            connection.execute(
             """
             CREATE TABLE IF NOT EXISTS users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -124,12 +163,13 @@ def init_db() -> None:
             """
         )
         connection.commit()
+        _INITIALIZED_DB_PATH = current_db_path
 
 
 @contextmanager
 def get_connection() -> Iterator[sqlite3.Connection]:
     init_db()
-    connection = sqlite3.connect(database_path())
+    connection = _connect_database()
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA foreign_keys = ON")
     try:
