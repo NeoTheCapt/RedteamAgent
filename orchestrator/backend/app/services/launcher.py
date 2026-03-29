@@ -7,12 +7,13 @@ import shutil
 import signal
 import sqlite3
 import subprocess
+import tempfile
 import time
 from collections import deque
 from datetime import datetime
 from threading import Thread
 from pathlib import Path
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import quote, urlsplit, urlunsplit
 
 from .. import db
 from ..config import settings
@@ -78,6 +79,78 @@ _AUTO_RESUME_LIMIT = 3
 RUN_STALL_TIMEOUT_SECONDS = 900
 EARLY_PHASE_STALL_TIMEOUT_SECONDS = 180
 EARLY_PHASE_STALL_PHASES = {"unknown", "recon", "collect"}
+
+
+def _is_sqlite_corruption_error(exc: sqlite3.Error) -> bool:
+    message = str(exc).lower()
+    return any(token in message for token in ("malformed", "not a database", "disk image is malformed"))
+
+
+def _is_sqlite_transient_error(exc: sqlite3.Error) -> bool:
+    message = str(exc).lower()
+    return any(token in message for token in ("locked", "busy", "database schema is locked"))
+
+
+def _connect_sqlite_readonly(path: Path) -> sqlite3.Connection:
+    uri = f"file:{quote(str(path))}?mode=ro"
+    connection = sqlite3.connect(uri, uri=True, timeout=1.0)
+    connection.execute("PRAGMA busy_timeout = 1000")
+    return connection
+
+
+def _copy_sqlite_snapshot(path: Path, snapshot_dir: Path) -> Path:
+    snapshot_path = snapshot_dir / path.name
+    shutil.copy2(path, snapshot_path)
+    for suffix in ("-wal", "-shm"):
+        sidecar = Path(f"{path}{suffix}")
+        if sidecar.exists():
+            shutil.copy2(sidecar, snapshot_dir / sidecar.name)
+    return snapshot_path
+
+
+def _read_sqlite_snapshot(path: Path, reader, default):
+    try:
+        with tempfile.TemporaryDirectory(prefix="launcher-sqlite-") as temp_dir:
+            snapshot_path = _copy_sqlite_snapshot(path, Path(temp_dir))
+            with _connect_sqlite_readonly(snapshot_path) as connection:
+                return reader(connection)
+    except (OSError, sqlite3.Error):
+        return default
+
+
+def _read_sqlite_with_fallback(path: Path, reader, default):
+    if not path.exists():
+        return default
+
+    for _ in range(5):
+        try:
+            with sqlite3.connect(path, timeout=1.0) as connection:
+                connection.execute("PRAGMA busy_timeout = 1000")
+                return reader(connection)
+        except sqlite3.OperationalError as exc:
+            if not _is_sqlite_transient_error(exc) and not _is_sqlite_corruption_error(exc):
+                return default
+        except sqlite3.Error as exc:
+            if not _is_sqlite_corruption_error(exc):
+                return default
+
+        try:
+            with _connect_sqlite_readonly(path) as connection:
+                return reader(connection)
+        except sqlite3.OperationalError as exc:
+            if not _is_sqlite_transient_error(exc) and not _is_sqlite_corruption_error(exc):
+                return default
+        except sqlite3.Error as exc:
+            if not _is_sqlite_corruption_error(exc):
+                return default
+
+        snapshot_value = _read_sqlite_snapshot(path, reader, default)
+        if snapshot_value is not default:
+            return snapshot_value
+
+        time.sleep(0.1)
+
+    return default
 
 
 def _rewrite_runtime_target(target: str) -> str:
@@ -319,20 +392,16 @@ def _heartbeat_context(run: Run) -> tuple[str, str]:
 
 
 def _count_remaining_cases(cases_db: Path) -> tuple[int, int]:
-    if not cases_db.exists():
-        return (0, 0)
-    try:
-        with sqlite3.connect(cases_db, timeout=1.0) as connection:
-            connection.execute("PRAGMA busy_timeout = 1000")
-            pending = connection.execute(
-                "SELECT COUNT(*) FROM cases WHERE status = 'pending'"
-            ).fetchone()
-            processing = connection.execute(
-                "SELECT COUNT(*) FROM cases WHERE status = 'processing'"
-            ).fetchone()
-    except sqlite3.Error:
-        return (0, 0)
-    return (int(pending[0] or 0), int(processing[0] or 0))
+    def _reader(connection: sqlite3.Connection) -> tuple[int, int]:
+        pending = connection.execute(
+            "SELECT COUNT(*) FROM cases WHERE status = 'pending'"
+        ).fetchone()
+        processing = connection.execute(
+            "SELECT COUNT(*) FROM cases WHERE status = 'processing'"
+        ).fetchone()
+        return (int(pending[0] or 0), int(processing[0] or 0))
+
+    return _read_sqlite_with_fallback(cases_db, _reader, (0, 0))
 
 
 def _path_mtime(path: Path) -> float | None:
@@ -481,24 +550,25 @@ def _load_running_queue_state(engagement_dir: Path | None) -> tuple[str, int, in
     if not cases_db.exists():
         return (current_phase, total_cases, pending_cases, processing_cases)
 
-    try:
-        with sqlite3.connect(cases_db, timeout=1.0) as connection:
-            connection.execute("PRAGMA busy_timeout = 1000")
-            total_row = connection.execute("SELECT COUNT(*) FROM cases").fetchone()
-            pending_row = connection.execute(
-                "SELECT COUNT(*) FROM cases WHERE status = 'pending'"
-            ).fetchone()
-            processing_row = connection.execute(
-                "SELECT COUNT(*) FROM cases WHERE status = 'processing'"
-            ).fetchone()
-            total_cases = int(total_row[0] or 0)
-            pending_cases = int(pending_row[0] or 0)
-            processing_cases = int(processing_row[0] or 0)
-    except sqlite3.Error:
-        total_cases = 0
-        pending_cases = 0
-        processing_cases = 0
+    def _reader(connection: sqlite3.Connection) -> tuple[int, int, int]:
+        total_row = connection.execute("SELECT COUNT(*) FROM cases").fetchone()
+        pending_row = connection.execute(
+            "SELECT COUNT(*) FROM cases WHERE status = 'pending'"
+        ).fetchone()
+        processing_row = connection.execute(
+            "SELECT COUNT(*) FROM cases WHERE status = 'processing'"
+        ).fetchone()
+        return (
+            int(total_row[0] or 0),
+            int(pending_row[0] or 0),
+            int(processing_row[0] or 0),
+        )
 
+    total_cases, pending_cases, processing_cases = _read_sqlite_with_fallback(
+        cases_db,
+        _reader,
+        (0, 0, 0),
+    )
     return (current_phase, total_cases, pending_cases, processing_cases)
 
 
