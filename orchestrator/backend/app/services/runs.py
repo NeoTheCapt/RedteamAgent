@@ -21,6 +21,7 @@ from .launcher import (
     _active_engagement_dir,
     _clear_run_terminal_reason,
     _last_logged_stop_metadata,
+    _latest_process_log_activity_at,
     _maybe_auto_resume_run,
     _write_run_terminal_reason,
     engagement_completion_state,
@@ -180,7 +181,8 @@ def _path_mtime(path: Path) -> datetime | None:
 
 
 def _latest_runtime_activity_at(run: Run) -> datetime | None:
-    latest = _path_mtime(process_log_path_for(run))
+    latest_timestamp = _latest_process_log_activity_at(process_log_path_for(run))
+    latest = datetime.fromtimestamp(latest_timestamp) if latest_timestamp is not None else None
 
     process_metadata = _path_mtime(process_metadata_path_for(run))
     if process_metadata is not None and (latest is None or process_metadata > latest):
@@ -189,7 +191,8 @@ def _latest_runtime_activity_at(run: Run) -> datetime | None:
     opencode_logs_root = opencode_home_root_for(run) / "log"
     if opencode_logs_root.exists():
         for path in opencode_logs_root.glob("*.log"):
-            candidate = _path_mtime(path)
+            candidate_timestamp = _latest_process_log_activity_at(path)
+            candidate = datetime.fromtimestamp(candidate_timestamp) if candidate_timestamp is not None else None
             if candidate is None:
                 continue
             if latest is None or candidate > latest:
@@ -199,7 +202,7 @@ def _latest_runtime_activity_at(run: Run) -> datetime | None:
 
 
 def _latest_workflow_activity_at(run: Run, scope_path: Path | None) -> datetime | None:
-    latest = _path_mtime(process_log_path_for(run))
+    latest = None
     if scope_path is None or not scope_path.exists():
         return latest
 
