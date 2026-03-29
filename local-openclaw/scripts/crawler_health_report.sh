@@ -6,9 +6,14 @@ label="${2:-Run}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
+# shellcheck disable=SC1091
+source "$ROOT_DIR/scripts/lib/orchestrator_auth.sh"
+
 ORCH_BASE_URL="${ORCH_BASE_URL:-http://127.0.0.1:18000}"
-ORCH_TOKEN="${ORCH_TOKEN:?set ORCH_TOKEN}"
+ORCH_TOKEN="${ORCH_TOKEN:-}"
 PROJECT_ID="${PROJECT_ID:?set PROJECT_ID}"
+
+ensure_orchestrator_token
 
 snapshot_json="$(python3 "$ROOT_DIR/scripts/run_context_snapshot.py" "$run_id")"
 summary_json="$(printf '%s' "$snapshot_json" | jq '.summary')"

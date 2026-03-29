@@ -10,8 +10,11 @@ REFRESH_ORCHESTRATOR="${REFRESH_ORCHESTRATOR:-1}"
 
 mkdir -p "$STATE_DIR" "$LOGS_DIR"
 
+# shellcheck disable=SC1091
+source "$ROOT_DIR/scripts/lib/orchestrator_auth.sh"
+
 ORCH_BASE_URL="${ORCH_BASE_URL:-http://127.0.0.1:18000}"
-ORCH_TOKEN="${ORCH_TOKEN:?set ORCH_TOKEN}"
+ORCH_TOKEN="${ORCH_TOKEN:-}"
 PROJECT_ID="${PROJECT_ID:?set PROJECT_ID}"
 TARGET_OKX="${TARGET_OKX:-https://www.okx.com}"
 TARGET_LOCAL="${TARGET_LOCAL:-http://127.0.0.1:8000}"
@@ -24,8 +27,7 @@ timestamp() {
 }
 
 refresh_runs_json() {
-    curl -fsS \
-        -H "Authorization: Bearer $ORCH_TOKEN" \
+    orchestrator_curl \
         "$ORCH_BASE_URL/projects/$PROJECT_ID/runs" > "$LATEST_RUNS_JSON"
 }
 

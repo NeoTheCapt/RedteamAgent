@@ -8,6 +8,7 @@ https?://[^?#]+/(?:assets|cdn/assets|cdnpre/assets|cdn/i18n)/(?:[^?#]*/)?(?:asse
 https?://[^?#]+/(?:assets|cdn/assets|cdnpre/assets)/(?:[^?#]*/)?(?:scripts/lib|[bB]un)(?:/[^?#]*)?(?:$|[?#])
 https?://[^?#]+/(?:[^?#]*/)?(?:[Tt]rident|[Ee]dge)(?:/[^?#]*)?(?:$|[?#])
 https?://[^?#]+/(?:[^?#]*/)?(?:build/routes|node_modules)(?:/[^?#]*)?(?:$|[?#])
+https?://[^?#]+/\.well-known/[^?#]+/[0-9]{2,5}/\.well-known/[^?#]+(?:/[^?#]*)?(?:$|[?#])
 https?://[^?#]+\.(?:png|jpe?g|gif|webp|bmp|ico|svg|avif|mp3|mp4|wav|ogg|pdf|zip|gz|woff2?|ttf|eot|wasm(?:\.br|\.gz)?)(?:$|[?#])
 EOF
 }
@@ -150,6 +151,10 @@ is_katana_noise_path() {
             return 0
             ;;
     esac
+
+    if printf '%s' "$path_lower" | grep -Eq '/\.well-known/[^/]+/[0-9]{2,5}/\.well-known/[^/]+'; then
+        return 0
+    fi
 
     return 1
 }

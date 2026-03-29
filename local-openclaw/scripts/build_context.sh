@@ -4,8 +4,11 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 STATE_DIR="$ROOT_DIR/state"
 
+# shellcheck disable=SC1091
+source "$ROOT_DIR/scripts/lib/orchestrator_auth.sh"
+
 ORCH_BASE_URL="${ORCH_BASE_URL:-http://127.0.0.1:18000}"
-ORCH_TOKEN="${ORCH_TOKEN:?set ORCH_TOKEN}"
+ORCH_TOKEN="${ORCH_TOKEN:-}"
 PROJECT_ID="${PROJECT_ID:?set PROJECT_ID}"
 
 mkdir -p "$STATE_DIR"
@@ -13,8 +16,7 @@ mkdir -p "$STATE_DIR"
 latest_runs_json="$STATE_DIR/latest-runs.json"
 latest_context_md="$STATE_DIR/latest-context.md"
 
-curl -fsS \
-    -H "Authorization: Bearer $ORCH_TOKEN" \
+orchestrator_curl \
     "$ORCH_BASE_URL/projects/$PROJECT_ID/runs" > "$latest_runs_json"
 
 run_context_snapshot() {
@@ -24,8 +26,7 @@ run_context_snapshot() {
 
 orchestrator_events() {
     local run_id="$1"
-    curl -fsS \
-        -H "Authorization: Bearer $ORCH_TOKEN" \
+    orchestrator_curl \
         "$ORCH_BASE_URL/projects/$PROJECT_ID/runs/$run_id/events"
 }
 
