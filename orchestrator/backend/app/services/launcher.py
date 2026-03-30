@@ -1746,6 +1746,15 @@ def stop_run_runtime(run: Run) -> None:
                 )
 
 
+def _drain_runtime_log_follower(log_follower: subprocess.Popen[bytes] | None, *, timeout: int = 5) -> None:
+    if log_follower is None or log_follower.poll() is not None:
+        return
+    try:
+        log_follower.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return
+
+
 def _close_log_streams(log_follower: subprocess.Popen[bytes] | None, log_handle) -> None:
     if log_follower is not None and log_follower.poll() is None:
         log_follower.terminate()
@@ -2009,6 +2018,7 @@ def _supervise_container(
             _write_run_terminal_reason(terminal, reason_code=reason_code, reason_text=reason_text)
             break
         if status == "exited":
+            _drain_runtime_log_follower(log_follower)
             exit_code = _container_exit_code(container_name)
             phase, _ = _heartbeat_context(run)
             normalize_active_scope(run)
@@ -2041,6 +2051,7 @@ def _supervise_container(
             _write_run_terminal_reason(terminal, reason_code=reason_code, reason_text=reason_text)
             break
         if status is None:
+            _drain_runtime_log_follower(log_follower)
             phase, _ = _heartbeat_context(run)
             succeeded, reason_code, reason_text, summary = _terminal_reason_from_artifacts(run)
             if not succeeded and _maybe_auto_resume_run(
