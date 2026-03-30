@@ -851,6 +851,60 @@ def _load_runtime_model_verification(run_root: Path, project) -> dict:
     }
 
 
+def _scope_disk_phase_name(phase: str) -> str:
+    if phase == "consume-test":
+        return "consume_test"
+    return phase
+
+
+def _sync_scope_phase_projection(
+    scope_path: Path,
+    scope: dict,
+    *,
+    current_phase: str,
+    run_status: str,
+) -> dict:
+    if not scope_path.exists() or not isinstance(scope, dict):
+        return scope
+
+    effective_phase = _normalize_phase(current_phase)
+    if effective_phase == "unknown" or _is_terminal_run_status(run_status):
+        return scope
+
+    scope_phase = _normalize_phase(scope.get("current_phase"))
+    if _phase_index(effective_phase) <= _phase_index(scope_phase):
+        return scope
+
+    payload = dict(scope)
+    changed = False
+
+    disk_current_phase = _scope_disk_phase_name(effective_phase)
+    if payload.get("current_phase") != disk_current_phase:
+        payload["current_phase"] = disk_current_phase
+        changed = True
+
+    existing_completed: list[str] = []
+    for item in payload.get("phases_completed", []):
+        normalized = _normalize_phase(item)
+        if normalized == "unknown" or normalized in existing_completed:
+            continue
+        existing_completed.append(normalized)
+
+    desired_completed = list(existing_completed)
+    for phase in PHASE_ORDER[: _phase_index(effective_phase)]:
+        if phase not in desired_completed:
+            desired_completed.append(phase)
+
+    disk_completed = [_scope_disk_phase_name(phase) for phase in desired_completed]
+    if payload.get("phases_completed") != disk_completed:
+        payload["phases_completed"] = disk_completed
+        changed = True
+
+    if changed:
+        scope_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return payload
+
+
 def _sync_run_metadata_projection(
     run,
     run_root: Path,
@@ -922,6 +976,12 @@ def summarize_run(project_id: int, run_id: int, user: User) -> RunSummary:
     findings_count = _count_findings(active_root / "findings.md")
     events = list_events_for_run(project_id, run_id, user)
     effective_current_phase = _effective_current_phase(scope, events, processing_agents, run.status)
+    scope = _sync_scope_phase_projection(
+        active_root / "scope.json",
+        scope,
+        current_phase=effective_current_phase,
+        run_status=run.status,
+    )
     agents = _build_agent_cards(events, scope, processing_agents, run.status)
     phases = _build_phase_cards(scope, events, agents, run.status, effective_current_phase)
 
