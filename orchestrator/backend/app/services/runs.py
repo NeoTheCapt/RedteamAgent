@@ -158,17 +158,35 @@ def _parse_db_timestamp(value: str) -> datetime | None:
 
 
 def _active_scope_path(run: Run) -> Path | None:
-    engagement_dir = Path(run.engagement_root) / "workspace" / "engagements"
+    workspace = Path(run.engagement_root) / "workspace"
+    engagement_dir = workspace / "engagements"
     active_file = engagement_dir / ".active"
-    if not active_file.exists():
-        return None
+    if active_file.exists():
+        active_name = active_file.read_text(encoding="utf-8").strip()
+        if active_name:
+            active_path = Path(active_name)
+            if active_path.is_absolute():
+                scope_path = active_path / "scope.json"
+            else:
+                active_relative = active_name.removeprefix("./").removeprefix("/")
+                scope_path = (
+                    workspace / active_relative / "scope.json"
+                    if active_relative.startswith("engagements/")
+                    else engagement_dir / active_relative / "scope.json"
+                )
+            if scope_path.exists():
+                return scope_path
 
-    active_name = active_file.read_text(encoding="utf-8").strip().removeprefix("./").removeprefix("/")
-    if not active_name:
-        return None
-    if active_name.startswith("engagements/"):
-        return Path(run.engagement_root) / "workspace" / active_name / "scope.json"
-    return engagement_dir / active_name / "scope.json"
+    candidates = (
+        sorted(
+            [path for path in engagement_dir.iterdir() if path.is_dir() and (path / "scope.json").exists()],
+            key=lambda path: (path.stat().st_mtime, path.name),
+            reverse=True,
+        )
+        if engagement_dir.exists()
+        else []
+    )
+    return candidates[0] / "scope.json" if candidates else None
 
 
 def _utc_now_naive() -> datetime:

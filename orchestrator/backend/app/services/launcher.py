@@ -188,11 +188,25 @@ def _rewrite_runtime_target(target: str) -> str:
     return urlunsplit(rewritten)
 
 
+def _engagement_dir_rank(path: Path) -> tuple[int, float, str]:
+    return (1 if (path / "scope.json").exists() else 0, path.stat().st_mtime, path.name)
+
+
+
 def _active_engagement_dir(run: Run) -> Path | None:
-    engagements_root = workspace_root_for(run) / "engagements"
-    active_file = workspace_root_for(run) / "engagements" / ".active"
+    workspace = workspace_root_for(run)
+    engagements_root = workspace / "engagements"
+    active_file = engagements_root / ".active"
     if not active_file.exists():
-        candidates = sorted([path for path in engagements_root.iterdir() if path.is_dir()], reverse=True) if engagements_root.exists() else []
+        candidates = (
+            sorted(
+                [path for path in engagements_root.iterdir() if path.is_dir()],
+                key=_engagement_dir_rank,
+                reverse=True,
+            )
+            if engagements_root.exists()
+            else []
+        )
         if candidates:
             active_file.write_text(f"engagements/{candidates[0].name}", encoding="utf-8")
             return candidates[0]
@@ -202,17 +216,35 @@ def _active_engagement_dir(run: Run) -> Path | None:
     if not active_name:
         return None
 
-    active_relative = active_name.removeprefix("./").removeprefix("/")
-    if active_relative.startswith("engagements/"):
-        active_dir = workspace_root_for(run) / active_relative
+    active_path = Path(active_name)
+    if active_path.is_absolute():
+        if active_path.exists() and (active_path / "scope.json").exists():
+            return active_path
     else:
-        active_dir = workspace_root_for(run) / "engagements" / active_relative
-    if active_dir.exists():
-        return active_dir
-    candidates = sorted([path for path in engagements_root.iterdir() if path.is_dir()], reverse=True) if engagements_root.exists() else []
+        active_relative = active_name.removeprefix("./").removeprefix("/")
+        if active_relative.startswith("engagements/"):
+            active_dir = workspace / active_relative
+        else:
+            active_dir = engagements_root / active_relative
+        if active_dir.exists() and (active_dir / "scope.json").exists():
+            return active_dir
+
+    candidates = (
+        sorted(
+            [path for path in engagements_root.iterdir() if path.is_dir()],
+            key=_engagement_dir_rank,
+            reverse=True,
+        )
+        if engagements_root.exists()
+        else []
+    )
     if candidates:
         active_file.write_text(f"engagements/{candidates[0].name}", encoding="utf-8")
         return candidates[0]
+    if active_path.is_absolute() and active_path.exists():
+        return active_path
+    if 'active_dir' in locals() and active_dir.exists():
+        return active_dir
     return None
 
 
@@ -376,6 +408,10 @@ def _normalize_scope_file(scope_path: Path, *, run: Run | None = None) -> dict[s
 
 
 def _active_name_to_engagement_dir(workspace: Path, active_name: str) -> Path:
+    active_path = Path(active_name)
+    if active_path.is_absolute():
+        return active_path
+
     active_relative = active_name.removeprefix("./").removeprefix("/")
     if active_relative.startswith("engagements/"):
         return workspace / active_relative

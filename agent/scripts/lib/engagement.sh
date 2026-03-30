@@ -50,9 +50,14 @@ resolve_engagement_dir() {
 set_active_engagement() {
     local root="${1:-$(pwd)}"
     local engagement_dir="${2:?engagement_dir required}"
-    local resolved
+    local resolved marker
 
+    root="$(cd "$root" >/dev/null 2>&1 && pwd)"
     resolved="$(canonicalize_engagement_dir "$root" "$engagement_dir")"
+    marker="$resolved"
+    if [[ "$resolved" == "$root"/engagements/* ]]; then
+        marker="engagements/${resolved#"$root"/engagements/}"
+    fi
     mkdir -p "$root/engagements"
-    printf '%s\n' "$resolved" > "$root/engagements/.active"
+    printf '%s\n' "$marker" > "$root/engagements/.active"
 }
