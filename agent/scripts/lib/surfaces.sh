@@ -10,8 +10,22 @@ surface_file_path() {
     printf '%s\n' "$eng_dir/surfaces.jsonl"
 }
 
+surface_canonical_type() {
+    local surface_type="${1:?surface type required}"
+    surface_type="$(printf '%s' "$surface_type" | tr '[:upper:]' '[:lower:]' | tr '-' '_')"
+    case "$surface_type" in
+        spa_route|spa|client_route|client_side_route|frontend_route)
+            printf '%s\n' "dynamic_render"
+            ;;
+        *)
+            printf '%s\n' "$surface_type"
+            ;;
+    esac
+}
+
 surface_validate_type() {
     local surface_type="${1:?surface type required}"
+    surface_type="$(surface_canonical_type "$surface_type")"
     case "$surface_type" in
         auth_entry|account_recovery|object_reference|privileged_write|file_handling|dynamic_render|api_documentation|workflow_token)
             return 0
@@ -55,6 +69,7 @@ ensure_surface_file() {
 upsert_surface_record() {
     local eng_dir="${1:?engagement dir required}"
     local surface_type="${2:?surface type required}"
+    surface_type="$(surface_canonical_type "$surface_type")"
     local target="${3:?target required}"
     local source="${4:?source required}"
     local rationale="${5:-}"

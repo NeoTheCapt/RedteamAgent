@@ -830,6 +830,18 @@ _VALID_SURFACE_TYPES = {
     "workflow_token",
 }
 _VALID_SURFACE_STATUSES = {"discovered", "covered", "not_applicable", "deferred"}
+_SURFACE_TYPE_ALIASES = {
+    "spa_route": "dynamic_render",
+    "spa": "dynamic_render",
+    "client_route": "dynamic_render",
+    "client_side_route": "dynamic_render",
+    "frontend_route": "dynamic_render",
+}
+
+
+def _normalize_surface_type(value: str) -> str:
+    normalized = str(value or "").strip().lower().replace("-", "_")
+    return _SURFACE_TYPE_ALIASES.get(normalized, normalized)
 
 
 def _surface_target_contains_placeholder(value: str) -> bool:
@@ -872,7 +884,7 @@ def _extract_surface_candidates_from_text(text: str) -> list[dict[str, str]]:
         except json.JSONDecodeError:
             continue
 
-        surface_type = str(payload.get("surface_type") or "").strip().lower().replace("-", "_")
+        surface_type = _normalize_surface_type(payload.get("surface_type") or "")
         target = str(payload.get("target") or "").strip()
         source = str(payload.get("source") or payload.get("agent") or "").strip()
         rationale = str(payload.get("rationale") or payload.get("reason") or payload.get("notes") or "").strip()
@@ -907,7 +919,7 @@ def _canonicalize_surface_record(record: dict[str, str], context: dict[str, str]
     if not isinstance(normalized, dict):
         return record
     canonical = dict(normalized)
-    surface_type = str(canonical.get("surface_type") or "").strip().lower().replace("-", "_")
+    surface_type = _normalize_surface_type(canonical.get("surface_type") or "")
     status = str(canonical.get("status") or "discovered").strip().lower().replace("-", "_")
     canonical["surface_type"] = surface_type
     canonical["status"] = status if status in _VALID_SURFACE_STATUSES else "discovered"
