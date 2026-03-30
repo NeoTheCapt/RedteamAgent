@@ -105,7 +105,7 @@ Canonical `scope.json` phase tokens:
 
 After each phase update scope.json:
 ```bash
-jq '.phases_completed += ["<phase>"] | .current_phase = "<next>"' \
+jq '.phases_completed = (reduce (((.phases_completed // []) + ["<phase>"])[]) as $phase ([]; if index($phase) == null then . + [$phase] else . end)) | .current_phase = "<next>"' \
     "$DIR/scope.json" > "$DIR/scope_tmp.json" && mv "$DIR/scope_tmp.json" "$DIR/scope.json"
 ```
 
