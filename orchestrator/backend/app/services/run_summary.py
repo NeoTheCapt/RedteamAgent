@@ -239,6 +239,24 @@ def _phase_index(phase: str) -> int:
         return -1
 
 
+def _has_started_consume_test(scope: dict, events: list) -> bool:
+    scope_phase = _normalize_phase(scope.get("current_phase")) if scope else "unknown"
+    if _phase_index(scope_phase) >= _phase_index("consume-test"):
+        return True
+
+    completed = {_normalize_phase(item) for item in scope.get("phases_completed", [])} if scope else set()
+    if "consume-test" in completed:
+        return True
+
+    return any(_phase_index(_event_phase(event)) >= _phase_index("consume-test") for event in events)
+
+
+def _queue_requires_consume_test(scope: dict, events: list, pending_cases: int, processing_cases: int) -> bool:
+    if pending_cases <= 0 and processing_cases <= 0:
+        return False
+    return _has_started_consume_test(scope, events)
+
+
 def _event_phase(event) -> str:
     phase = _normalize_phase(getattr(event, "phase", "unknown"))
     if phase != "unknown":
@@ -502,10 +520,21 @@ def _latest_active_task_phase(events: list, scope_phase: str) -> str:
     return _resolved_event_phase(latest_active, scope_phase)
 
 
-def _effective_current_phase(scope: dict, events: list, processing_agents: list[dict], run_status: str) -> str:
+def _effective_current_phase(
+    scope: dict,
+    events: list,
+    processing_agents: list[dict],
+    run_status: str,
+    *,
+    pending_cases: int = 0,
+    processing_cases: int = 0,
+) -> str:
     scope_phase = _normalize_phase(scope.get("current_phase")) if scope else "unknown"
     if _is_terminal_run_status(run_status):
         return scope_phase
+
+    if _queue_requires_consume_test(scope, events, pending_cases, processing_cases):
+        return "consume-test"
 
     active_task_phase = _latest_active_task_phase(events, scope_phase)
     if active_task_phase != "unknown":
@@ -973,7 +1002,14 @@ def summarize_run(project_id: int, run_id: int, user: User) -> RunSummary:
     surfaces = _load_surface_metrics(active_root / "surfaces.jsonl")
     findings_count = _count_findings(active_root / "findings.md")
     events = list_events_for_run(project_id, run_id, user)
-    effective_current_phase = _effective_current_phase(scope, events, processing_agents, run.status)
+    effective_current_phase = _effective_current_phase(
+        scope,
+        events,
+        processing_agents,
+        run.status,
+        pending_cases=int(cases.get("pending_cases", 0)),
+        processing_cases=int(cases.get("processing_cases", 0)),
+    )
     scope = _sync_scope_phase_projection(
         active_root / "scope.json",
         scope,
