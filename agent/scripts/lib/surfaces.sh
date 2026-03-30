@@ -17,6 +17,12 @@ surface_canonical_type() {
         spa_route|spa|client_route|client_side_route|frontend_route)
             printf '%s\n' "dynamic_render"
             ;;
+        auth|authentication|login|register|mfa|oauth|oauth_flow)
+            printf '%s\n' "auth_entry"
+            ;;
+        business_logic|logic_flow|stateful_flow|race_condition)
+            printf '%s\n' "privileged_write"
+            ;;
         *)
             printf '%s\n' "$surface_type"
             ;;
