@@ -15,7 +15,7 @@ from fastapi import HTTPException, status
 
 from ..models.user import User
 from .events import list_events_for_run
-from .launcher import _loopback_display_context, _rewrite_artifact_value
+from .launcher import _loopback_display_context, _rewrite_artifact_value, normalize_active_scope
 from .runs import _latest_workflow_activity_at, _project_or_404, _reconcile_run_status
 
 PHASE_ORDER = ["recon", "collect", "consume-test", "exploit", "report"]
@@ -992,6 +992,7 @@ def _overview_updated_at(run, active_root: Path, latest_task, latest_phase) -> s
 def summarize_run(project_id: int, run_id: int, user: User) -> RunSummary:
     run = _run_or_404(project_id, run_id, user)
     project = _project_or_404(project_id, user)
+    normalize_active_scope(run)
     run_root = Path(run.engagement_root)
     active_root = _active_engagement_root(run_root)
     cases_db = _resolve_cases_db(run_root, active_root)
