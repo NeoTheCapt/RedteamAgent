@@ -70,65 +70,67 @@ classify_type() {
     fi
   fi
 
-  # 7. javascript
-  if printf '%s' "$path_no_query" | grep -qiE '\.js$'; then
-    echo "javascript"; return
+  # 7. response content-type overrides extension-based asset guesses.
+  # This avoids misclassifying SPA fallback HTML (200 text/html) as javascript/stylesheet
+  # solely because the requested path ends with .js/.css.
+  if printf '%s' "$ct_lower" | grep -qiE 'text/html|application/xhtml|image/svg\+xml'; then
+    echo "page"; return
+  fi
+  if printf '%s' "$ct_lower" | grep -qiE 'application/json|application/xml|text/csv|text/xml|application/pdf|text/plain|application/ld\+json|text/markdown'; then
+    echo "data"; return
+  fi
+  if printf '%s' "$ct_lower" | grep -qiE '^image/' && ! printf '%s' "$ct_lower" | grep -qiE 'svg'; then
+    echo "image"; return
+  fi
+  if printf '%s' "$ct_lower" | grep -qiE '^(video|audio)/'; then
+    echo "video"; return
+  fi
+  if printf '%s' "$ct_lower" | grep -qiE '^font/|application/vnd\.ms-fontobject'; then
+    echo "font"; return
+  fi
+  if printf '%s' "$ct_lower" | grep -qiE 'zip|gzip|tar|rar|7z|bzip'; then
+    echo "archive"; return
   fi
   if printf '%s' "$ct_lower" | grep -qiE 'text/javascript|application/javascript'; then
     echo "javascript"; return
-  fi
-
-  # 8. stylesheet
-  if printf '%s' "$path_no_query" | grep -qiE '\.css$'; then
-    echo "stylesheet"; return
   fi
   if printf '%s' "$ct_lower" | grep -qiE 'text/css'; then
     echo "stylesheet"; return
   fi
 
-  # 9. page
+  # 8. javascript
+  if printf '%s' "$path_no_query" | grep -qiE '\.js$'; then
+    echo "javascript"; return
+  fi
+
+  # 9. stylesheet
+  if printf '%s' "$path_no_query" | grep -qiE '\.css$'; then
+    echo "stylesheet"; return
+  fi
+
+  # 10. page
   if printf '%s' "$path_no_query" | grep -qiE '\.(html?|xhtml|php|aspx?|jsp)$'; then
     echo "page"; return
   fi
-  if printf '%s' "$ct_lower" | grep -qiE 'text/html|application/xhtml|image/svg\+xml'; then
-    echo "page"; return
-  fi
 
-  # 10. data
+  # 11. data
   if printf '%s' "$path_no_query" | grep -qiE '\.(json|xml|csv|ya?ml|txt)$'; then
     echo "data"; return
   fi
-  if printf '%s' "$ct_lower" | grep -qiE 'application/json|application/xml|text/csv|text/xml|application/pdf|text/plain|application/ld\+json|text/markdown'; then
-    echo "data"; return
-  fi
 
-  # 11. image (excluding svg, already handled as page)
-  if printf '%s' "$ct_lower" | grep -qiE '^image/' && ! printf '%s' "$ct_lower" | grep -qiE 'svg'; then
-    echo "image"; return
-  fi
+  # 12. image (excluding svg, already handled as page)
   if printf '%s' "$path_no_query" | grep -qiE '\.(png|jpg|jpeg|gif|webp|ico|bmp|tiff|avif|apng)$'; then
     echo "image"; return
   fi
 
-  # 12. video
-  if printf '%s' "$ct_lower" | grep -qiE '^(video|audio)/'; then
-    echo "video"; return
-  fi
+  # 13. video
   if printf '%s' "$path_no_query" | grep -qiE '\.(mp4|webm|avi|mp3|wav|ogg)$'; then
     echo "video"; return
   fi
 
-  # 13. font
-  if printf '%s' "$ct_lower" | grep -qiE '^font/|application/vnd\.ms-fontobject'; then
-    echo "font"; return
-  fi
+  # 14. font
   if printf '%s' "$path_no_query" | grep -qiE '\.(woff|woff2|ttf|otf|eot)$'; then
     echo "font"; return
-  fi
-
-  # 14. archive
-  if printf '%s' "$ct_lower" | grep -qiE 'zip|gzip|tar|rar|7z|bzip'; then
-    echo "archive"; return
   fi
 
   # 15. unknown

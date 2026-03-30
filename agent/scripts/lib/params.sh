@@ -61,7 +61,14 @@ extract_url_path() {
   case "$url" in
     *://*)
       url="${url#*://}"    # remove scheme://
-      url="/${url#*/}"     # remove host part, keep leading /
+      case "$url" in
+        */*)
+          url="/${url#*/}"   # remove host part, keep leading /
+          ;;
+        *)
+          url="/"            # host-only URL maps to the root path
+          ;;
+      esac
       ;;
   esac
 

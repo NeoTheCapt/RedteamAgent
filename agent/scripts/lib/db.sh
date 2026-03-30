@@ -60,6 +60,7 @@ db_exec() {
 #   <type> <source> <params_key_sig>
 # Insert a case with INSERT OR IGNORE for dedup.
 # Auto-sets status to 'skipped' for non-consumable types (image, video, font, archive).
+# Prints the SQLite changes() count so callers can distinguish inserted rows from dedup no-ops.
 db_insert_case() {
     local db_path="$1"
     local method="$2"
@@ -146,5 +147,5 @@ db_insert_case() {
     '${e_type}', '${e_source}', '${status}', '${e_params_key_sig}'
 );"
 
-    printf '.timeout 5000\n%s\n' "$sql" | sqlite3 "$db_path"
+    printf '.timeout 5000\n%s\nSELECT changes();\n' "$sql" | sqlite3 "$db_path"
 }

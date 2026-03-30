@@ -4,6 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/lib/engagement.sh"
+EMIT_RUNTIME_EVENT="$SCRIPT_DIR/emit_runtime_event.sh"
 
 usage() {
   echo "usage: append_log_entry.sh [engagement_dir] <agent> <title> <action> <result>" >&2
@@ -98,3 +99,12 @@ acquire_lock
   printf '\n**Action**: %s\n' "$SHORT_ACTION"
   printf '**Result**: %s\n' "$SHORT_RESULT"
 } >> "$LOG_FILE"
+
+if [[ -f "$EMIT_RUNTIME_EVENT" ]]; then
+  bash "$EMIT_RUNTIME_EVENT" \
+    "artifact.updated" \
+    "${ORCHESTRATOR_PHASE:-unknown}" \
+    "log.md" \
+    "$AGENT" \
+    "$SHORT_TITLE"
+fi

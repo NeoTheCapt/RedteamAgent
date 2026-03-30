@@ -80,6 +80,6 @@ run_tool ffuf -u https://TARGET -w /usr/share/seclists/Discovery/DNS/subdomains-
 
 ### 9. Output
 ```bash
-run_tool ffuf -u https://TARGET/FUZZ -w wordlist.txt -ac -o /engagement/scans/dir_fuzz_results.json -of json
+run_tool ffuf -u https://TARGET/FUZZ -w wordlist.txt -ac -o $DIR/scans/dir_fuzz_results.json -of json
 run_tool curl -sI https://TARGET/discovered_path  # Verify
 ```

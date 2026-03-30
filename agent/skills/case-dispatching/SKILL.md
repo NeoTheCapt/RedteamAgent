@@ -26,7 +26,7 @@ Each iteration:
 3. Fetch and route by type (vulnerability-analyst and source-analyzer can run IN PARALLEL):
 
    vulnerability-analyst: api, api-spec, form, upload, graphql, websocket
-   source-analyzer: page, javascript, stylesheet, data
+   source-analyzer: page, javascript, stylesheet, data, unknown
 
    ./scripts/dispatcher.sh $DB fetch <type> 10 <agent_name>
 
@@ -48,7 +48,7 @@ Each iteration:
 | form | vulnerability-analyst | javascript | source-analyzer |
 | upload | vulnerability-analyst | stylesheet | source-analyzer |
 | graphql | vulnerability-analyst | data | source-analyzer |
-| websocket | vulnerability-analyst | unknown | operator (manual) |
+| websocket | vulnerability-analyst | unknown | source-analyzer |
 | image/video/font/archive | skipped | | |
 
 ## Batch Strategy

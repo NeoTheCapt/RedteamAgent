@@ -9,7 +9,9 @@
 /LOCAL_REVIEW_WORKFLOW.md
 /opencode.json
 /tools/
+/local-openclaw/
 /tests/
+/orchestrator/backend/data/
 docs/**
 !docs/
 !docs/redteam-agent-demo-fast.gif
@@ -116,6 +118,7 @@ shells/
 # Node/TypeScript (plugin compilation)
 # ============================================
 node_modules/
+orchestrator/frontend/dist/
 *.js
 *.d.ts
 *.js.map

@@ -30,17 +30,17 @@ without sending traffic to the target.
 # Basic enumeration
 run_tool subfinder -d target.com -silent
 
-# With all sources (uses API keys from /engagement/.env if mounted)
-run_tool subfinder -d target.com -all -silent -o /engagement/scans/subdomains.txt
+# With all sources (uses API keys from $DIR/.env if mounted)
+run_tool subfinder -d target.com -all -silent -o $DIR/scans/subdomains.txt
 
 # Multiple domains
-run_tool subfinder -dL /engagement/scans/domains.txt -silent -o /engagement/scans/subdomains.txt
+run_tool subfinder -dL $DIR/scans/domains.txt -silent -o $DIR/scans/subdomains.txt
 
 # JSON output for detailed source info
-run_tool subfinder -d target.com -all -json -o /engagement/scans/subdomains.json
+run_tool subfinder -d target.com -all -json -o $DIR/scans/subdomains.json
 
 # Resolve IPs while enumerating
-run_tool subfinder -d target.com -all -silent -nW -oI -o /engagement/scans/subdomains_ips.txt
+run_tool subfinder -d target.com -all -silent -nW -oI -o $DIR/scans/subdomains_ips.txt
 ```
 
 **API keys** enhance results significantly. Configure in `$ENGAGEMENT_DIR/.env`:
@@ -63,13 +63,13 @@ run_tool curl -s -o /dev/null -w "%{size_download}" -H "Host: nonexistent-xyz.ta
 run_tool ffuf -u http://TARGET_IP -H "Host: FUZZ.target.com" \
   -w /seclists/Discovery/DNS/subdomains-top1million-5000.txt \
   -fs <baseline_size> -t 50 \
-  -o /engagement/scans/vhost_fuzz.json -of json
+  -o $DIR/scans/vhost_fuzz.json -of json
 
 # Larger wordlist if initial results are sparse
 run_tool ffuf -u http://TARGET_IP -H "Host: FUZZ.target.com" \
   -w /seclists/Discovery/DNS/subdomains-top1million-20000.txt \
   -fs <baseline_size> -t 50 \
-  -o /engagement/scans/vhost_fuzz_20k.json -of json
+  -o $DIR/scans/vhost_fuzz_20k.json -of json
 ```
 
 ### 3. Filter, Verify & Fingerprint Subdomains
@@ -142,8 +142,8 @@ If new subdomains are found, enumerate their subdomains too:
 
 ```bash
 # Feed discovered subdomains back for deeper enumeration
-run_tool subfinder -dL /engagement/scans/subdomains.txt -all -silent \
-  -o /engagement/scans/subdomains_recursive.txt
+run_tool subfinder -dL $DIR/scans/subdomains.txt -all -silent \
+  -o $DIR/scans/subdomains_recursive.txt
 ```
 
 ### 5. Feed Results into Pipeline

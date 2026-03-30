@@ -1,5 +1,21 @@
 #!/usr/bin/env bash
 
+canonicalize_engagement_dir() {
+    local root="${1:-$(pwd)}"
+    local candidate="${2:-}"
+
+    [[ -n "$candidate" ]] || return 1
+
+    if [[ "$candidate" != /* ]]; then
+        candidate="$root/$candidate"
+    fi
+
+    [[ -d "$candidate" ]] || return 1
+    (
+        cd "$candidate" >/dev/null 2>&1 && pwd
+    )
+}
+
 # resolve_engagement_dir <repo_root_or_agent_root>
 # Resolution order:
 # 1. ENGAGEMENT_DIR env var if it points to a real directory
@@ -8,17 +24,22 @@
 resolve_engagement_dir() {
     local root="${1:-$(pwd)}"
     local engagements_dir="$root/engagements"
+    local resolved
 
-    if [[ -n "${ENGAGEMENT_DIR:-}" && -d "${ENGAGEMENT_DIR:-}" ]]; then
-        printf '%s\n' "$ENGAGEMENT_DIR"
-        return 0
+    if [[ -n "${ENGAGEMENT_DIR:-}" ]]; then
+        resolved="$(canonicalize_engagement_dir "$root" "${ENGAGEMENT_DIR:-}" 2>/dev/null || true)"
+        if [[ -n "$resolved" ]]; then
+            printf '%s\n' "$resolved"
+            return 0
+        fi
     fi
 
     if [[ -f "$engagements_dir/.active" ]]; then
         local active
         active="$(cat "$engagements_dir/.active" 2>/dev/null || true)"
-        if [[ -n "$active" && -d "$active" ]]; then
-            printf '%s\n' "$active"
+        resolved="$(canonicalize_engagement_dir "$root" "$active" 2>/dev/null || true)"
+        if [[ -n "$resolved" ]]; then
+            printf '%s\n' "$resolved"
             return 0
         fi
     fi
@@ -29,6 +50,9 @@ resolve_engagement_dir() {
 set_active_engagement() {
     local root="${1:-$(pwd)}"
     local engagement_dir="${2:?engagement_dir required}"
+    local resolved
+
+    resolved="$(canonicalize_engagement_dir "$root" "$engagement_dir")"
     mkdir -p "$root/engagements"
-    printf '%s\n' "$engagement_dir" > "$root/engagements/.active"
+    printf '%s\n' "$resolved" > "$root/engagements/.active"
 }

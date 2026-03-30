@@ -24,7 +24,7 @@ mkdir -p "$ENG_DIR/scans"
 export ENGAGEMENT_DIR="$ENG_DIR"
 source scripts/lib/container.sh
 
-run_tool subfinder -d DOMAIN -all -silent -o /engagement/scans/subdomains_raw.txt
+run_tool subfinder -d DOMAIN -all -silent -o $DIR/scans/subdomains_raw.txt
 echo "Raw: $(wc -l < $ENG_DIR/scans/subdomains_raw.txt) subdomains"
 ```
 
@@ -48,7 +48,7 @@ TARGET_IP=$(run_tool curl -s -o /dev/null -w "%{remote_ip}" "http://DOMAIN" 2>/d
 BASELINE=$(run_tool curl -s -o /dev/null -w "%{size_download}" -H "Host: nonexistent-xyz.DOMAIN" "http://$TARGET_IP")
 run_tool ffuf -u "http://$TARGET_IP" -H "Host: FUZZ.DOMAIN" \
   -w /seclists/Discovery/DNS/subdomains-top1million-5000.txt \
-  -fs "$BASELINE" -t 50 -o /engagement/scans/vhost_fuzz.json -of json
+  -fs "$BASELINE" -t 50 -o $DIR/scans/vhost_fuzz.json -of json
 ```
 
 ## Step 5: Import to Queue (if cases.db exists)
