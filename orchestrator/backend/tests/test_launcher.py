@@ -1632,6 +1632,31 @@ def test_ensure_runtime_log_follower_restarts_dead_follower(monkeypatch):
     assert started_commands == [["docker", "logs", "-f", f"redteam-orch-run-{run['id']:04d}"]]
 
 
+def test_runtime_log_follow_command_resumes_from_last_captured_activity(tmp_path):
+    from app.services.launcher import _runtime_log_follow_command, process_log_path_for
+
+    client = TestClient(app)
+    token = register_and_login(client, "alice-log-follow-resume")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "https://resume-log.example")
+
+    run_model = db.get_run_by_id(run["id"])
+    assert run_model is not None
+
+    process_log = process_log_path_for(run_model)
+    process_log.parent.mkdir(parents=True, exist_ok=True)
+    process_log.write_text(
+        '{"timestamp": 1774866503642, "type": "tool_use"}\n',
+        encoding="utf-8",
+    )
+
+    command = _runtime_log_follow_command(run_model)
+
+    assert command[:4] == ["docker", "logs", "-f", "--since"]
+    assert command[4] == "2026-03-30T10:28:23.642Z"
+    assert command[5] == f"redteam-orch-run-{run['id']:04d}"
+
+
 def test_auto_launch_allows_third_resume_attempt(monkeypatch):
     client = TestClient(app)
     token = register_and_login(client, "alice-third-resume")
