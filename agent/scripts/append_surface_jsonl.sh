@@ -156,6 +156,8 @@ while IFS= read -r line; do
         fi
     fi
 
+    target="$(normalize_surface_placeholder_target "$target")"
+
     if ! normalized_type="$(normalize_surface_type "$surface_type")"; then
         if ! normalized_type="$(infer_surface_type "$method" "$target" "$item_type" "$auth_hint" "$rationale")"; then
             normalized_type=""
