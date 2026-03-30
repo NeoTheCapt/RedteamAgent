@@ -990,6 +990,8 @@ def _overview_updated_at(run, active_root: Path, latest_task, latest_phase) -> s
 
 
 def summarize_run(project_id: int, run_id: int, user: User) -> RunSummary:
+    from .. import db
+
     run = _run_or_404(project_id, run_id, user)
     project = _project_or_404(project_id, user)
     normalize_active_scope(run)
@@ -1022,6 +1024,9 @@ def summarize_run(project_id: int, run_id: int, user: User) -> RunSummary:
 
     latest_task = next((event for event in reversed(events) if event.event_type.startswith("task.")), None)
     latest_phase = next((event for event in reversed(events) if event.event_type.startswith("phase.")), None)
+    overview_updated_at = _overview_updated_at(run, active_root, latest_task, latest_phase)
+    if overview_updated_at and overview_updated_at > str(run.updated_at):
+        run = db.set_run_updated_at(run.id, overview_updated_at)
     current = _current_activity(events, scope, processing_agents, run.status, str(run_metadata.get("stop_reason_text", "")))
     active_agents = 0 if _is_terminal_run_status(run.status) else sum(1 for agent in agents if agent["status"] == "active")
     available_agents = len(agents)
@@ -1044,7 +1049,7 @@ def summarize_run(project_id: int, run_id: int, user: User) -> RunSummary:
             "active_agents": active_agents,
             "available_agents": available_agents,
             "current_phase": effective_current_phase,
-            "updated_at": _overview_updated_at(run, active_root, latest_task, latest_phase),
+            "updated_at": overview_updated_at,
         },
         runtime_model=_load_runtime_model_verification(run_root, project),
         coverage={
