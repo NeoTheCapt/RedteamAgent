@@ -171,18 +171,26 @@ def _active_scope_path(run: Run) -> Path | None:
     return engagement_dir / active_name / "scope.json"
 
 
+def _utc_now_naive() -> datetime:
+    return datetime.now(UTC).replace(tzinfo=None)
+
+
+def _utc_datetime_from_timestamp(timestamp: float) -> datetime:
+    return datetime.fromtimestamp(timestamp, UTC).replace(tzinfo=None)
+
+
 def _path_mtime(path: Path) -> datetime | None:
     if not path.exists() or not path.is_file():
         return None
     try:
-        return datetime.fromtimestamp(path.stat().st_mtime)
+        return _utc_datetime_from_timestamp(path.stat().st_mtime)
     except OSError:
         return None
 
 
 def _latest_runtime_activity_at(run: Run) -> datetime | None:
     latest_timestamp = _latest_process_log_activity_at(process_log_path_for(run))
-    latest = datetime.fromtimestamp(latest_timestamp) if latest_timestamp is not None else None
+    latest = _utc_datetime_from_timestamp(latest_timestamp) if latest_timestamp is not None else None
 
     process_metadata = _path_mtime(process_metadata_path_for(run))
     if process_metadata is not None and (latest is None or process_metadata > latest):
@@ -192,7 +200,7 @@ def _latest_runtime_activity_at(run: Run) -> datetime | None:
     if opencode_logs_root.exists():
         for path in opencode_logs_root.glob("*.log"):
             candidate_timestamp = _latest_process_log_activity_at(path)
-            candidate = datetime.fromtimestamp(candidate_timestamp) if candidate_timestamp is not None else None
+            candidate = _utc_datetime_from_timestamp(candidate_timestamp) if candidate_timestamp is not None else None
             if candidate is None:
                 continue
             if latest is None or candidate > latest:
@@ -272,12 +280,20 @@ def _format_db_timestamp(value: datetime) -> str:
     return value.replace(microsecond=0).strftime("%Y-%m-%d %H:%M:%S")
 
 
+def _is_future_timestamp_skewed(timestamp: datetime | None) -> bool:
+    if timestamp is None:
+        return False
+    return timestamp - _utc_now_naive() > timedelta(minutes=5)
+
+
 def _sync_run_updated_at_from_activity(run: Run, *candidates: datetime | None) -> Run:
     latest_candidate = max((candidate for candidate in candidates if candidate is not None), default=None)
     if latest_candidate is None:
         return run
 
     current_updated_at = _parse_db_timestamp(run.updated_at) or _parse_db_timestamp(run.created_at)
+    if _is_future_timestamp_skewed(current_updated_at):
+        current_updated_at = None
     latest_candidate = latest_candidate.replace(microsecond=0)
     if current_updated_at is not None and latest_candidate <= current_updated_at:
         return run
@@ -316,7 +332,7 @@ def _reconcile_run_status(run: Run, project: Project | None = None, user: User |
             return failed
         workflow_activity_at = _latest_workflow_activity_at(run, scope_path)
         if workflow_activity_at is not None:
-            workflow_age = datetime.now() - workflow_activity_at
+            workflow_age = _utc_now_naive() - workflow_activity_at
             if (
                 current_phase.replace("_", "-") not in EARLY_PHASE_STALL_PHASES
                 and processing_cases > 0
@@ -354,7 +370,7 @@ def _reconcile_run_status(run: Run, project: Project | None = None, user: User |
 
         last_activity_at = _latest_runtime_activity_at(run)
         if last_activity_at is not None:
-            log_age = datetime.now() - last_activity_at
+            log_age = _utc_now_naive() - last_activity_at
             if log_age >= timedelta(seconds=RUN_STALL_TIMEOUT_SECONDS):
                 failed = db.update_run_status(run.id, "failed")
                 _write_run_terminal_reason(
@@ -401,7 +417,7 @@ def _reconcile_run_status(run: Run, project: Project | None = None, user: User |
     # docker client process are still bootstrapping. Do not immediately mark
     # them failed during that startup window.
     updated_at = _parse_db_timestamp(run.updated_at) or _parse_db_timestamp(run.created_at)
-    if updated_at is not None and datetime.now(UTC).replace(tzinfo=None) - updated_at < timedelta(seconds=RUN_STARTUP_GRACE_SECONDS):
+    if updated_at is not None and _utc_now_naive() - updated_at < timedelta(seconds=RUN_STARTUP_GRACE_SECONDS):
         return run
 
     if run.status == "running":
