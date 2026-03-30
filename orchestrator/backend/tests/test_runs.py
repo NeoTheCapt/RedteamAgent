@@ -2,7 +2,7 @@ import json
 import os
 import sqlite3
 from pathlib import Path
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 
 from fastapi.testclient import TestClient
 
@@ -205,7 +205,7 @@ def test_list_runs_syncs_updated_at_from_live_workflow_activity(monkeypatch):
         connection.execute("INSERT INTO cases(status) VALUES ('processing')")
         connection.commit()
 
-    recent_activity = datetime.now().replace(microsecond=0)
+    recent_activity = datetime.now(UTC).replace(microsecond=0)
     recent_epoch = recent_activity.timestamp()
     os.utime(scope_path, (recent_epoch, recent_epoch))
     os.utime(engagement_dir / "log.md", (recent_epoch, recent_epoch))
@@ -214,6 +214,81 @@ def test_list_runs_syncs_updated_at_from_live_workflow_activity(monkeypatch):
         connection.execute(
             "UPDATE runs SET updated_at = '2026-03-25 00:00:00' WHERE id = ?",
             (run["id"],),
+        )
+        connection.commit()
+
+    monkeypatch.setattr("app.services.runs.locate_runtime_pid", lambda _run: 12345)
+    stopped: list[int] = []
+    monkeypatch.setattr("app.services.runs.stop_run_runtime", lambda reconciled_run: stopped.append(reconciled_run.id))
+
+    runs_response = client.get(
+        f"/projects/{project['id']}/runs",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert runs_response.status_code == 200
+    payload = runs_response.json()[0]
+    assert payload["status"] == "running"
+    assert payload["updated_at"] == recent_activity.strftime("%Y-%m-%d %H:%M:%S")
+    assert stopped == []
+
+    metadata = json.loads((run_root / "run.json").read_text(encoding="utf-8"))
+    assert metadata["updated_at"] == payload["updated_at"]
+
+
+
+def test_list_runs_repairs_future_skewed_updated_at_from_live_workflow_activity(monkeypatch):
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+
+    create_run = client.post(
+        f"/projects/{project['id']}/runs",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"target": "https://example.com"},
+    )
+    assert create_run.status_code == 201
+    run = create_run.json()
+    db.update_run_status(run["id"], "running")
+
+    run_root = Path(run["engagement_root"])
+    workspace = run_root / "workspace"
+    engagement_dir = workspace / "engagements" / "2026-03-28-000000-example"
+    engagement_dir.mkdir(parents=True, exist_ok=True)
+    (workspace / "engagements" / ".active").write_text(
+        "engagements/2026-03-28-000000-example\n",
+        encoding="utf-8",
+    )
+
+    scope_path = engagement_dir / "scope.json"
+    scope_path.write_text(
+        json.dumps(
+            {
+                "status": "in_progress",
+                "current_phase": "consume_test",
+                "phases_completed": ["recon", "collect"],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (engagement_dir / "log.md").write_text("recent activity\n", encoding="utf-8")
+    with sqlite3.connect(engagement_dir / "cases.db") as connection:
+        connection.execute(
+            "CREATE TABLE cases (id INTEGER PRIMARY KEY AUTOINCREMENT, status TEXT NOT NULL)"
+        )
+        connection.execute("INSERT INTO cases(status) VALUES ('processing')")
+        connection.commit()
+
+    recent_activity = datetime.now(UTC).replace(microsecond=0)
+    recent_epoch = recent_activity.timestamp()
+    os.utime(scope_path, (recent_epoch, recent_epoch))
+    os.utime(engagement_dir / "log.md", (recent_epoch, recent_epoch))
+
+    future_skewed = recent_activity + timedelta(hours=8)
+    with sqlite3.connect(database_path()) as connection:
+        connection.execute(
+            "UPDATE runs SET updated_at = ? WHERE id = ?",
+            (future_skewed.strftime("%Y-%m-%d %H:%M:%S"), run["id"]),
         )
         connection.commit()
 
