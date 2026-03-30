@@ -1657,6 +1657,93 @@ def test_runtime_log_follow_command_resumes_from_last_captured_activity(tmp_path
     assert command[5] == f"redteam-orch-run-{run['id']:04d}"
 
 
+def test_supervise_container_drains_runtime_log_follower_before_terminal_state(monkeypatch):
+    from app.services.launcher import _supervise_container, process_log_path_for
+
+    client = TestClient(app)
+    token = register_and_login(client, "alice-log-drain")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "https://drain-log.example")
+
+    run_model = db.get_run_by_id(run["id"])
+    project_model = db.get_project_by_id(project["id"])
+    user_model = db.get_user_by_username("alice-log-drain")
+    assert run_model is not None
+    assert project_model is not None
+    assert user_model is not None
+
+    workspace = Path(run["engagement_root"]) / "workspace"
+    engagement_dir = workspace / "engagements" / "2026-03-30-000000-drain-log-example"
+    engagement_dir.mkdir(parents=True, exist_ok=True)
+    (workspace / "engagements" / ".active").write_text(
+        "engagements/2026-03-30-000000-drain-log-example\n",
+        encoding="utf-8",
+    )
+    (engagement_dir / "scope.json").write_text(
+        json.dumps(
+            {
+                "status": "complete",
+                "current_phase": "complete",
+                "phases_completed": ["recon", "collect", "consume_test", "exploit", "report"],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (engagement_dir / "log.md").write_text("# Log\n- **Status**: Completed\n", encoding="utf-8")
+    (engagement_dir / "report.md").write_text("# Report\n", encoding="utf-8")
+    (engagement_dir / "surfaces.jsonl").write_text("", encoding="utf-8")
+    with sqlite3.connect(engagement_dir / "cases.db") as connection:
+        connection.execute("CREATE TABLE cases (id INTEGER PRIMARY KEY AUTOINCREMENT, status TEXT NOT NULL)")
+        connection.execute("INSERT INTO cases(status) VALUES ('done')")
+        connection.commit()
+
+    process_log = process_log_path_for(run_model)
+    process_log.parent.mkdir(parents=True, exist_ok=True)
+    process_log.write_text('{"type":"tool_use","part":{"tool":"todowrite","state":{"input":{}}}}\n', encoding="utf-8")
+
+    class SlowFollower:
+        def __init__(self):
+            self.wait_calls = 0
+            self._done = False
+            self.terminated = False
+            self.killed = False
+
+        def poll(self):
+            return 0 if self._done else None
+
+        def wait(self, timeout=None):
+            self.wait_calls += 1
+            with process_log.open("a", encoding="utf-8") as handle:
+                handle.write('{"timestamp":1774887570000,"type":"tool_use","part":{"tool":"task","agent":"report-writer","state":{"status":"completed"}}}\n')
+            self._done = True
+            return 0
+
+        def terminate(self):
+            self.terminated = True
+            self._done = True
+
+        def kill(self):
+            self.killed = True
+            self._done = True
+
+    monkeypatch.setattr("app.services.launcher._container_status", lambda _name: "exited")
+    monkeypatch.setattr("app.services.launcher._container_exit_code", lambda _name: 0)
+
+    follower = SlowFollower()
+    with process_log.open("ab") as log_handle:
+        _supervise_container(run_model, project_model, user_model, "container-123", follower, log_handle)
+
+    latest = db.get_run_by_id(run["id"])
+    assert latest is not None
+    assert latest.status == "completed"
+    assert follower.wait_calls == 1
+    log_text = process_log.read_text(encoding="utf-8")
+    assert '"report-writer"' in log_text
+    assert not follower.terminated
+    assert not follower.killed
+
+
 def test_auto_launch_allows_third_resume_attempt(monkeypatch):
     client = TestClient(app)
     token = register_and_login(client, "alice-third-resume")
