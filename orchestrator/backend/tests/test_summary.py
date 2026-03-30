@@ -792,7 +792,6 @@ def test_run_summary_prefers_workflow_activity_timestamp_over_stale_events():
     time.sleep(1.1)
     (active_dir / "log.md").write_text("# log\nupdated\n", encoding="utf-8")
     stat_mtime = (active_dir / "log.md").stat().st_mtime
-    expected_local = datetime.fromtimestamp(stat_mtime).strftime("%Y-%m-%d %H:%M:%S")
     expected_utc = datetime.fromtimestamp(stat_mtime, UTC).strftime("%Y-%m-%d %H:%M:%S")
 
     response = client.get(
@@ -800,7 +799,46 @@ def test_run_summary_prefers_workflow_activity_timestamp_over_stale_events():
         headers={"Authorization": f"Bearer {token}"},
     )
     assert response.status_code == 200
-    assert response.json()["overview"]["updated_at"] in {expected_local, expected_utc}
+    assert response.json()["overview"]["updated_at"] == expected_utc
+
+
+def test_run_summary_syncs_run_metadata_updated_at_to_utc_workflow_activity():
+    from app import db as app_db
+    from app.db import database_path
+
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "https://target.example")
+    active_dir = setup_active_engagement(run)
+    (active_dir / "scope.json").write_text(
+        json.dumps({"hostname": "target.example", "status": "in_progress", "current_phase": "consume_test"}),
+        encoding="utf-8",
+    )
+    (active_dir / "log.md").write_text("# log\n", encoding="utf-8")
+    app_db.update_run_status(run["id"], "running")
+
+    with sqlite3.connect(database_path()) as connection:
+        connection.execute(
+            "UPDATE runs SET updated_at = '2026-03-25 00:00:00' WHERE id = ?",
+            (run["id"],),
+        )
+        connection.commit()
+
+    time.sleep(1.1)
+    (active_dir / "log.md").write_text("# log\nupdated\n", encoding="utf-8")
+    stat_mtime = (active_dir / "log.md").stat().st_mtime
+    expected_utc = datetime.fromtimestamp(stat_mtime, UTC).strftime("%Y-%m-%d %H:%M:%S")
+
+    response = client.get(
+        f"/projects/{project['id']}/runs/{run['id']}/summary",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+
+    run_metadata = json.loads((Path(run["engagement_root"]) / "run.json").read_text(encoding="utf-8"))
+    assert response.json()["overview"]["updated_at"] == expected_utc
+    assert run_metadata["updated_at"] == expected_utc
 
 
 def test_run_summary_projects_current_state_into_run_metadata():
