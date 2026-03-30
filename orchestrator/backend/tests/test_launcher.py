@@ -1149,6 +1149,87 @@ def test_engagement_completion_state_accepts_completed_status_alias():
     assert normalized["status"] == "complete"
 
 
+def test_normalize_active_scope_marks_completed_report_and_log_headers(monkeypatch):
+    import os
+    import time
+
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "https://example.com")
+
+    run_root = Path(run["engagement_root"])
+    workspace = run_root / "workspace"
+    engagement_dir = workspace / "engagements" / "2026-03-30-000000-example"
+    engagement_dir.mkdir(parents=True, exist_ok=True)
+    (workspace / "engagements" / ".active").write_text(
+        "engagements/2026-03-30-000000-example\n",
+        encoding="utf-8",
+    )
+    (engagement_dir / "scope.json").write_text(
+        json.dumps(
+            {
+                "status": "complete",
+                "current_phase": "complete",
+                "start_time": "2026-03-29T23:59:38Z",
+                "phases_completed": ["recon", "collect", "consume_test", "exploit", "report"],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (engagement_dir / "log.md").write_text(
+        "# Engagement Log\n\n"
+        "- **Target**: https://example.com\n"
+        "- **Date**: 2026-03-29\n"
+        "- **Status**: In Progress\n",
+        encoding="utf-8",
+    )
+    (engagement_dir / "report.md").write_text(
+        "# Penetration Test Report: https://example.com\n"
+        "**Date**: 2026-03-29 — In Progress\n"
+        "**Target**: https://example.com  **Scope**: example.com, *.example.com  **Status**: In Progress\n",
+        encoding="utf-8",
+    )
+    (engagement_dir / "surfaces.jsonl").write_text("", encoding="utf-8")
+    with sqlite3.connect(engagement_dir / "cases.db") as connection:
+        connection.execute(
+            "CREATE TABLE cases (id INTEGER PRIMARY KEY AUTOINCREMENT, status TEXT NOT NULL)"
+        )
+        connection.executemany(
+            "INSERT INTO cases(status) VALUES (?)",
+            [("done",), ("error",)],
+        )
+        connection.commit()
+
+    from app import db as app_db
+    from app.services.launcher import normalize_active_scope
+
+    latest = app_db.get_run_by_id(run["id"])
+    assert latest is not None
+
+    original_tz = os.environ.get("TZ")
+    monkeypatch.setenv("TZ", "Asia/Singapore")
+    if hasattr(time, "tzset"):
+        time.tzset()
+    try:
+        normalize_active_scope(latest)
+    finally:
+        if original_tz is None:
+            monkeypatch.delenv("TZ", raising=False)
+        else:
+            monkeypatch.setenv("TZ", original_tz)
+        if hasattr(time, "tzset"):
+            time.tzset()
+
+    log_text = (engagement_dir / "log.md").read_text(encoding="utf-8")
+    report_text = (engagement_dir / "report.md").read_text(encoding="utf-8")
+
+    assert "- **Status**: Completed" in log_text
+    assert "**Date**: 2026-03-30 — Completed" in report_text
+    assert "**Status**: Completed" in report_text
+
+
 def test_auto_launch_marks_completed_only_when_engagement_is_finalized(monkeypatch):
     client = TestClient(app)
     token = register_and_login(client, "alice")
