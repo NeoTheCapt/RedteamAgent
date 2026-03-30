@@ -1791,6 +1791,7 @@ def _launch_runtime_container(
         "docker",
         "run",
         "-d",
+        "--init",
         "--name",
         runtime_container_name(run),
         "--add-host",
