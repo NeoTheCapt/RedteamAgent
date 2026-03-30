@@ -759,6 +759,83 @@ def _normalize_text_artifact(path: Path, context: dict[str, str] | None) -> None
         path.write_text(rewritten, encoding="utf-8")
 
 
+def _engagement_header_date(scope: dict[str, object] | None) -> str:
+    if isinstance(scope, dict):
+        raw_start_time = str(scope.get("start_time") or "").strip()
+        if raw_start_time:
+            try:
+                parsed = datetime.fromisoformat(raw_start_time.replace("Z", "+00:00"))
+                return parsed.astimezone().strftime("%Y-%m-%d")
+            except ValueError:
+                pass
+    return datetime.now().astimezone().strftime("%Y-%m-%d")
+
+
+def _normalize_log_completion_artifact(path: Path) -> None:
+    if not path.exists():
+        return
+    original = path.read_text(encoding="utf-8", errors="replace")
+    rewritten = re.sub(
+        r"^- \*\*Status\*\*:.*$",
+        "- **Status**: Completed",
+        original,
+        count=1,
+        flags=re.MULTILINE,
+    )
+    if rewritten != original:
+        path.write_text(rewritten, encoding="utf-8")
+
+
+def _normalize_report_completion_artifact(path: Path, *, header_date: str) -> None:
+    if not path.exists():
+        return
+    original = path.read_text(encoding="utf-8", errors="replace")
+    trailing_newline = original.endswith("\n")
+    lines = original.splitlines()
+    changed = False
+    date_found = False
+
+    for index, line in enumerate(lines):
+        if line.startswith("**Date**:"):
+            normalized = f"**Date**: {header_date} — Completed"
+            if line != normalized:
+                lines[index] = normalized
+                changed = True
+            date_found = True
+            continue
+        if line.startswith("**Target**:"):
+            if "**Status**:" in line:
+                normalized = re.sub(r"\*\*Status\*\*: .*", "**Status**: Completed", line, count=1)
+            else:
+                normalized = f"{line}  **Status**: Completed"
+            if line != normalized:
+                lines[index] = normalized
+                changed = True
+
+    if not date_found:
+        insert_at = 1 if lines and lines[0].startswith("#") else 0
+        lines.insert(insert_at, f"**Date**: {header_date} — Completed")
+        changed = True
+
+    if not changed:
+        return
+
+    rewritten = "\n".join(lines)
+    if trailing_newline:
+        rewritten += "\n"
+    path.write_text(rewritten, encoding="utf-8")
+
+
+def _normalize_completion_artifacts(engagement_dir: Path, scope: dict[str, object] | None) -> None:
+    if not isinstance(scope, dict):
+        return
+    if _canonical_scope_status(scope.get("status")) != "complete":
+        return
+    header_date = _engagement_header_date(scope)
+    _normalize_log_completion_artifact(engagement_dir / "log.md")
+    _normalize_report_completion_artifact(engagement_dir / "report.md", header_date=header_date)
+
+
 _JSONL_DISALLOWED_CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
 
 
@@ -1102,7 +1179,8 @@ def normalize_active_scope(run: Run) -> None:
         return
 
     context = _loopback_display_context(run)
-    _normalize_scope_file(engagement_dir / "scope.json", run=run)
+    scope = _normalize_scope_file(engagement_dir / "scope.json", run=run)
+    _normalize_completion_artifacts(engagement_dir, scope)
     _backfill_surfaces_from_process_log(run, engagement_dir)
     _dedupe_surface_jsonl(engagement_dir / "surfaces.jsonl", context)
     if context is None:
@@ -1170,6 +1248,7 @@ def _terminal_reason(
 
 
 def _terminal_reason_from_artifacts(run: Run) -> tuple[bool, str, str, str]:
+    normalize_active_scope(run)
     completion_ok, completion_reason = engagement_completion_state(run)
     init_only_exit = _init_only_exit(run)
     succeeded = completion_ok and not init_only_exit
@@ -1801,6 +1880,7 @@ def _supervise_process(run: Run, process: subprocess.Popen[bytes], log_handle, h
 
     log_handle.close()
     phase, summary = _heartbeat_context(run)
+    normalize_active_scope(run)
     completion_ok, completion_reason = engagement_completion_state(run)
     init_only_exit = _init_only_exit(run)
     succeeded = return_code == 0 and not init_only_exit and completion_ok
@@ -1876,6 +1956,7 @@ def _supervise_container(
         if status == "exited":
             exit_code = _container_exit_code(container_name)
             phase, _ = _heartbeat_context(run)
+            normalize_active_scope(run)
             completion_ok, completion_reason = engagement_completion_state(run)
             init_only_exit = _init_only_exit(run)
             succeeded = exit_code == 0 and not init_only_exit and completion_ok
