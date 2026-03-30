@@ -91,7 +91,7 @@ PARALLEL: Independent tasks → parallel. Dependent → sequential.
 
 ## Phase Flow
 
-1. **RECON** → dispatch recon-specialist + source-analyzer in parallel
+1. **RECON** → dispatch recon-specialist + source-analyzer in parallel. During `/engage` handoff, the SAME assistant turn that appends the recon-start log entry must also launch both recon tasks (or record an explicit stop reason). Do not stop after todowrite, file reads, or the recon-start log entry.
 2. **COLLECT** → import endpoints (`recon_ingest.sh`), start Katana, show stats
 3. **CONSUME & TEST** → dispatcher loop: reset-stale → stats → fetch → dispatch → done → requeue → repeat. Exit only when pending=0 AND processing=0.
    Dispatch rule is strict:
@@ -102,8 +102,9 @@ PARALLEL: Independent tasks → parallel. Dependent → sequential.
    - do NOT launch overlapping `task` calls inside the same consume-test pass, even when multiple fetched batch files are non-empty
    - never leave fetched cases in `processing` without a dispatched subagent task
    - after each dispatched subagent returns, immediately consume its `### Case Outcomes` and run the required `done` / `requeue` updates before the next fetch cycle
-   Before leaving Test phase, run `./scripts/check_surface_coverage.sh "$DIR"`.
-   If it fails, do not advance. Resolve each remaining discovered surface by selecting a representative validation path and marking it `covered`, `deferred`, or `not_applicable`.
+   Before leaving Test phase, run `./scripts/reconcile_surface_coverage.sh "$DIR" --ingest-followups` and then `./scripts/check_surface_coverage.sh "$DIR"`.
+   `reconcile_surface_coverage.sh` auto-promotes already-validated surfaces to `covered`/`not_applicable` and can enqueue concrete follow-up cases for unresolved, requestable surfaces. If it adds follow-up cases, stay in consume-test and work that queue before checking coverage again.
+   If coverage still fails, do not advance. In that SAME turn, either mark the surface with `./scripts/append_surface.sh ... covered|not_applicable|deferred` using existing evidence or dispatch exactly one bounded surface-coverage follow-up batch. Do NOT grep the scripts directory and then idle.
    Reuse existing evidence before issuing new probes. Any ad-hoc in-scope HTTP validation MUST stay bounded: use at most 1-2 representative probes per surface, prefer already-queued endpoints/artifacts, and every `run_tool curl` command MUST include both `--connect-timeout 5` and `--max-time 20` (or stricter). Never launch long multi-endpoint bundles, unbounded loops, or background probes during surface-coverage follow-up.
    High-risk surfaces `account_recovery`, `dynamic_render`, `object_reference`, and `privileged_write`
    may NOT remain `deferred` when moving to Exploit/Report. They must be `covered` or `not_applicable`.

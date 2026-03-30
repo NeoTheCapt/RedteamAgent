@@ -110,7 +110,7 @@ cat > "$DIR/findings.md" << EOF
 EOF
 
 : > "$DIR/surfaces.jsonl"
-printf '[]\n' > "$DIR/intel-secrets.json"
+printf "[]\n" > "$DIR/intel-secrets.json"
 
 if [ -f ".redteam-seed/auth.json" ]; then
   cp ".redteam-seed/auth.json" "$DIR/auth.json"
@@ -121,17 +121,16 @@ fi
 sqlite3 "$DIR/cases.db" < scripts/schema.sql
 
 cp scripts/templates/intel.md "$DIR/intel.md" 2>/dev/null || echo "# Intelligence Collection" > "$DIR/intel.md"
-awk '
-  /^[[:space:]]*#/ { next }
-  /^[[:space:]]*$/ { next }
-  { lines[++count] = $0 }
-  END {
-    srand()
-    if (count > 0) {
-      print lines[int(rand() * count) + 1]
-    }
-  }
-' scripts/templates/user-agents.txt > "$DIR/user-agent.txt"
+USER_AGENTS_TMP="$DIR/user-agents.tmp"
+grep -Ev "^[[:space:]]*(#|$)" scripts/templates/user-agents.txt > "$USER_AGENTS_TMP" || true
+USER_AGENT_COUNT=$(wc -l < "$USER_AGENTS_TMP" | tr -d ' ')
+if [ "$USER_AGENT_COUNT" -gt 0 ]; then
+  USER_AGENT_LINE=$(( (RANDOM % USER_AGENT_COUNT) + 1 ))
+  sed -n "${USER_AGENT_LINE}p" "$USER_AGENTS_TMP" > "$DIR/user-agent.txt"
+else
+  : > "$DIR/user-agent.txt"
+fi
+rm -f "$USER_AGENTS_TMP"
 cp scripts/templates/rtcurl.sh "$DIR/tools/rtcurl"
 chmod +x "$DIR/tools/rtcurl"
 
@@ -143,6 +142,7 @@ The key point: `$DATE`, `$START_TIME` etc. MUST be shell variables that expand a
 Keep each heredoc as a standalone command:
 `cat << EOF ... EOF`
 Then start the next command on a new line. Do not write `EOF && next_command`.
+Do NOT wrap the whole block in `bash -lc '...'` or any other single-quoted shell wrapper. Send the raw multiline bash block directly to the bash tool so inner quoting and process substitutions survive.
 When writing Markdown via unquoted heredoc, do not include raw backticks like `` `cmd` `` inside the body.
 Either escape them as `\`cmd\`` or write plain text, otherwise shell command substitution may run unexpectedly.
 For later temp files that should preserve literal Markdown/JSON/JSONL content, prefer a single-quoted heredoc (`<<'EOF'`) instead of an unquoted one.
@@ -239,10 +239,11 @@ TUI progress panel is driven by the todo list.
    - **recon-specialist**: HTTP fingerprinting, directory fuzzing, port scanning
    - **source-analyzer**: HTML/JS/CSS analysis for hidden routes, API endpoints, secrets
 3. **INTERACTIVE MODE**: wait for user approval before sending traffic.
-   **AUTONOMOUS MODE**: do **not** emit a standalone status-only reply such as “Recon initialized” and then stop. In the same assistant turn, immediately send traffic by dispatching BOTH recon agents with the task tool. A text announcement is optional, but if you include one it MUST be combined with the actual recon-specialist and source-analyzer task dispatches in that same turn.
-4. After recon completes, record ALL findings to `findings.md`.
-5. At every later phase transition, append one concise operator timeline entry via `./scripts/append_log_entry.sh`.
-6. This no-standalone-status rule applies to the ENTIRE autonomous run, not just recon. During Collect, Consume & Test, Exploit, and Report, never end a turn with progress text alone while queue work, surface coverage, auth validation, or reporting work remains. Any mid-run status text must be paired in the same turn with an advancing tool action.
+   **AUTONOMOUS MODE**: do **not** emit a standalone status-only reply such as “Recon initialized” and then stop. In the SAME assistant turn as the recon-start log entry, immediately launch BOTH recon-specialist and source-analyzer subagent tasks. Do not pause after `todowrite`, after reading `scope.json`/`log.md`/`findings.md`, or after appending the recon log entry.
+4. `/engage` is not complete until one of these happens in the same turn after initialization: (a) BOTH recon tasks are launched, or (b) you record an explicit stop reason via `./scripts/append_log_entry.sh "$DIR" operator "Run stop" "stop_reason=<code>" "<reason>"` and return `Stop reason: <code> — <reason>`.
+5. After recon completes, record ALL findings to `findings.md`.
+6. At every later phase transition, append one concise operator timeline entry via `./scripts/append_log_entry.sh`.
+7. This no-standalone-status rule applies to the ENTIRE autonomous run, not just recon. During Collect, Consume & Test, Exploit, and Report, never end a turn with progress text alone while queue work, surface coverage, auth validation, or reporting work remains. Any mid-run status text must be paired in the same turn with an advancing tool action.
 
 ### Phase 2: COLLECT (start immediately after recon)
 
