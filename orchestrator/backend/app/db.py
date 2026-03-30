@@ -424,6 +424,20 @@ def list_runs_for_project(project_id: int) -> list[Run]:
     return [Run.from_row(row) for row in rows]
 
 
+def list_runs_by_status(status_value: str) -> list[Run]:
+    with get_connection() as connection:
+        rows = connection.execute(
+            """
+            SELECT id, project_id, target, status, engagement_root, created_at, updated_at
+            FROM runs
+            WHERE status = ?
+            ORDER BY id ASC
+            """,
+            (status_value,),
+        ).fetchall()
+    return [Run.from_row(row) for row in rows]
+
+
 def get_run_by_id(run_id: int) -> Run | None:
     with get_connection() as connection:
         row = connection.execute(

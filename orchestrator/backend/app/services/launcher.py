@@ -11,7 +11,7 @@ import tempfile
 import time
 from collections import deque
 from datetime import UTC, datetime
-from threading import Thread
+from threading import Lock, Thread
 from pathlib import Path
 from urllib.parse import quote, urlsplit, urlunsplit
 
@@ -21,6 +21,10 @@ from ..models.project import Project
 from ..models.run import Run
 from ..models.user import User
 from ..security import create_session_token, session_expiry_timestamp
+
+
+_ACTIVE_CONTAINER_SUPERVISORS: set[int] = set()
+_ACTIVE_CONTAINER_SUPERVISORS_LOCK = Lock()
 
 
 def runtime_root_for(run: Run) -> Path:
@@ -1925,11 +1929,13 @@ def _maybe_auto_resume_run(
         command_text=_runtime_command_text(resumed, resume=True),
         log_handle=log_handle,
     )
-    Thread(
-        target=_supervise_container,
-        args=(resumed, project, user, runtime_container_name(resumed), log_follower, log_handle),
-        daemon=True,
-    ).start()
+    _start_container_supervisor(
+        resumed,
+        project,
+        user,
+        log_follower=log_follower,
+        log_handle=log_handle,
+    )
     return True
 
 
@@ -1962,6 +1968,53 @@ def _supervise_process(run: Run, process: subprocess.Popen[bytes], log_handle, h
     )
     terminal = db.update_run_status(run.id, "completed" if succeeded else "failed")
     _write_run_terminal_reason(terminal, reason_code=reason_code, reason_text=reason_text)
+
+
+def _start_container_supervisor(
+    run: Run,
+    project: Project,
+    user: User,
+    *,
+    log_follower: subprocess.Popen[bytes] | None = None,
+    log_handle=None,
+) -> bool:
+    with _ACTIVE_CONTAINER_SUPERVISORS_LOCK:
+        if run.id in _ACTIVE_CONTAINER_SUPERVISORS:
+            return False
+        _ACTIVE_CONTAINER_SUPERVISORS.add(run.id)
+
+    created_log_handle = False
+    try:
+        if log_handle is None:
+            process_log_path_for(run).parent.mkdir(parents=True, exist_ok=True)
+            log_handle = open(process_log_path_for(run), "ab")
+            created_log_handle = True
+
+        def _runner() -> None:
+            try:
+                _supervise_container(
+                    run,
+                    project,
+                    user,
+                    runtime_container_name(run),
+                    log_follower,
+                    log_handle,
+                )
+            finally:
+                with _ACTIVE_CONTAINER_SUPERVISORS_LOCK:
+                    _ACTIVE_CONTAINER_SUPERVISORS.discard(run.id)
+
+        Thread(target=_runner, daemon=True).start()
+        return True
+    except Exception:
+        if created_log_handle and log_handle is not None:
+            try:
+                log_handle.close()
+            except Exception:
+                pass
+        with _ACTIVE_CONTAINER_SUPERVISORS_LOCK:
+            _ACTIVE_CONTAINER_SUPERVISORS.discard(run.id)
+        raise
 
 
 def _supervise_container(
@@ -2095,9 +2148,11 @@ def start_run_runtime(project: Project, run: Run, user: User) -> Run:
     running = db.update_run_status(run.id, "running")
     _clear_run_terminal_reason(running)
     _append_runtime_event(running, "run.started", "initializing", "Runtime launched; waiting for agent activity.")
-    Thread(
-        target=_supervise_container,
-        args=(running, project, user, runtime_container_name(run), log_follower, log_handle),
-        daemon=True,
-    ).start()
+    _start_container_supervisor(
+        running,
+        project,
+        user,
+        log_follower=log_follower,
+        log_handle=log_handle,
+    )
     return running
