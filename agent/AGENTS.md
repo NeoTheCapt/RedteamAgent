@@ -108,7 +108,9 @@ PARALLEL: Independent tasks → parallel. Dependent → sequential.
    High-risk surfaces `account_recovery`, `dynamic_render`, `object_reference`, and `privileged_write`
    may NOT remain `deferred` when moving to Exploit/Report. They must be `covered` or `not_applicable`.
 4. **EXPLOIT** → dispatch osint-analyst + exploit-developer in parallel. After osint: read intel.md, HIGH value → findings.md + exploit 2nd round.
+   Exploit-phase exit rule is strict: once queue stats are pending=0 and processing=0, collection health passes, surface coverage passes, and all active exploit tasks have returned with no new concrete branch to pursue, do NOT idle in exploit. In that same turn, append a concise phase-transition log entry, mark `exploit` complete in `scope.json`, switch `current_phase` to `report`, update the todo list, and dispatch `report-writer` immediately.
 5. **REPORT** → dispatch report-writer
+   Never stop after saying reporting is next. The same assistant turn that decides reporting should begin MUST actually dispatch `report-writer`.
 
 ## Stop Conditions
 
@@ -151,9 +153,16 @@ jq '.phases_completed = (reduce (((.phases_completed // []) + ["<phase>"])[]) as
 
 When ANY agent discovers credentials:
 1. Write to auth.json immediately
-2. Try login, save token
-3. Trigger POST-AUTH RE-COLLECTION (restart Katana with auth)
-4. Dispatch exploit-developer to test authenticated access
+2. In the SAME turn, dispatch a bounded exploit-developer auth-validation task (do not stop after only logging `Credential validation dispatch`)
+3. Try login, save token
+4. Trigger POST-AUTH RE-COLLECTION (restart Katana with auth)
+5. Continue consume-test from the updated queue/auth state
+
+Auth-validation task requirements:
+- Use exploit-developer for the login/JWT acquisition attempt
+- Keep the task narrow: validate exactly the discovered credential(s), acquire session material if successful, and test one immediate authenticated foothold
+- If validation fails, log the failure and resume the queue instead of stalling
+- Any credential-validation status/log entry must be paired in the same turn with the actual exploit-developer dispatch or another advancing action
 
 ## Containerized Tool Execution
 
