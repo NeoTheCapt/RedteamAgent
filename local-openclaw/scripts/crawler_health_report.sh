@@ -30,6 +30,10 @@ total_surfaces="$(printf '%s' "$summary_json" | jq -r '.coverage.total_surfaces 
 observed_total="$(printf '%s' "$observed_json" | jq 'length')"
 crawler_observed="$(printf '%s' "$observed_json" | jq '[.[] | select((.source // "") | test("^katana"))] | length')"
 non_crawler_observed=$(( observed_total - crawler_observed ))
+crawler_candidate_total="$(printf '%s' "$observed_json" | jq '[.[] | select(((.type // "unknown") | IN("api", "javascript", "page", "stylesheet", "websocket")))] | length')"
+crawler_seed_candidate_total="$(printf '%s' "$observed_json" | jq '[.[] | select(((.type // "unknown") | IN("api", "javascript", "page", "stylesheet", "websocket")) and (((.source // "") | IN("requeue", "vulnerability-analyst", "operator")) | not))] | length')"
+crawler_seed_candidate_observed="$(printf '%s' "$observed_json" | jq '[.[] | select(((.type // "unknown") | IN("api", "javascript", "page", "stylesheet", "websocket")) and (((.source // "") | IN("requeue", "vulnerability-analyst", "operator")) | not) and ((.source // "") | test("^katana")))] | length')"
+supplemental_non_crawler_observed=$(( observed_total - crawler_seed_candidate_total ))
 
 katana_output_lines="$(printf '%s' "$artifact_json" | jq -r '.files.katana_output_lines // 0')"
 surfaces_lines="$(printf '%s' "$artifact_json" | jq -r '.files.surfaces_lines // 0')"
@@ -52,6 +56,10 @@ printf -- '- total_surfaces: %s\n' "$total_surfaces"
 printf -- '- observed_paths_total: %s\n' "$observed_total"
 printf -- '- crawler_observed_paths: %s\n' "$crawler_observed"
 printf -- '- non_crawler_observed_paths: %s\n' "$non_crawler_observed"
+printf -- '- crawler_candidate_total: %s\n' "$crawler_candidate_total"
+printf -- '- crawler_seed_candidate_total: %s\n' "$crawler_seed_candidate_total"
+printf -- '- crawler_seed_candidate_observed_paths: %s\n' "$crawler_seed_candidate_observed"
+printf -- '- supplemental_non_crawler_observed_paths: %s\n' "$supplemental_non_crawler_observed"
 printf -- '- katana_output_lines: %s\n' "$katana_output_lines"
 printf -- '- surfaces_lines: %s\n' "$surfaces_lines"
 printf -- '\n### Observed path types\n\n'
@@ -81,11 +89,11 @@ alerts=()
 if (( total_cases >= 10 && observed_total < 5 )); then
   alerts+=("Observed path types are too sparse relative to cases.db; investigate crawler ingestion / observed-path generation bugs.")
 fi
-if (( observed_total > 0 && crawler_observed * 2 < observed_total )); then
-  alerts+=("Most observed paths are not crawler-derived; investigate crawler coverage and Katana ingestion bugs.")
+if (( crawler_seed_candidate_total > 0 && crawler_seed_candidate_observed * 2 < crawler_seed_candidate_total )); then
+  alerts+=("Most primary crawler-eligible discoveries are not crawler-derived; investigate crawler coverage and Katana ingestion bugs.")
 fi
-if (( katana_output_lines > 0 && observed_total == 0 )); then
-  alerts+=("Katana output exists but observed paths are empty; investigate crawler-to-cases / observed-path derivation bugs.")
+if (( katana_output_lines > 0 && crawler_seed_candidate_observed == 0 )); then
+  alerts+=("Katana output exists but primary crawler-derived observed paths are empty; investigate crawler-to-cases / observed-path derivation bugs.")
 fi
 if (( total_cases > 0 && total_surfaces == 0 )); then
   alerts+=("cases.db has rows but surfaces are empty; investigate crawler/surface tracking drift.")
