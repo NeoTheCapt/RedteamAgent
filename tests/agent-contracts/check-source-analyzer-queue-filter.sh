@@ -27,6 +27,8 @@ cat <<'EOF' | "$REQUEUE_SCRIPT" "$db" requeue >/dev/null
 {"method":"GET","url":"https://target.local/account/login","url_path":"/account/login","type":"page","source":"source-analyzer"}
 {"method":"GET","url":"https://target.local/api/v1/config","url_path":"/api/v1/config","type":"api","source":"source-analyzer"}
 {"method":"GET","url":"https://target.local/docs-v5/broker_en/","url_path":"/docs-v5/broker_en/","type":"page","source":"source-analyzer"}
+{"method":"GET","url":"https://target.local/ftp/incident-support.kdbx","url_path":"/ftp/incident-support.kdbx","type":"data","source":"source-analyzer"}
+{"method":"GET","url":"https://target.local/ftp/acquisitions.md","url_path":"/ftp/acquisitions.md","type":"data","source":"source-analyzer"}
 {"method":"GET","url":"https://target.local/default-index.xml","url_path":"/default-index.xml","type":"data","source":"recon-specialist"}
 EOF
 
@@ -41,6 +43,8 @@ assert rows == [
     ("source-analyzer", "page", "/account/login"),
     ("source-analyzer", "api", "/api/v1/config"),
     ("source-analyzer", "page", "/docs-v5/broker_en/"),
+    ("source-analyzer", "data", "/ftp/incident-support.kdbx"),
+    ("source-analyzer", "data", "/ftp/acquisitions.md"),
     ("recon-specialist", "data", "/default-index.xml"),
 ], rows
 PY
@@ -52,6 +56,7 @@ cat <<'EOF' | "$INGEST_SCRIPT" "$db" source-analyzer >/dev/null
 {"method":"GET","url":"https://target.local/help-center001.xml","url_path":"/help-center001.xml","type":"data"}
 {"method":"GET","url":"https://target.local/account/security-reset","url_path":"/account/security-reset","type":"page"}
 {"method":"GET","url":"https://target.local/swagger.json","url_path":"/swagger.json","type":"api-spec"}
+{"method":"GET","url":"https://target.local/ftp/incident-support.kdbx","url_path":"/ftp/incident-support.kdbx","type":"data"}
 EOF
 
 python3 - <<'PY' "$db"
@@ -64,6 +69,7 @@ rows = con.execute("select source, type, url_path from cases order by id").fetch
 assert rows == [
     ("source-analyzer", "page", "/account/security-reset"),
     ("source-analyzer", "api-spec", "/swagger.json"),
+    ("source-analyzer", "data", "/ftp/incident-support.kdbx"),
 ], rows
 PY
 

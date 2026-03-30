@@ -25,6 +25,7 @@ _source_queue_is_high_signal_page() {
     [[ "$path_lower" =~ (^|/)(broker|sub-account|subaccount|oauth|wallet|watchlist|trade|asset|defi)(/|$) ]] && return 0
     [[ "$path_lower" =~ (^|/)(docs-v[0-9]+|api-docs?|swagger|openapi)(/|$) ]] && return 0
     [[ "$path_lower" =~ (^|/)(status|health|captcha)(/|$) ]] && return 0
+    [[ "$path_lower" =~ ^/(ftp|downloads?|downloads-public|artifacts?|assets?|backups?|exports?|dumps?|files?)(/|$) ]] && return 0
     return 1
 }
 
@@ -38,6 +39,12 @@ _source_queue_is_high_signal_data() {
     [[ "$path_lower" =~ (^|/)\.well-known(/|$) ]] && return 0
     [[ "$path_lower" =~ (^|/)(assetlinks\.json|apple-app-site-association|manifest\.json|crossdomain\.xml|clientaccesspolicy\.xml)$ ]] && return 0
     [[ "$path_lower" =~ (^|/)(config|settings|app-config|bootstrap|runtime)(\.|-|_|/|$) ]] && return 0
+
+    # Keep concrete artifact paths from exposed file repositories. These routinely
+    # produce the highest-value follow-up cases (backups, KeePass stores, configs,
+    # leaked docs) but were previously dropped as generic data files.
+    [[ "$path_lower" =~ ^/(ftp|downloads?|downloads-public|artifacts?|assets?|backups?|exports?|dumps?|files?)(/|$) ]] && return 0
+    [[ "$path_lower" =~ \.(bak|backup|old|orig|save|swp|tmp|kdbx|sqlite|db|sql|dump|log|ya?ml|toml|ini|cfg|conf|env|pem|key|crt|cer|p12|pfx|ovpn|ppk|pyc|plist)(\.|$) ]] && return 0
     return 1
 }
 
