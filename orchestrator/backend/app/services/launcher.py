@@ -819,6 +819,7 @@ def _normalize_cases_db(path: Path, context: dict[str, str] | None) -> None:
 
 _SURFACE_AGENT_PREFIX = re.compile(r"^\[[^\]]+\]\s*")
 _SURFACE_PLACEHOLDER_PATTERN = re.compile(r"(%3c[^/%\s]+%3e|<[^>\s]+>|FUZZ|PARAM|\{\{|\}\})", re.IGNORECASE)
+_SURFACE_HTTP_METHOD_PATTERN = re.compile(r"\b(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\b")
 _VALID_SURFACE_TYPES = {
     "auth_entry",
     "account_recovery",
@@ -848,6 +849,15 @@ def _surface_target_contains_placeholder(value: str) -> bool:
     if not value:
         return False
     return _SURFACE_PLACEHOLDER_PATTERN.search(value) is not None
+
+
+def _normalize_surface_target_placeholders(value: str) -> str:
+    normalized = str(value or "").strip()
+    if not _surface_target_contains_placeholder(normalized):
+        return normalized
+    if len(_SURFACE_HTTP_METHOD_PATTERN.findall(normalized)) < 2:
+        return normalized
+    return _SURFACE_PLACEHOLDER_PATTERN.sub("...", normalized)
 
 
 def _iter_runtime_text_fragments(payload):
@@ -885,7 +895,7 @@ def _extract_surface_candidates_from_text(text: str) -> list[dict[str, str]]:
             continue
 
         surface_type = _normalize_surface_type(payload.get("surface_type") or "")
-        target = str(payload.get("target") or "").strip()
+        target = _normalize_surface_target_placeholders(payload.get("target") or "")
         source = str(payload.get("source") or payload.get("agent") or "").strip()
         rationale = str(payload.get("rationale") or payload.get("reason") or payload.get("notes") or "").strip()
         evidence_ref = str(payload.get("evidence_ref") or payload.get("evidence") or "").strip()
@@ -923,7 +933,7 @@ def _canonicalize_surface_record(record: dict[str, str], context: dict[str, str]
     status = str(canonical.get("status") or "discovered").strip().lower().replace("-", "_")
     canonical["surface_type"] = surface_type
     canonical["status"] = status if status in _VALID_SURFACE_STATUSES else "discovered"
-    canonical["target"] = str(canonical.get("target") or "").strip()
+    canonical["target"] = _normalize_surface_target_placeholders(canonical.get("target") or "")
     canonical["source"] = str(canonical.get("source") or "").strip()
     canonical["rationale"] = str(canonical.get("rationale") or "").strip()
     canonical["evidence_ref"] = str(canonical.get("evidence_ref") or "").strip()
