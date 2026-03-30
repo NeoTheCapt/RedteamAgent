@@ -350,7 +350,15 @@ def _normalize_scope_file(scope_path: Path, *, run: Run | None = None) -> dict[s
 
     phases_completed = payload.get("phases_completed")
     if isinstance(phases_completed, list):
-        normalized = [_canonical_phase_name(item) for item in phases_completed]
+        normalized: list[str] = []
+        seen_phases: set[str] = set()
+        for item in phases_completed:
+            phase_name = _canonical_phase_name(item)
+            if phase_name in seen_phases:
+                changed = True
+                continue
+            normalized.append(phase_name)
+            seen_phases.add(phase_name)
         if normalized != phases_completed:
             payload["phases_completed"] = normalized
             changed = True
@@ -374,20 +382,48 @@ def _active_name_to_engagement_dir(workspace: Path, active_name: str) -> Path:
     return workspace / "engagements" / active_relative
 
 
+def _heartbeat_phase_from_run_metadata(run: Run) -> tuple[str, float | None]:
+    metadata_path = metadata_path_for(run)
+    if not metadata_path.exists():
+        return ("unknown", None)
+
+    try:
+        payload = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return ("unknown", _path_mtime(metadata_path))
+
+    phase = _canonical_phase_name(payload.get("current_phase"))
+    return (phase, _path_mtime(metadata_path))
+
+
 def _heartbeat_context(run: Run) -> tuple[str, str]:
     engagement_dir = _active_engagement_dir(run)
     if engagement_dir is None:
         return ("unknown", "Runtime active; waiting for engagement initialization.")
 
     scope_path = engagement_dir / "scope.json"
+    metadata_phase, metadata_mtime = _heartbeat_phase_from_run_metadata(run)
     if not scope_path.exists():
-        return ("unknown", "Runtime active; engagement created, waiting for phase details.")
+        phase = metadata_phase if metadata_phase != "unknown" else "unknown"
+        if phase == "unknown":
+            return ("unknown", "Runtime active; engagement created, waiting for phase details.")
+        return (phase, f"Runtime active in {phase}; waiting for new agent output.")
 
     scope = _normalize_scope_file(scope_path, run=run)
     if scope is None:
-        return ("unknown", "Runtime active; scope metadata is not yet readable.")
+        phase = metadata_phase if metadata_phase != "unknown" else "unknown"
+        if phase == "unknown":
+            return ("unknown", "Runtime active; scope metadata is not yet readable.")
+        return (phase, f"Runtime active in {phase}; waiting for new agent output.")
 
-    phase = str(scope.get("current_phase") or "unknown")
+    scope_phase = _canonical_phase_name(scope.get("current_phase"))
+    scope_mtime = _path_mtime(scope_path)
+
+    if metadata_phase != "unknown" and (scope_phase == "unknown" or (metadata_mtime or 0) >= (scope_mtime or 0)):
+        phase = metadata_phase
+    else:
+        phase = scope_phase
+
     return (phase, f"Runtime active in {phase}; waiting for new agent output.")
 
 
