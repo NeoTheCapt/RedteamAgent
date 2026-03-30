@@ -148,6 +148,11 @@ def _normalize_phase_name(phase: str | None) -> str:
     return mapping.get(normalized, "unknown")
 
 
+def _engagement_dir_rank(path: Path) -> tuple[int, float, str]:
+    return (1 if (path / "scope.json").exists() else 0, path.stat().st_mtime, path.name)
+
+
+
 def _active_engagement_root(run_root: Path) -> Path | None:
     workspace = run_root / "workspace"
     engagements_root = workspace / "engagements"
@@ -155,11 +160,24 @@ def _active_engagement_root(run_root: Path) -> Path | None:
     if active_file.exists():
         active_name = active_file.read_text(encoding="utf-8").strip()
         if active_name:
-            active_relative = active_name.removeprefix("./").removeprefix("/")
-            candidate = workspace / active_relative if active_relative.startswith("engagements/") else engagements_root / active_relative
-            if candidate.exists():
-                return candidate
-    candidates = sorted([path for path in engagements_root.iterdir() if path.is_dir()], reverse=True) if engagements_root.exists() else []
+            active_path = Path(active_name)
+            if active_path.is_absolute():
+                if active_path.exists() and (active_path / "scope.json").exists():
+                    return active_path
+            else:
+                active_relative = active_name.removeprefix("./").removeprefix("/")
+                candidate = workspace / active_relative if active_relative.startswith("engagements/") else engagements_root / active_relative
+                if candidate.exists() and (candidate / "scope.json").exists():
+                    return candidate
+    candidates = (
+        sorted(
+            [path for path in engagements_root.iterdir() if path.is_dir()],
+            key=_engagement_dir_rank,
+            reverse=True,
+        )
+        if engagements_root.exists()
+        else []
+    )
     return candidates[0] if candidates else None
 
 

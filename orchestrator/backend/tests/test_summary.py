@@ -52,6 +52,119 @@ def setup_active_engagement(run: dict) -> Path:
     return active_dir
 
 
+def test_run_summary_resolves_absolute_active_marker_before_fallback_candidates():
+    client = TestClient(app)
+    token = register_and_login(client, "alice-absolute-active")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "http://127.0.0.1:8000")
+
+    workspace = Path(run["engagement_root"], "workspace")
+    engagements = workspace / "engagements"
+    real_name = "2026-03-30-113636-host-docker-internal"
+    real_dir = engagements / real_name
+    real_dir.mkdir(parents=True, exist_ok=True)
+    sqltest_dir = engagements / "sqltest"
+    sqltest_dir.mkdir(parents=True, exist_ok=True)
+
+    (engagements / ".active").write_text(str(real_dir.resolve()), encoding="utf-8")
+    (real_dir / "scope.json").write_text(
+        json.dumps(
+            {
+                "target": "http://127.0.0.1:8000",
+                "hostname": "127.0.0.1",
+                "port": 8000,
+                "scope": ["127.0.0.1"],
+                "status": "in_progress",
+                "start_time": "2026-03-30T11:36:36Z",
+                "phases_completed": ["recon"],
+                "current_phase": "collect",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (real_dir / "log.md").write_text("recent activity\n", encoding="utf-8")
+    with sqlite3.connect(real_dir / "cases.db") as connection:
+        connection.execute(
+            "CREATE TABLE cases (method TEXT, url TEXT, type TEXT NOT NULL, status TEXT NOT NULL, assigned_agent TEXT, source TEXT)"
+        )
+        connection.execute(
+            "INSERT INTO cases (method, url, type, status, assigned_agent, source) VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                "GET",
+                "http://127.0.0.1:8000/rest/admin/application-version",
+                "api",
+                "pending",
+                "",
+                "katana-xhr",
+            ),
+        )
+        connection.commit()
+    with sqlite3.connect(sqltest_dir / "cases.db") as connection:
+        connection.execute("CREATE TABLE placeholder (value TEXT)")
+        connection.commit()
+
+    response = client.get(
+        f"/projects/{project['id']}/runs/{run['id']}/summary",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+
+    assert payload["target"]["engagement_dir"] == str(real_dir.resolve())
+    assert payload["coverage"]["total_cases"] == 1
+    assert payload["current"]["phase"] == "collect"
+
+
+def test_run_summary_recovers_from_scope_less_active_marker():
+    client = TestClient(app)
+    token = register_and_login(client, "alice-poisoned-active")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "http://127.0.0.1:8000")
+
+    workspace = Path(run["engagement_root"], "workspace")
+    engagements = workspace / "engagements"
+    real_dir = engagements / "2026-03-30-113636-host-docker-internal"
+    real_dir.mkdir(parents=True, exist_ok=True)
+    (real_dir / "scope.json").write_text(
+        json.dumps(
+            {
+                "target": "http://127.0.0.1:8000",
+                "hostname": "127.0.0.1",
+                "port": 8000,
+                "scope": ["127.0.0.1"],
+                "status": "in_progress",
+                "start_time": "2026-03-30T11:36:36Z",
+                "phases_completed": ["recon"],
+                "current_phase": "collect",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (real_dir / "log.md").write_text("recent activity\n", encoding="utf-8")
+    with sqlite3.connect(real_dir / "cases.db") as connection:
+        connection.execute("CREATE TABLE cases (type TEXT NOT NULL, status TEXT NOT NULL)")
+        connection.execute("INSERT INTO cases (type, status) VALUES (?, ?)", ("api", "pending"))
+        connection.commit()
+
+    sqltest_dir = engagements / "sqltest"
+    sqltest_dir.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(sqltest_dir / "cases.db") as connection:
+        connection.execute("CREATE TABLE placeholder (value TEXT)")
+        connection.commit()
+    (engagements / ".active").write_text("engagements/sqltest", encoding="utf-8")
+
+    response = client.get(
+        f"/projects/{project['id']}/runs/{run['id']}/summary",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+
+    assert payload["target"]["engagement_dir"] == str(real_dir)
+    assert payload["coverage"]["total_cases"] == 1
+    assert payload["current"]["phase"] == "collect"
+
+
 def test_run_summary_combines_target_coverage_and_agent_state():
     client = TestClient(app)
     token = register_and_login(client, "alice")
