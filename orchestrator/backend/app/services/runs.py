@@ -421,8 +421,16 @@ def _reconcile_run_status(run: Run, project: Project | None = None, user: User |
         if run.status != "running":
             refreshed = db.update_run_status(run.id, "running")
             _clear_run_terminal_reason(refreshed)
+            if project is not None and user is not None:
+                from .run_summary import refresh_run_metadata_projection
+
+                refresh_run_metadata_projection(refreshed, project, user)
             return refreshed
         _clear_run_terminal_reason(run)
+        if project is not None and user is not None:
+            from .run_summary import refresh_run_metadata_projection
+
+            refresh_run_metadata_projection(run, project, user)
         return run
 
     if run.status == "completed":

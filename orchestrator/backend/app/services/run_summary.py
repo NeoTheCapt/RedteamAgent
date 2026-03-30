@@ -13,6 +13,8 @@ from urllib.parse import quote, urlparse
 
 from fastapi import HTTPException, status
 
+from ..models.project import Project
+from ..models.run import Run
 from ..models.user import User
 from .events import list_events_for_run
 from .launcher import _loopback_display_context, _rewrite_artifact_value, normalize_active_scope
@@ -1018,11 +1020,9 @@ def _overview_updated_at(run, active_root: Path, latest_task, latest_phase) -> s
     return max(candidates) if candidates else ""
 
 
-def summarize_run(project_id: int, run_id: int, user: User) -> RunSummary:
+def _summarize_existing_run(run: Run, project: Project, user: User) -> RunSummary:
     from .. import db
 
-    run = _run_or_404(project_id, run_id, user)
-    project = _project_or_404(project_id, user)
     normalize_active_scope(run)
     run_root = Path(run.engagement_root)
     active_root = _active_engagement_root(run_root)
@@ -1033,7 +1033,7 @@ def summarize_run(project_id: int, run_id: int, user: User) -> RunSummary:
     processing_agents = cases.get("processing_agents", [])
     surfaces = _load_surface_metrics(active_root / "surfaces.jsonl")
     findings_count = _count_findings(active_root / "findings.md")
-    events = list_events_for_run(project_id, run_id, user)
+    events = list_events_for_run(project.id, run.id, user)
     effective_current_phase = _effective_current_phase(
         scope,
         events,
@@ -1089,6 +1089,18 @@ def summarize_run(project_id: int, run_id: int, user: User) -> RunSummary:
         phases=phases,
         agents=agents,
     )
+
+
+
+def refresh_run_metadata_projection(run: Run, project: Project, user: User) -> RunSummary:
+    return _summarize_existing_run(run, project, user)
+
+
+
+def summarize_run(project_id: int, run_id: int, user: User) -> RunSummary:
+    run = _run_or_404(project_id, run_id, user)
+    project = _project_or_404(project_id, user)
+    return _summarize_existing_run(run, project, user)
 
 
 def list_observed_paths(project_id: int, run_id: int, user: User) -> list[ObservedPathRecord]:
