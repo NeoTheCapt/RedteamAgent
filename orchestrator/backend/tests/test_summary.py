@@ -794,6 +794,106 @@ def test_run_summary_reopened_current_phase_prunes_completed_marker_and_stays_ac
     assert consume_waterfall["active_agents"] == 1
 
 
+def test_run_summary_reopens_consume_test_when_queue_remains_after_exploit_escalation():
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "http://127.0.0.1:8000")
+    active_dir = setup_active_engagement(run)
+    (active_dir / "scope.json").write_text(
+        json.dumps(
+            {
+                "hostname": "127.0.0.1",
+                "status": "in_progress",
+                "phases_completed": ["recon", "collect", "consume_test"],
+                "current_phase": "exploit",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with sqlite3.connect(active_dir / "cases.db") as connection:
+        connection.execute(
+            "CREATE TABLE cases (type TEXT NOT NULL, status TEXT NOT NULL, assigned_agent TEXT, source TEXT)"
+        )
+        connection.execute(
+            "INSERT INTO cases (type, status, assigned_agent, source) VALUES ('api', 'processing', 'vulnerability-analyst', 'katana-xhr')"
+        )
+        connection.execute(
+            "INSERT INTO cases (type, status, assigned_agent, source) VALUES ('api', 'pending', NULL, 'katana')"
+        )
+        connection.commit()
+
+    process_log = Path(run["engagement_root"], "runtime", "process.log")
+    process_log.parent.mkdir(parents=True, exist_ok=True)
+    process_log.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "type": "tool_use",
+                        "timestamp": 1774848785415,
+                        "part": {
+                            "tool": "task",
+                            "state": {
+                                "status": "completed",
+                                "input": {
+                                    "description": "Exploit high findings",
+                                    "subagent_type": "exploit-developer",
+                                    "prompt": "Current phase: consume_test (escalated high findings)\n",
+                                },
+                            },
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "tool_use",
+                        "timestamp": 1774848798572,
+                        "part": {
+                            "tool": "bash",
+                            "title": "Fetch second API batch",
+                            "state": {
+                                "status": "completed",
+                                "input": {
+                                    "description": "Fetch second API batch",
+                                    "command": "./scripts/dispatcher.sh stats",
+                                },
+                            },
+                        },
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    response = client.get(
+        f"/projects/{project['id']}/runs/{run['id']}/summary",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+
+    consume_phase = next(item for item in payload["phases"] if item["phase"] == "consume-test")
+    exploit_phase = next(item for item in payload["phases"] if item["phase"] == "exploit")
+    assert payload["overview"]["current_phase"] == "consume-test"
+    assert payload["current"]["phase"] == "consume-test"
+    assert consume_phase["state"] == "active"
+    assert exploit_phase["state"] == "pending"
+
+    persisted_scope = json.loads((active_dir / "scope.json").read_text(encoding="utf-8"))
+    assert persisted_scope["current_phase"] == "consume_test"
+    assert persisted_scope["phases_completed"] == ["recon", "collect"]
+
+    run_metadata = json.loads((Path(run["engagement_root"]) / "run.json").read_text(encoding="utf-8"))
+    assert run_metadata["current_phase"] == "consume-test"
+    consume_agent = next(item for item in run_metadata["agents"] if item["agent_name"] == "vulnerability-analyst")
+    assert consume_agent["status"] == "active"
+    assert consume_agent["phase"] == "consume-test"
+
+
 def test_run_summary_event_creation_updates_run_metadata_timestamp():
     client = TestClient(app)
     token = register_and_login(client, "alice")
