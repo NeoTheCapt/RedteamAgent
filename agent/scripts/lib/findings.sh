@@ -53,8 +53,10 @@ next_finding_id() {
 
     prefix="$(finding_prefix_for_agent "$agent_name")"
     max_id="$(
-        rg -o "FINDING-${prefix}-[0-9]{3}" "$findings_file" 2>/dev/null \
+        rg --text -o "FINDING-${prefix}-[0-9]{3}" "$findings_file" 2>/dev/null \
             | sed "s/FINDING-${prefix}-//" \
+            | tr -d '\r' \
+            | awk '/^[0-9]+$/' \
             | sort -n \
             | tail -1
     )"
