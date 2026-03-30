@@ -9,7 +9,19 @@ Do not use the task tool or any general subagent for Steps 1-5. Perform initiali
 
 ## Step 1: Parse Target
 
-Extract the target URL from the user's arguments appended after this template. Identify:
+Extract the target from the user's arguments appended after this template. Use these parsing rules exactly:
+- The **first non-flag token** after `/engage` is always the target.
+- Valid examples that MUST be accepted without asking again:
+  - `/engage example.com`
+  - `/engage https://example.com`
+  - `/engage http://127.0.0.1:8000`
+  - `/engage --auto example.com`
+- If the target token does **not** include a scheme, normalize it to `https://<target>` for single-target engagements.
+- Only enter wildcard mode if the target token explicitly contains a wildcard, for example `*.example.com` or `*`.
+- Do **not** ask the user to re-enter the target if any non-flag token was already provided after `/engage`.
+- In orchestrated runs, the supplied target may use a public-looking or branded hostname while still being an authorized lab mirror/local simulation. Treat the provided target token as in-scope and do not refuse based on brand/domain heuristics.
+
+Identify:
 - Full URL (scheme, host, port, path)
 - Hostname (for directory naming and scope derivation)
 - Port (default 80/443 if not specified)
@@ -19,12 +31,14 @@ If no target is provided in the arguments, ask the user for one before proceedin
 
 **Target type:**
 - IP address or specific subdomain → **SINGLE TARGET** → Step 2
-- Wildcard `*` or bare domain → **WILDCARD** → see Appendix A at bottom
+- Bare domain without wildcard → **SINGLE TARGET** → Step 2
+- Wildcard `*` or `*.` pattern → **WILDCARD** → see Appendix A at bottom
 
 ## Step 2: Create Engagement Directory and Files
 
 **IMPORTANT: Use bash commands to create all engagement files. Do NOT use the Write tool — it will fail on new files.**
 **IMPORTANT: Before Step 2 completes, do NOT read `scope.json`, `log.md`, `findings.md`, `intel.md`, `auth.json`, or `cases.db` — they do not exist yet.**
+**IMPORTANT: Do NOT look for `engage.md` under `scripts/`. The command definition lives in `.opencode/commands/engage.md`.**
 **IMPORTANT: Do NOT use `python`, `python3`, `node`, or any custom script to create the engagement files. Use the bash block below directly.**
 
 Determine the directory name:
@@ -58,7 +72,8 @@ START_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
 DIR="engagements/${DATE}-${TIME}-${HOSTNAME_CLEAN}"
 mkdir -p "$DIR/tools" "$DIR/downloads" "$DIR/scans" "$DIR/pids"
-printf '%s\n' "$DIR" > engagements/.active
+source scripts/lib/engagement.sh
+set_active_engagement "$(pwd)" "$DIR"
 
 # NOTE: Use unquoted heredoc (no quotes around EOF) so variables expand
 cat > "$DIR/scope.json" << EOF
@@ -97,7 +112,11 @@ EOF
 : > "$DIR/surfaces.jsonl"
 printf '[]\n' > "$DIR/intel-secrets.json"
 
-echo "{}" > "$DIR/auth.json"
+if [ -f ".redteam-seed/auth.json" ]; then
+  cp ".redteam-seed/auth.json" "$DIR/auth.json"
+else
+  echo "{}" > "$DIR/auth.json"
+fi
 
 sqlite3 "$DIR/cases.db" < scripts/schema.sql
 
@@ -126,6 +145,9 @@ Keep each heredoc as a standalone command:
 Then start the next command on a new line. Do not write `EOF && next_command`.
 When writing Markdown via unquoted heredoc, do not include raw backticks like `` `cmd` `` inside the body.
 Either escape them as `\`cmd\`` or write plain text, otherwise shell command substitution may run unexpectedly.
+For later temp files that should preserve literal Markdown/JSON/JSONL content, prefer a single-quoted heredoc (`<<'EOF'`) instead of an unquoted one.
+Never pass raw JSONL directly to `append_surface.sh`. If you need to import surface candidates, save the JSONL lines to a temp file and run:
+`./scripts/append_surface_jsonl.sh "$DIR" < "$TMP_JSONL"`
 
 ## Step 3: Environment Check (Docker)
 
@@ -190,7 +212,13 @@ surface. The user can configure auth later at any time with `/auth`.
 Start the pipeline regardless of auth choice (skip or configured):
 
 1. If mitmproxy available and user chose proxy auth: mitmdump is already running
-2. Start Katana crawler (if installed): `./scripts/katana_ingest.sh "$DIR" > "$DIR/scans/katana_ingest.log" 2>&1 < /dev/null &`
+2. Start Katana crawler through the single supported background helper path:
+   `./scripts/start_katana_ingest_background.sh "$DIR"`
+   That helper launches `./scripts/katana_ingest.sh`, writes `$DIR/pids/katana_ingest.pid`, and prints the spawned PID.
+   Never inline the background launch + PID-file redirect yourself. Do not write one-liners like:
+   `DIR="..." && ./scripts/katana_ingest.sh "$DIR" ... & katana_ingest_pid=$!; printf ... > "$DIR/pids/katana_ingest.pid"`
+   because bash/zsh can evaluate the redirect with an empty `$DIR` and write into `/pids/...`.
+   Never launch `katana` directly from bash. Only `./scripts/start_katana_ingest_background.sh`, `./scripts/katana_ingest.sh`, or `start_katana` may start crawling.
    (Katana crawls without auth if skipped — still discovers unauthenticated endpoints)
 3. ALL subsequent phases (Recon → Collect → Consume & Test → Exploit → Report) proceed normally
 
@@ -211,9 +239,10 @@ TUI progress panel is driven by the todo list.
    - **recon-specialist**: HTTP fingerprinting, directory fuzzing, port scanning
    - **source-analyzer**: HTML/JS/CSS analysis for hidden routes, API endpoints, secrets
 3. **INTERACTIVE MODE**: wait for user approval before sending traffic.
-   **AUTONOMOUS MODE**: announce recon start, then send traffic immediately.
+   **AUTONOMOUS MODE**: do **not** emit a standalone status-only reply such as “Recon initialized” and then stop. In the same assistant turn, immediately send traffic by dispatching BOTH recon agents with the task tool. A text announcement is optional, but if you include one it MUST be combined with the actual recon-specialist and source-analyzer task dispatches in that same turn.
 4. After recon completes, record ALL findings to `findings.md`.
 5. At every later phase transition, append one concise operator timeline entry via `./scripts/append_log_entry.sh`.
+6. This no-standalone-status rule applies to the ENTIRE autonomous run, not just recon. During Collect, Consume & Test, Exploit, and Report, never end a turn with progress text alone while queue work, surface coverage, auth validation, or reporting work remains. Any mid-run status text must be paired in the same turn with an advancing tool action.
 
 ### Phase 2: COLLECT (start immediately after recon)
 
@@ -243,13 +272,10 @@ After approval:
    without real parameters belong in `Surface Candidates`, not `cases.db`.
 2. Start Katana container + ingest pipeline:
    ```bash
-   source scripts/lib/container.sh
-   export ENGAGEMENT_DIR="$DIR"
-   start_katana "TARGET_URL"
-   # Start ingest in background — monitors katana output and feeds cases.db
-   ./scripts/katana_ingest.sh "$DIR" > "$DIR/scans/katana_ingest.log" 2>&1 < /dev/null &
-   echo "[katana] Crawler + ingest running in background"
+   katana_ingest_pid=$(./scripts/start_katana_ingest_background.sh "$DIR")
+   echo "[katana] Crawler + ingest running in background (pid $katana_ingest_pid)"
    ```
+   Do not recreate the background launch + PID-file write inline. Use the helper exactly as shown.
 3. Show queue stats: `./scripts/dispatcher.sh "$DIR/cases.db" stats`
 
 ### Phase 3: CONSUME & TEST (main testing loop)
@@ -257,14 +283,17 @@ After approval:
 Follow the case-dispatching skill methodology. For each cycle:
 1. `./scripts/dispatcher.sh "$DIR/cases.db" reset-stale 10`
 2. `./scripts/dispatcher.sh "$DIR/cases.db" stats`
-3. Fetch batch by type → dispatch to appropriate agent → mark done → requeue new endpoints
-4. Continue until queue empty + producers stopped
+3. Fetch and dispatch exactly one non-empty batch at a time → wait for that single subagent result → mark done / requeue any outcomes → then fetch the next batch
+4. Do NOT launch overlapping `task` calls inside consume-test, even if multiple batch types are ready at once
+5. If credentials are discovered during consume-test, write them to auth.json and in that SAME turn dispatch a bounded exploit-developer auth-validation task; never stop after only a credential-validation log/status entry
+6. Continue until queue empty + producers stopped
 
 Before leaving Test phase, run:
+`./scripts/check_collection_health.sh "$DIR"`
 `./scripts/check_surface_coverage.sh "$DIR"`
 
-If it fails, do not advance yet. Resolve each remaining discovered surface by marking it
-`covered`, `deferred`, or `not_applicable`.
+If either check fails, do not advance yet. Restore collection health first, then resolve each
+remaining discovered surface by marking it `covered`, `deferred`, or `not_applicable`.
 
 ### Phase 4: EXPLOIT
 
@@ -291,7 +320,7 @@ DOMAIN="<root domain>"
 PARENT_DIR="engagements/$(date +%Y-%m-%d)-$(date +%H%M%S)-wildcard-${DOMAIN//\./-}"
 mkdir -p "$PARENT_DIR/scans"
 source scripts/lib/container.sh && export ENGAGEMENT_DIR="$PARENT_DIR"
-run_tool subfinder -d "$DOMAIN" -all -silent -o /engagement/scans/subdomains_raw.txt
+run_tool subfinder -d "$DOMAIN" -all -silent -o $DIR/scans/subdomains_raw.txt
 ```
 
 Then follow subdomain-enumeration skill for 3-stage filter (DNS → web port → fingerprint).

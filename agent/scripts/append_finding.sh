@@ -4,6 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/lib/findings.sh"
+EMIT_RUNTIME_EVENT="$SCRIPT_DIR/emit_runtime_event.sh"
 
 ENG_DIR="${1:?usage: append_finding.sh <engagement_dir> <agent-name> <finding-body-file>}"
 AGENT_NAME="${2:?usage: append_finding.sh <engagement_dir> <agent-name> <finding-body-file>}"
@@ -25,6 +26,19 @@ if ! replace_finding_placeholder "$BODY_FILE" "$finding_id" "$tmp_file"; then
     exit 1
 fi
 
+candidate_title="$(extract_finding_title "$tmp_file")"
+existing_id="$(find_existing_finding_id "$FINDINGS_FILE" "$tmp_file")"
+if [[ -n "$existing_id" ]]; then
+    rm -f "$tmp_file"
+    if [[ -n "$candidate_title" ]]; then
+        printf 'duplicate finding already present as %s: %s\n' "$existing_id" "$candidate_title" >&2
+    else
+        printf 'duplicate finding already present as %s\n' "$existing_id" >&2
+    fi
+    printf '%s\n' "$existing_id"
+    exit 0
+fi
+
 {
     printf '\n'
     cat "$tmp_file"
@@ -34,4 +48,12 @@ fi
 update_finding_count "$FINDINGS_FILE"
 
 rm -f "$tmp_file"
+if [[ -f "$EMIT_RUNTIME_EVENT" ]]; then
+    bash "$EMIT_RUNTIME_EVENT" \
+        "finding.created" \
+        "${ORCHESTRATOR_PHASE:-unknown}" \
+        "$finding_id" \
+        "$AGENT_NAME" \
+        "Added $finding_id"
+fi
 printf '%s\n' "$finding_id"

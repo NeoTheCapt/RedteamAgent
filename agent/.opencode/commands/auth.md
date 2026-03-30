@@ -99,9 +99,9 @@ and Katana was previously running (check for scans/katana_output.jsonl):
    source scripts/lib/container.sh
    export ENGAGEMENT_DIR="<engagement_dir>"
    stop_katana
-   start_katana "$(jq -r .target <engagement_dir>/scope.json)"
+   ./scripts/start_katana_ingest_background.sh "<engagement_dir>"
    ```
-3. `start_katana` reads both `cookies` and `headers` from `auth.json`, so authenticated re-collection applies to either auth style.
+3. The helper launches `katana_ingest.sh`, which uses `start_katana` and reads both `cookies` and `headers` from `auth.json`, so authenticated re-collection applies to either auth style.
 4. In-scope `run_tool curl` requests also consume `auth.json` automatically via the engagement-scoped `rtcurl` wrapper.
 5. New authenticated endpoints will flow into cases.db (dedup handles overlap with existing cases)
 6. Resume the consumption loop for any new pending cases

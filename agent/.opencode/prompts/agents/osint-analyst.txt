@@ -91,3 +91,5 @@ API Key Graceful Degradation:
 9. FINDING IDs: Never hand-allocate IDs. Write findings with `## [FINDING-ID] Title`, then append via:
    `./scripts/append_finding.sh "$DIR" osint-analyst <finding-body-file>`
    This allocates the next `FINDING-OS-NNN` under a lock and updates `Finding Count`.
+   When creating `<finding-body-file>` or temp evidence summaries, use a single-quoted heredoc
+   (`<<'EOF'`) unless shell expansion is explicitly required.

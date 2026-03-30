@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=/dev/null
+source "$SCRIPT_DIR/lib/findings.sh"
+
 ENG_DIR="${1:?usage: check_findings_integrity.sh <engagement_dir>}"
 FINDINGS_FILE="$ENG_DIR/findings.md"
 
@@ -24,10 +28,12 @@ if [[ "$declared_count" != "$actual_count" ]]; then
 fi
 
 duplicate_ids="$(
-    rg -o '^## \[(FINDING-[A-Z]{2}-[0-9]{3})\]' "$FINDINGS_FILE" \
-        | sed 's/^## \[//; s/\]$//' \
-        | sort \
-        | uniq -d
+    {
+        rg -o '^## \[(FINDING-[A-Z]{2}-[0-9]{3})\]' "$FINDINGS_FILE" \
+            | sed 's/^## \[//; s/\]$//' \
+            | sort \
+            | uniq -d
+    } || true
 )"
 
 if [[ -n "$duplicate_ids" ]]; then
@@ -35,6 +41,32 @@ if [[ -n "$duplicate_ids" ]]; then
     while IFS= read -r finding_id; do
         [[ -n "$finding_id" ]] && report_failure "  - $finding_id"
     done <<<"$duplicate_ids"
+fi
+
+duplicate_titles="$({
+    while IFS= read -r line; do
+        if [[ "$line" =~ ^##\ \[(FINDING-[A-Z]{2}-[0-9]{3})\][[:space:]]+(.+)$ ]]; then
+            title="${BASH_REMATCH[2]}"
+            normalized_title="$(printf '%s' "$title" | tr '[:upper:]' '[:lower:]' | tr '\t' ' ' | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//')"
+            printf '%s\t%s\n' "$normalized_title" "$title"
+        fi
+    done < "$FINDINGS_FILE"
+} | awk -F '\t' 'seen[$1]++ == 1 { print $2 }')"
+
+if [[ -n "$duplicate_titles" ]]; then
+    report_failure "Duplicate finding titles:"
+    while IFS= read -r title; do
+        [[ -n "$title" ]] && report_failure "  - $title"
+    done <<<"$duplicate_titles"
+fi
+
+duplicate_signatures="$(list_duplicate_finding_signatures "$FINDINGS_FILE")"
+
+if [[ -n "$duplicate_signatures" ]]; then
+    report_failure "Duplicate finding signatures:"
+    while IFS= read -r signature; do
+        [[ -n "$signature" ]] && report_failure "  - $signature"
+    done <<<"$duplicate_signatures"
 fi
 
 if [[ "$failures" -ne 0 ]]; then

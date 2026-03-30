@@ -13,6 +13,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib/params.sh"
 source "$SCRIPT_DIR/lib/classify.sh"
 source "$SCRIPT_DIR/lib/db.sh"
+source "$SCRIPT_DIR/lib/placeholders.sh"
+source "$SCRIPT_DIR/lib/source_queue_filter.sh"
+source "$SCRIPT_DIR/lib/loopback_scope.sh"
 
 # --- Validate arguments ---
 if [[ $# -lt 2 ]]; then
@@ -22,6 +25,7 @@ fi
 
 DB_PATH="$1"
 SOURCE="$2"
+ENG_DIR_FOR_SCOPE_FILTER="$(cd "$(dirname "$DB_PATH")" && pwd)"
 
 if [[ ! -f "$DB_PATH" ]]; then
     echo "ERROR: database not found: $DB_PATH" >&2
@@ -72,13 +76,21 @@ while IFS= read -r line; do
     url=$(printf '%s' "$url" | awk '{print $1}')
     method=$(printf '%s' "$method" | tr '[:lower:]' '[:upper:]')
 
-    # Skip URLs containing ffuf/fuzzing placeholders
-    if [[ "$url" == *"FUZZ"* || "$url" == *"PARAM"* || "$url" == *"{{"* ]]; then
+    # Skip unresolved placeholders and non-concrete queue entries
+    if contains_queue_placeholder "$url"; then
         continue
     fi
 
     # Skip if URL is empty
     [[ -z "$url" ]] && continue
+
+    normalized_url="$(normalize_target_for_scope "$ENG_DIR_FOR_SCOPE_FILTER" "$url")" || {
+        if [[ $? -eq 10 ]]; then
+            continue
+        fi
+        continue
+    }
+    url="$normalized_url"
 
     # If URL doesn't start with http, it might be a bare hostname — prefix with https://
     if [[ ! "$url" =~ ^https?:// ]]; then
@@ -111,6 +123,10 @@ while IFS= read -r line; do
 
     # Generate dedup signature
     params_sig=$(generate_params_sig "$query_params" "$body_params")
+
+    if ! should_enqueue_case "$SOURCE" "$case_type" "$method" "$url" "$url_path"; then
+        continue
+    fi
 
     # Insert into DB
     db_insert_case "$DB_PATH" \

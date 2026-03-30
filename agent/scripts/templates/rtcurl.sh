@@ -4,6 +4,7 @@ set -euo pipefail
 AUTH_FILE="${RTCURL_AUTH_FILE:-/engagement/auth.json}"
 SCOPE_FILE="${RTCURL_SCOPE_FILE:-/engagement/scope.json}"
 UA_FILE="${RTCURL_USER_AGENT_FILE:-/engagement/user-agent.txt}"
+HOST_GATEWAY_ALIAS="${HOST_GATEWAY_ALIAS:-host.docker.internal}"
 
 debug() {
     if [[ "${RTCURL_DEBUG:-0}" == "1" ]]; then
@@ -55,9 +56,94 @@ extract_host() {
     printf '%s\n' "$host" | tr '[:upper:]' '[:lower:]'
 }
 
+is_loopback_host() {
+    local host="${1:-}"
+    case "$host" in
+        localhost|127.0.0.1|0.0.0.0|::1|"[::1]")
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+scope_uses_loopback_target() {
+    local hostname=""
+    [[ -f "$SCOPE_FILE" ]] || return 1
+    hostname="$(jq -r '.hostname // empty' "$SCOPE_FILE" 2>/dev/null || true)"
+    [[ -n "$hostname" ]] || return 1
+    is_loopback_host "$hostname"
+}
+
+rewrite_runtime_url() {
+    local url="${1:-}"
+    local prefix rest auth hostport suffix host port rebuilt
+
+    if ! scope_uses_loopback_target; then
+        printf '%s\n' "$url"
+        return 0
+    fi
+
+    case "$url" in
+        http://*|https://*)
+            ;;
+        *)
+            printf '%s\n' "$url"
+            return 0
+            ;;
+    esac
+
+    prefix="${url%%://*}://"
+    rest="${url#"$prefix"}"
+    auth=""
+    if [[ "$rest" == *@* ]]; then
+        auth="${rest%%@*}@"
+        rest="${rest#*@}"
+    fi
+
+    hostport="${rest%%[/?#]*}"
+    suffix="${rest#"$hostport"}"
+
+    if [[ "$hostport" == \[*\]* ]]; then
+        host="${hostport%%]*}"
+        host="${host#[}"
+        port="${hostport#"]"}"
+    else
+        host="${hostport%%:*}"
+        port="${hostport#"$host"}"
+    fi
+
+    if ! is_loopback_host "$host"; then
+        printf '%s\n' "$url"
+        return 0
+    fi
+
+    rebuilt="${prefix}${auth}${HOST_GATEWAY_ALIAS}${port}${suffix}"
+    printf '%s\n' "$rebuilt"
+}
+
+rewrite_runtime_args() {
+    local arg
+    for arg in "$@"; do
+        case "$arg" in
+            http://*|https://*)
+                printf '%s\0' "$(rewrite_runtime_url "$arg")"
+                ;;
+            *)
+                printf '%s\0' "$arg"
+                ;;
+        esac
+    done
+}
+
 host_in_scope() {
     local host="$1"
     local entry suffix
+
+    if [[ "$host" == "$HOST_GATEWAY_ALIAS" ]] && scope_uses_loopback_target; then
+        return 0
+    fi
 
     while IFS= read -r entry; do
         [[ -n "$entry" ]] || continue
@@ -185,6 +271,7 @@ build_auth_args() {
 
 main() {
     local args=("$@")
+    local runtime_args=()
     local urls=()
     local url host
     local in_scope=1
@@ -215,16 +302,20 @@ main() {
         fi
     done
 
+    while IFS= read -r -d '' item; do
+        runtime_args+=("$item")
+    done < <(rewrite_runtime_args "${args[@]}")
+
     if (( in_scope )); then
         build_auth_args
         debug "injecting ${#RTCURL_ARGS[@]} auth args for in-scope target(s)"
         if (( ${#RTCURL_ARGS[@]} > 0 )); then
-            exec curl "${RTCURL_ARGS[@]}" "${args[@]}"
+            exec curl "${RTCURL_ARGS[@]}" "${runtime_args[@]}"
         fi
-        exec curl "${args[@]}"
+        exec curl "${runtime_args[@]}"
     fi
 
-    exec curl "${args[@]}"
+    exec curl "${runtime_args[@]}"
 }
 
 main "$@"

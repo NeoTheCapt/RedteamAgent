@@ -2,16 +2,133 @@
 # scripts/lib/container.sh — Container execution layer for pentest tools
 # Source this file: . scripts/lib/container.sh
 
-. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/processes.sh"
+CONTAINER_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$CONTAINER_LIB_DIR/processes.sh"
+# shellcheck source=/dev/null
+. "$CONTAINER_LIB_DIR/noise.sh"
 
 REDTEAM_IMAGE="${REDTEAM_IMAGE:-kali-redteam:latest}"
 PROXY_IMAGE="${PROXY_IMAGE:-redteam-proxy:latest}"
 KATANA_IMAGE="${KATANA_IMAGE:-projectdiscovery/katana:latest}"
 MITMPROXY_BIN="${MITMPROXY_BIN:-mitmdump}"
 KATANA_LOCAL_BIN="${KATANA_LOCAL_BIN:-katana}"
+KATANA_CHROME_BIN="${KATANA_CHROME_BIN:-/usr/bin/chromium}"
+KATANA_HEADLESS_OPTIONS="${KATANA_HEADLESS_OPTIONS:---no-sandbox,--disable-dev-shm-usage,--disable-gpu}"
+KATANA_CRAWL_DEPTH="${KATANA_CRAWL_DEPTH:-8}"
+KATANA_CRAWL_DURATION="${KATANA_CRAWL_DURATION:-15m}"
+KATANA_TIMEOUT_SECONDS="${KATANA_TIMEOUT_SECONDS:-20}"
+KATANA_TIME_STABLE_SECONDS="${KATANA_TIME_STABLE_SECONDS:-5}"
+KATANA_RETRY_COUNT="${KATANA_RETRY_COUNT:-3}"
+KATANA_MAX_FAILURE_COUNT="${KATANA_MAX_FAILURE_COUNT:-20}"
+KATANA_CONCURRENCY="${KATANA_CONCURRENCY:-15}"
+KATANA_PARALLELISM="${KATANA_PARALLELISM:-4}"
+KATANA_RATE_LIMIT="${KATANA_RATE_LIMIT:-60}"
+KATANA_STRATEGY="${KATANA_STRATEGY:-breadth-first}"
+KATANA_ENABLE_JSLUICE="${KATANA_ENABLE_JSLUICE:-0}"
+KATANA_ENABLE_PATH_CLIMB="${KATANA_ENABLE_PATH_CLIMB:-0}"
+HOST_GATEWAY_ALIAS="${HOST_GATEWAY_ALIAS:-host.docker.internal}"
 
 runtime_mode() {
     echo "${REDTEAM_RUNTIME_MODE:-docker}"
+}
+
+_is_loopback_host() {
+    local host="${1:-}"
+    case "$host" in
+        localhost|127.0.0.1|0.0.0.0|::1|"[::1]")
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+_scope_uses_loopback_target() {
+    _resolve_engagement_dir || return 1
+    local scope_file="${ENGAGEMENT_DIR_ABS}/scope.json"
+    local hostname=""
+
+    [[ -f "$scope_file" ]] || return 1
+    hostname="$(jq -r '.hostname // empty' "$scope_file" 2>/dev/null || true)"
+    [[ -n "$hostname" ]] || return 1
+    _is_loopback_host "$hostname"
+}
+
+_rewrite_runtime_url() {
+    local url="${1:-}"
+    local alias_host="$HOST_GATEWAY_ALIAS"
+    local prefix rest auth hostport suffix host port rebuilt
+
+    if ! _scope_uses_loopback_target; then
+        printf '%s\n' "$url"
+        return 0
+    fi
+
+    case "$url" in
+        http://*|https://*)
+            ;;
+        *)
+            printf '%s\n' "$url"
+            return 0
+            ;;
+    esac
+
+    prefix="${url%%://*}://"
+    rest="${url#"$prefix"}"
+    auth=""
+    if [[ "$rest" == *@* ]]; then
+        auth="${rest%%@*}@"
+        rest="${rest#*@}"
+    fi
+
+    hostport="${rest%%[/?#]*}"
+    suffix="${rest#"$hostport"}"
+
+    if [[ "$hostport" == \[*\]* ]]; then
+        host="${hostport%%]*}"
+        host="${host#[}"
+        port="${hostport#"]"}"
+    else
+        host="${hostport%%:*}"
+        port="${hostport#"$host"}"
+    fi
+
+    if ! _is_loopback_host "$host"; then
+        printf '%s\n' "$url"
+        return 0
+    fi
+
+    rebuilt="${prefix}${auth}${alias_host}${port}${suffix}"
+    printf '%s\n' "$rebuilt"
+}
+
+_rewrite_runtime_target_arg() {
+    local arg="${1:-}"
+
+    if ! _scope_uses_loopback_target; then
+        printf '%s\n' "$arg"
+        return 0
+    fi
+
+    case "$arg" in
+        http://*|https://*)
+            _rewrite_runtime_url "$arg"
+            ;;
+        localhost|127.0.0.1|0.0.0.0|::1|"[::1]")
+            printf '%s\n' "$HOST_GATEWAY_ALIAS"
+            ;;
+        *)
+            printf '%s\n' "$arg"
+            ;;
+    esac
+}
+
+_rewrite_runtime_args() {
+    local arg
+    for arg in "$@"; do
+        printf '%s\0' "$(_rewrite_runtime_target_arg "$arg")"
+    done
 }
 
 # Resolve ENGAGEMENT_DIR to absolute path (Docker requires absolute paths for -v mounts)
@@ -88,6 +205,57 @@ _engagement_env_file() {
     fi
 }
 
+_regex_escape() {
+    printf '%s' "$1" | sed -e 's/[.[\*^$()+?{}|\\/]/\\&/g'
+}
+
+_katana_scope_args() {
+    _resolve_engagement_dir || return 1
+    local scope_file="${ENGAGEMENT_DIR_ABS}/scope.json"
+    local patterns=()
+    local entry host escaped
+
+    if [[ ! -f "$scope_file" ]]; then
+        return 0
+    fi
+
+    while IFS= read -r entry; do
+        [[ -n "$entry" ]] || continue
+        if [[ "$entry" == \*.* ]]; then
+            host="${entry#*.}"
+            escaped="$(_regex_escape "$host")"
+            patterns+=("^https?://([^.]+\\.)*${escaped}([/:?#]|$)")
+        else
+            escaped="$(_regex_escape "$entry")"
+            patterns+=("^https?://${escaped}([/:?#]|$)")
+        fi
+    done < <(jq -r '[.hostname // empty, (.scope // [] | .[])] | map(select(type == "string" and length > 0)) | unique[]' "$scope_file" 2>/dev/null)
+
+    if _scope_uses_loopback_target; then
+        escaped="$(_regex_escape "$HOST_GATEWAY_ALIAS")"
+        patterns+=("^https?://${escaped}([/:?#]|$)")
+    fi
+
+    if [[ ${#patterns[@]} -eq 0 ]]; then
+        return 0
+    fi
+
+    local pattern
+    for pattern in "${patterns[@]}"; do
+        printf '%s\0%s\0' "-cs" "$pattern"
+    done
+}
+
+_katana_scope_array() {
+    local args=()
+    while IFS= read -r -d '' item; do
+        args+=("$item")
+    done < <(_katana_scope_args)
+    if [[ ${#args[@]} -gt 0 ]]; then
+        printf '%s\n' "${args[@]}"
+    fi
+}
+
 _load_engagement_env() {
     local env_file
     env_file="$(_engagement_env_file)"
@@ -145,15 +313,19 @@ _stop_local_process() {
 run_tool() {
     local tool="$1"; shift
     _resolve_engagement_dir || return 1
+    local runtime_args=()
+    while IFS= read -r -d '' item; do
+        runtime_args+=("$item")
+    done < <(_rewrite_runtime_args "$@")
     if [ "$(runtime_mode)" = "local" ]; then
         (
             cd "$ENGAGEMENT_DIR_ABS"
             export ENGAGEMENT_DIR="$ENGAGEMENT_DIR_ABS"
             _load_engagement_env
             if [[ "$tool" == "curl" && -x "${ENGAGEMENT_DIR_ABS}/tools/rtcurl" ]]; then
-                "${ENGAGEMENT_DIR_ABS}/tools/rtcurl" "$@"
+                "${ENGAGEMENT_DIR_ABS}/tools/rtcurl" "${runtime_args[@]}"
             else
-                "$tool" "$@"
+                "$tool" "${runtime_args[@]}"
             fi
         )
         return
@@ -167,10 +339,10 @@ run_tool() {
         docker_args+=(--env-file "$(pwd)/.env")
     fi
     if [[ "$tool" == "curl" && -x "${ENGAGEMENT_DIR_ABS}/tools/rtcurl" ]]; then
-        docker run "${docker_args[@]}" "$REDTEAM_IMAGE" /engagement/tools/rtcurl "$@"
+        docker run "${docker_args[@]}" "$REDTEAM_IMAGE" /engagement/tools/rtcurl "${runtime_args[@]}"
         return
     fi
-    docker run "${docker_args[@]}" "$REDTEAM_IMAGE" "$tool" "$@"
+    docker run "${docker_args[@]}" "$REDTEAM_IMAGE" "$tool" "${runtime_args[@]}"
 }
 
 # Start the mitmproxy container (persistent)
@@ -219,18 +391,68 @@ stop_proxy() {
 start_katana() {
     local target="$1"; shift
     _resolve_engagement_dir || return 1
+    local runtime_target
+    runtime_target="$(_rewrite_runtime_target_arg "$target")"
+    local katana_args=(
+        -u "$runtime_target"
+        -hh
+        -jc
+        -xhr
+        -xhr-extraction
+        -fx
+        -td
+        -tlsi
+        -duc
+        -system-chrome
+        -system-chrome-path "$KATANA_CHROME_BIN"
+        -headless-options "$KATANA_HEADLESS_OPTIONS"
+        -kf all
+        -iqp
+        -fsu
+        -ns
+        -s "$KATANA_STRATEGY"
+        -d "$KATANA_CRAWL_DEPTH"
+        -ct "$KATANA_CRAWL_DURATION"
+        -timeout "$KATANA_TIMEOUT_SECONDS"
+        -time-stable "$KATANA_TIME_STABLE_SECONDS"
+        -retry "$KATANA_RETRY_COUNT"
+        -mfc "$KATANA_MAX_FAILURE_COUNT"
+        -c "$KATANA_CONCURRENCY"
+        -p "$KATANA_PARALLELISM"
+        -rl "$KATANA_RATE_LIMIT"
+        -mrs 16777216
+        -omit-raw
+        -omit-body
+        -jsonl
+        -silent
+    )
+    if [[ "${KATANA_ENABLE_JSLUICE}" == "1" ]]; then
+        katana_args+=(-jsl)
+    fi
+    if [[ "${KATANA_ENABLE_PATH_CLIMB}" == "1" ]]; then
+        katana_args+=(-pc)
+    fi
+    while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        katana_args+=(-cos "$line")
+    done < <(katana_emit_out_of_scope_regexes)
     if [ "$(runtime_mode)" = "local" ]; then
         if [ -z "$target" ]; then
             echo "ERROR: target URL required" >&2
             return 1
         fi
-        mkdir -p "${ENGAGEMENT_DIR_ABS}/scans"
+        mkdir -p "${ENGAGEMENT_DIR_ABS}/scans" "${ENGAGEMENT_DIR_ABS}/pids"
         local auth_args=()
+        local scope_args=()
         while IFS= read -r line; do
             [ -n "$line" ] || continue
             auth_args+=("$line")
         done < <(_auth_header_array)
-        _start_local_process katana "$KATANA_LOCAL_BIN" -u "$target" -jc -d 3 -jsonl -silent "${auth_args[@]+"${auth_args[@]}"}" -o "${ENGAGEMENT_DIR_ABS}/scans/katana_output.jsonl" "$@"
+        while IFS= read -r line; do
+            [ -n "$line" ] || continue
+            scope_args+=("$line")
+        done < <(_katana_scope_array)
+        _start_local_process katana "$KATANA_LOCAL_BIN" "${katana_args[@]}" "${scope_args[@]+"${scope_args[@]}"}" "${auth_args[@]+"${auth_args[@]}"}" -elog "${ENGAGEMENT_DIR_ABS}/scans/katana_error.log" -o "${ENGAGEMENT_DIR_ABS}/scans/katana_output.jsonl" "$@"
         echo "[katana] Started crawling $target"
         return 0
     fi
@@ -252,19 +474,26 @@ start_katana() {
     fi
 
     local auth_args=()
+    local scope_args=()
     while IFS= read -r line; do
         [ -n "$line" ] || continue
         auth_args+=("$line")
     done < <(_auth_header_array)
+    while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        scope_args+=("$line")
+    done < <(_katana_scope_array)
 
-    mkdir -p "${ENGAGEMENT_DIR_ABS}/scans"
+    mkdir -p "${ENGAGEMENT_DIR_ABS}/scans" "${ENGAGEMENT_DIR_ABS}/pids"
 
     docker run -d --name "$container_name" \
         --network host \
         -v "${ENGAGEMENT_DIR_ABS}:/engagement" \
         "$KATANA_IMAGE" \
-        -u "$target" -jc -d 3 -jsonl -silent \
-        "${auth_args[@]}" \
+        "${katana_args[@]}" \
+        "${scope_args[@]+"${scope_args[@]}"}" \
+        "${auth_args[@]+"${auth_args[@]}"}" \
+        -elog /engagement/scans/katana_error.log \
         -o /engagement/scans/katana_output.jsonl
     echo "[katana] Started crawling $target"
 }
@@ -292,6 +521,10 @@ stop_all_containers() {
 # Check if required Docker images are built
 # Returns 0 if all present, 1 if any missing
 check_images() {
+    if [ "$(runtime_mode)" = "local" ]; then
+        echo "[OK] local runtime bundles required tools"
+        return 0
+    fi
     local all_ok=true
     for img in "$REDTEAM_IMAGE" "$PROXY_IMAGE" "$KATANA_IMAGE"; do
         if docker image inspect "$img" >/dev/null 2>&1; then
@@ -311,6 +544,10 @@ check_images() {
 
 # Check if Docker is available and running
 check_docker() {
+    if [ "$(runtime_mode)" = "local" ]; then
+        echo "[OK] local runtime mode active"
+        return 0
+    fi
     if ! which docker >/dev/null 2>&1; then
         echo "ERROR: Docker is not installed" >&2
         return 1
