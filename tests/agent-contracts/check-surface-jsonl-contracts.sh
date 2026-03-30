@@ -89,4 +89,14 @@ after_count=$(wc -l < "$ENG_DIR/surfaces.jsonl")
 ! grep -q '<continueCode>' "$ENG_DIR/surfaces.jsonl"
 grep -q '"target": "GET /real/session/token"' "$ENG_DIR/surfaces.jsonl"
 
+before_count=$(wc -l < "$ENG_DIR/surfaces.jsonl")
+cat <<'EOF' | "$ROOT/agent/scripts/append_surface_jsonl.sh" "$ENG_DIR"
+{"surface_type":"account_recovery","target":"POST /rest/user/reset-password and GET /rest/user/security-question?email=<email>","source":"source-analyzer","rationale":"mixed advisory should preserve the concrete recovery flow while normalizing the templated fragment","status":"discovered"}
+EOF
+
+after_count=$(wc -l < "$ENG_DIR/surfaces.jsonl")
+[[ "$after_count" -eq $((before_count + 1)) ]]
+grep -q '"target": "POST /rest/user/reset-password and GET /rest/user/security-question?email=..."' "$ENG_DIR/surfaces.jsonl"
+! grep -q 'security-question?email=<email>' "$ENG_DIR/surfaces.jsonl"
+
 echo "surface jsonl contracts: ok"
