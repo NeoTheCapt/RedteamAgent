@@ -122,6 +122,47 @@ def test_create_run_can_auto_launch_when_enabled(monkeypatch):
     assert Path(run["engagement_root"], "runtime", "process.log").exists()
 
 
+def test_launch_runtime_container_uses_docker_init(monkeypatch):
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "https://init-check.example")
+
+    from app.services.launcher import _launch_runtime_container
+
+    started_commands = []
+
+    class FakeLogFollower:
+        def poll(self):
+            return 0
+
+    def fake_run(command, **kwargs):
+        if command[:3] == ["docker", "rm", "-f"]:
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        if command[:3] == ["docker", "run", "-d"]:
+            started_commands.append(command)
+            return subprocess.CompletedProcess(command, 0, stdout="container-123\n", stderr="")
+        raise AssertionError(command)
+
+    monkeypatch.setattr("app.services.launcher.subprocess.run", fake_run)
+    monkeypatch.setattr("app.services.launcher._spawn_runtime_log_follower", lambda *_args, **_kwargs: FakeLogFollower())
+
+    project_obj = db.get_project_by_id(project["id"])
+    user_obj = db.get_user_by_username("alice")
+    run_obj = db.get_run_by_id(run["id"])
+    assert project_obj is not None
+    assert user_obj is not None
+    assert run_obj is not None
+
+    runtime_log = Path(run["engagement_root"]) / "runtime" / "process.log"
+    runtime_log.parent.mkdir(parents=True, exist_ok=True)
+    with runtime_log.open("ab") as log_handle:
+        _launch_runtime_container(project_obj, run_obj, user_obj, command_text="/autoengage https://init-check.example", log_handle=log_handle)
+
+    assert started_commands
+    assert "--init" in started_commands[0]
+
+
 def test_locate_runtime_pid_treats_running_container_without_matching_launcher_pid_as_live_runtime(monkeypatch):
     client = TestClient(app)
     token = register_and_login(client, "alice")
