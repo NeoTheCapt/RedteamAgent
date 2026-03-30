@@ -574,12 +574,12 @@ def _build_phase_cards(scope: dict, events: list, agents: list[dict], run_status
 
     cards: list[dict] = []
     for phase in PHASE_ORDER:
-        if phase in completed:
+        if not terminal and phase == effective_current_phase:
+            state = "active"
+        elif phase in completed:
             state = "completed"
         elif terminal:
             state = "pending"
-        elif phase == effective_current_phase:
-            state = "active"
         else:
             state = "pending"
 
@@ -871,10 +871,6 @@ def _sync_scope_phase_projection(
     if effective_phase == "unknown" or _is_terminal_run_status(run_status):
         return scope
 
-    scope_phase = _normalize_phase(scope.get("current_phase"))
-    if _phase_index(effective_phase) <= _phase_index(scope_phase):
-        return scope
-
     payload = dict(scope)
     changed = False
 
@@ -887,6 +883,8 @@ def _sync_scope_phase_projection(
     for item in payload.get("phases_completed", []):
         normalized = _normalize_phase(item)
         if normalized == "unknown" or normalized in existing_completed:
+            continue
+        if _phase_index(normalized) >= _phase_index(effective_phase):
             continue
         existing_completed.append(normalized)
 
