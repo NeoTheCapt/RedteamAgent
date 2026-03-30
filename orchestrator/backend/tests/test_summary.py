@@ -727,6 +727,10 @@ def test_run_summary_prefers_live_exploit_phase_over_stale_scope_phase():
     assert any(item["phase"] == "exploit" and item["state"] == "active" for item in payload["phases"])
     assert all(not (item["phase"] == "recon" and item["state"] == "active") for item in payload["phases"])
 
+    persisted_scope = json.loads((active_dir / "scope.json").read_text(encoding="utf-8"))
+    assert persisted_scope["current_phase"] == "exploit"
+    assert persisted_scope["phases_completed"] == ["recon", "collect", "consume_test"]
+
 
 def test_run_summary_event_creation_updates_run_metadata_timestamp():
     client = TestClient(app)
