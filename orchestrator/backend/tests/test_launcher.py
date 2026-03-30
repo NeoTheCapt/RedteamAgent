@@ -1477,6 +1477,39 @@ def test_start_run_runtime_clears_stale_terminal_reason(monkeypatch):
     assert "stop_reason_text" not in refreshed
 
 
+def test_ensure_runtime_log_follower_restarts_dead_follower(monkeypatch):
+    from app.services.launcher import _ensure_runtime_log_follower
+
+    client = TestClient(app)
+    token = register_and_login(client, "alice-log-follower")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "https://log-follower.example")
+
+    run_model = db.get_run_by_id(run["id"])
+    assert run_model is not None
+
+    started_commands: list[list[str]] = []
+
+    class DeadFollower:
+        def poll(self):
+            return 1
+
+    class LiveFollower:
+        def poll(self):
+            return None
+
+    def fake_popen(command, **kwargs):
+        started_commands.append(command)
+        return LiveFollower()
+
+    monkeypatch.setattr("app.services.launcher.subprocess.Popen", fake_popen)
+
+    follower = _ensure_runtime_log_follower(run_model, DeadFollower(), io.BytesIO())
+    assert follower is not None
+    assert follower.poll() is None
+    assert started_commands == [["docker", "logs", "-f", f"redteam-orch-run-{run['id']:04d}"]]
+
+
 def test_auto_launch_allows_third_resume_attempt(monkeypatch):
     client = TestClient(app)
     token = register_and_login(client, "alice-third-resume")

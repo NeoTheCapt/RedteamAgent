@@ -1641,6 +1641,24 @@ def _close_log_streams(log_follower: subprocess.Popen[bytes] | None, log_handle)
     log_handle.close()
 
 
+def _spawn_runtime_log_follower(run: Run, log_handle) -> subprocess.Popen[bytes]:
+    return subprocess.Popen(
+        ["docker", "logs", "-f", runtime_container_name(run)],
+        cwd=str(run.engagement_root),
+        env=os.environ.copy(),
+        stdout=log_handle,
+        stderr=subprocess.STDOUT,
+    )
+
+
+def _ensure_runtime_log_follower(run: Run, log_follower: subprocess.Popen[bytes] | None, log_handle) -> subprocess.Popen[bytes] | None:
+    if log_follower is None:
+        return _spawn_runtime_log_follower(run, log_handle)
+    if log_follower.poll() is None:
+        return log_follower
+    return _spawn_runtime_log_follower(run, log_handle)
+
+
 def _runtime_command_text(run: Run, *, resume: bool = False) -> str:
     if resume:
         return "/resume"
@@ -1724,13 +1742,7 @@ def _launch_runtime_container(
         raise RuntimeError(error_output or "docker run failed")
     container_id = (result.stdout or "").strip()
     _write_container_metadata(run, container_id, docker_command)
-    return subprocess.Popen(
-        ["docker", "logs", "-f", runtime_container_name(run)],
-        cwd=str(run.engagement_root),
-        env=os.environ.copy(),
-        stdout=log_handle,
-        stderr=subprocess.STDOUT,
-    )
+    return _spawn_runtime_log_follower(run, log_handle)
 
 
 def _maybe_auto_resume_run(
@@ -1822,6 +1834,7 @@ def _supervise_container(
     while True:
         status = _container_status(container_name)
         if status in {"running", "restarting"}:
+            log_follower = _ensure_runtime_log_follower(run, log_follower, log_handle)
             phase, summary = _heartbeat_context(run)
             _append_runtime_event(run, "run.heartbeat", phase, summary)
 
