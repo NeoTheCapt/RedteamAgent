@@ -41,6 +41,10 @@ normalize_surface_type() {
             printf '%s\n' "api_documentation"
             return 0
             ;;
+        spa_route|spa|client_route|client_side_route|frontend_route)
+            printf '%s\n' "dynamic_render"
+            return 0
+            ;;
         asset_distribution|cdn_asset_host|cdn_host|download_host|object_storage|storage_bucket)
             printf '%s\n' "dynamic_render"
             return 0
