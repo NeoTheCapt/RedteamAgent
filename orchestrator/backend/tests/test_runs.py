@@ -236,6 +236,89 @@ def test_list_runs_syncs_updated_at_from_live_workflow_activity(monkeypatch):
 
 
 
+def test_list_runs_projects_live_agent_state_into_run_metadata(monkeypatch):
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+
+    create_run = client.post(
+        f"/projects/{project['id']}/runs",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"target": "http://127.0.0.1:8000"},
+    )
+    assert create_run.status_code == 201
+    run = create_run.json()
+    db.update_run_status(run["id"], "running")
+
+    run_root = Path(run["engagement_root"])
+    workspace = run_root / "workspace"
+    engagement_dir = workspace / "engagements" / "2026-03-30-000000-local"
+    engagement_dir.mkdir(parents=True, exist_ok=True)
+    (workspace / "engagements" / ".active").write_text(
+        "engagements/2026-03-30-000000-local\n",
+        encoding="utf-8",
+    )
+    (engagement_dir / "scope.json").write_text(
+        json.dumps(
+            {
+                "hostname": "127.0.0.1",
+                "status": "in_progress",
+                "current_phase": "consume_test",
+                "phases_completed": ["recon", "collect"],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (engagement_dir / "log.md").write_text("# Engagement Log\n", encoding="utf-8")
+    with sqlite3.connect(engagement_dir / "cases.db") as connection:
+        connection.execute(
+            "CREATE TABLE cases (id INTEGER PRIMARY KEY AUTOINCREMENT, type TEXT NOT NULL, status TEXT NOT NULL, assigned_agent TEXT, source TEXT)"
+        )
+        connection.execute(
+            "INSERT INTO cases(type, status, assigned_agent, source) VALUES ('api', 'processing', 'vulnerability-analyst', 'katana')"
+        )
+        connection.commit()
+
+    event_response = client.post(
+        f"/projects/{project['id']}/runs/{run['id']}/events",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "event_type": "task.started",
+            "phase": "consume-test",
+            "task_name": "vulnerability-analyst",
+            "agent_name": "vulnerability-analyst",
+            "summary": "Analysis start",
+        },
+    )
+    assert event_response.status_code == 201
+
+    monkeypatch.setattr("app.services.runs.locate_runtime_pid", lambda _run: 12345)
+    monkeypatch.setattr("app.services.runs.stop_run_runtime", lambda _run: None)
+
+    runs_response = client.get(
+        f"/projects/{project['id']}/runs",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert runs_response.status_code == 200
+    assert runs_response.json()[0]["status"] == "running"
+
+    metadata = json.loads((run_root / "run.json").read_text(encoding="utf-8"))
+    assert metadata["current_action"] == {
+        "phase": "consume-test",
+        "task_name": "vulnerability-analyst",
+        "agent_name": "vulnerability-analyst",
+        "summary": "Analysis start",
+    }
+    consume_phase = next(item for item in metadata["phase_waterfall"] if item["phase"] == "consume-test")
+    assert consume_phase["state"] == "active"
+    assert consume_phase["active_agents"] == 1
+    agent_card = next(item for item in metadata["agents"] if item["agent_name"] == "vulnerability-analyst")
+    assert agent_card["status"] == "active"
+    assert agent_card["summary"] == "Analysis start"
+
+
+
 def test_list_runs_syncs_updated_at_from_latest_event_when_newer_than_workflow_files(monkeypatch):
     client = TestClient(app)
     token = register_and_login(client, "alice")
