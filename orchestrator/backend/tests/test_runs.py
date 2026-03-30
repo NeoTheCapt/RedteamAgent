@@ -236,6 +236,77 @@ def test_list_runs_syncs_updated_at_from_live_workflow_activity(monkeypatch):
 
 
 
+def test_list_runs_syncs_updated_at_from_latest_event_when_newer_than_workflow_files(monkeypatch):
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+
+    create_run = client.post(
+        f"/projects/{project['id']}/runs",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"target": "https://example.com"},
+    )
+    assert create_run.status_code == 201
+    run = create_run.json()
+    db.update_run_status(run["id"], "running")
+
+    run_root = Path(run["engagement_root"])
+    workspace = run_root / "workspace"
+    engagement_dir = workspace / "engagements" / "2026-03-28-000000-example"
+    engagement_dir.mkdir(parents=True, exist_ok=True)
+    (workspace / "engagements" / ".active").write_text(
+        "engagements/2026-03-28-000000-example\n",
+        encoding="utf-8",
+    )
+
+    scope_path = engagement_dir / "scope.json"
+    scope_path.write_text(
+        json.dumps(
+            {
+                "status": "in_progress",
+                "current_phase": "consume_test",
+                "phases_completed": ["recon", "collect"],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (engagement_dir / "log.md").write_text("recent activity\n", encoding="utf-8")
+    stale_activity = datetime(2026, 3, 25, 0, 0, 0, tzinfo=UTC)
+    stale_epoch = stale_activity.timestamp()
+    os.utime(scope_path, (stale_epoch, stale_epoch))
+    os.utime(engagement_dir / "log.md", (stale_epoch, stale_epoch))
+
+    with sqlite3.connect(database_path()) as connection:
+        connection.execute(
+            "UPDATE runs SET updated_at = '2026-03-25 00:00:00' WHERE id = ?",
+            (run["id"],),
+        )
+        connection.execute(
+            "INSERT INTO events(run_id, event_type, phase, task_name, agent_name, summary, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (run["id"], "task.completed", "consume-test", "source-analyzer", "source-analyzer", "Late event", "2026-03-30 09:40:45"),
+        )
+        connection.commit()
+
+    monkeypatch.setattr("app.services.runs.locate_runtime_pid", lambda _run: 12345)
+    stopped: list[int] = []
+    monkeypatch.setattr("app.services.runs.stop_run_runtime", lambda reconciled_run: stopped.append(reconciled_run.id))
+
+    runs_response = client.get(
+        f"/projects/{project['id']}/runs",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert runs_response.status_code == 200
+    payload = runs_response.json()[0]
+    assert payload["status"] == "running"
+    assert payload["updated_at"] == "2026-03-30 09:40:45"
+    assert stopped == []
+
+    metadata = json.loads((run_root / "run.json").read_text(encoding="utf-8"))
+    assert metadata["updated_at"] == payload["updated_at"]
+
+
+
 def test_list_runs_repairs_future_skewed_updated_at_from_live_workflow_activity(monkeypatch):
     client = TestClient(app)
     token = register_and_login(client, "alice")

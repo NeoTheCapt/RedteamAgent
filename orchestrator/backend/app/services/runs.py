@@ -211,20 +211,24 @@ def _latest_runtime_activity_at(run: Run) -> datetime | None:
 
 def _latest_workflow_activity_at(run: Run, scope_path: Path | None) -> datetime | None:
     latest = None
-    if scope_path is None or not scope_path.exists():
-        return latest
+    if scope_path is not None and scope_path.exists():
+        for path in (
+            scope_path,
+            scope_path.parent / "log.md",
+            scope_path.parent / "findings.md",
+            scope_path.parent / "report.md",
+        ):
+            candidate = _path_mtime(path)
+            if candidate is None:
+                continue
+            if latest is None or candidate > latest:
+                latest = candidate
 
-    for path in (
-        scope_path,
-        scope_path.parent / "log.md",
-        scope_path.parent / "findings.md",
-        scope_path.parent / "report.md",
-    ):
-        candidate = _path_mtime(path)
-        if candidate is None:
-            continue
-        if latest is None or candidate > latest:
-            latest = candidate
+    latest_event = db.get_latest_event_for_run(run.id, "")
+    event_created_at = _parse_db_timestamp(getattr(latest_event, "created_at", ""))
+    if event_created_at is not None and (latest is None or event_created_at > latest):
+        latest = event_created_at
+
     return latest
 
 
