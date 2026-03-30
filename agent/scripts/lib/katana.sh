@@ -65,16 +65,18 @@ katana_request_should_ingest() {
         return 1
     fi
 
-    # Keep auth-gated or verb-sensitive API routes that Katana extracts from public JS.
-    # Local lab targets (for example Juice Shop on 127.0.0.1/host.docker.internal) often
-    # return 401/405/500 to a naive GET even when the route is real and worth queueing.
-    # Only drop hard 404s here, which are much stronger evidence of bogus regex matches.
+    # Regex-extracted API-like paths from JS are only trustworthy when the probe actually
+    # lands on a viable endpoint. Real run 222 showed 401/500 responses from public bundle
+    # regex matches getting queued as completed API cases, which polluted crawler-derived
+    # coverage with low-signal routes like /rest/user/change-password?current=.
+    # Treat any 4xx/5xx response here as a failed/bogus discovery and keep only successful
+    # or otherwise undecided JS-derived API candidates.
     if [[ "$tag" == "js" ]] \
         && [[ "$attribute" == "regex" ]] \
         && is_katana_javascript_source_ref "$source_ref" \
         && is_katana_api_like_path "$url_path" \
         && [[ "$response_status" =~ ^[0-9]+$ ]] \
-        && (( response_status == 404 )); then
+        && (( response_status >= 400 )); then
         return 1
     fi
 
