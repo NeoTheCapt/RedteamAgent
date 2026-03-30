@@ -9,6 +9,7 @@ OUTPUT_DIR="${2:-$SOURCE_DIR}"
 CORE_FILE="$SOURCE_DIR/operator-core.md"
 CLAUDE_OUT="$OUTPUT_DIR/CLAUDE.md"
 AGENTS_OUT="$OUTPUT_DIR/AGENTS.md"
+OPENCODE_OUT="$OUTPUT_DIR/.opencode/prompts/agents/operator.txt"
 CLAUDE_WRAPPER_OUT="$OUTPUT_DIR/.claude/agents/operator.md"
 CODEX_WRAPPER_OUT="$OUTPUT_DIR/.codex/agents/operator.toml"
 
@@ -122,6 +123,21 @@ EOF
   perl -0pi -e 's/\n+\z/\n/' "$AGENTS_OUT"
 }
 
+render_opencode() {
+  mkdir -p "$(dirname "$OPENCODE_OUT")"
+  {
+    cat <<'EOF'
+You are the lead red team operator. You drive the assessment autonomously —
+coordinating subagents, maintaining state, and making strategic decisions.
+
+<!-- Generated from operator-core.md via scripts/render-operator-prompts.sh -->
+
+EOF
+    cat "$CORE_FILE"
+  } > "$OPENCODE_OUT"
+  perl -0pi -e 's/\n+\z/\n/' "$OPENCODE_OUT"
+}
+
 render_claude_wrapper() {
   mkdir -p "$(dirname "$CLAUDE_WRAPPER_OUT")"
   cat > "$CLAUDE_WRAPPER_OUT" <<'EOF'
@@ -154,6 +170,7 @@ case "$MODE" in
   repo)
     render_claude
     render_agents
+    render_opencode
     render_claude_wrapper
     render_codex_wrapper
     ;;
@@ -163,8 +180,11 @@ case "$MODE" in
   codex-install)
     render_agents
     ;;
+  opencode-install)
+    render_opencode
+    ;;
   *)
-    echo "Usage: $0 [repo|claude-install|codex-install] [output-dir]" >&2
+    echo "Usage: $0 [repo|claude-install|codex-install|opencode-install] [output-dir]" >&2
     exit 1
     ;;
 esac
