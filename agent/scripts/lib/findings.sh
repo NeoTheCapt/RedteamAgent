@@ -104,25 +104,176 @@ normalize_finding_title() {
         | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//'
 }
 
-find_existing_finding_id_by_title() {
+_findings_python_helpers() {
+    cat <<'PY'
+import re
+from urllib.parse import urlsplit
+
+
+def normalize_space(value: str) -> str:
+    return re.sub(r"\s+", " ", value.strip().lower())
+
+
+def field_value(text: str, label: str) -> str:
+    match = re.search(rf"(?mi)^- \*\*{re.escape(label)}\*\*:\s*(.+)$", text)
+    return match.group(1).strip() if match else ""
+
+
+def strip_wrapping(token: str) -> str:
+    return token.strip().strip("`'\"<>[](){}.,;:")
+
+
+def normalize_route(route: str) -> str:
+    value = strip_wrapping(route)
+    if not value:
+        return ""
+
+    method_match = re.match(r"(?i)^(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+(.+)$", value)
+    if method_match:
+        value = strip_wrapping(method_match.group(2))
+
+    if value.startswith(("http://", "https://")):
+        split = urlsplit(value)
+        path = split.path or "/"
+        if split.query:
+            path += f"?{split.query}"
+        return normalize_space(path)
+
+    if value.startswith("/"):
+        return normalize_space(value)
+
+    return ""
+
+
+def extract_route(text: str) -> str:
+    candidates = [
+        field_value(text, "Parameter"),
+        field_value(text, "Target"),
+        field_value(text, "Evidence"),
+        field_value(text, "Evidence Ref"),
+        text,
+    ]
+
+    method_url_pattern = re.compile(r"(?i)\b(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+(https?://[^\s`\"'<>]+|/[^\s`\"'<>]+)")
+    url_pattern = re.compile(r"https?://[^\s`\"'<>]+")
+    path_pattern = re.compile(r"(?<![A-Za-z0-9])(/[^\s`\"'<>]+)")
+
+    for candidate in candidates:
+        if not candidate:
+            continue
+        normalized = normalize_route(candidate)
+        if normalized:
+            return normalized
+
+        match = method_url_pattern.search(candidate)
+        if match:
+            normalized = normalize_route(f"{match.group(1).upper()} {match.group(2)}")
+            if normalized:
+                return normalized
+
+        match = url_pattern.search(candidate)
+        if match:
+            normalized = normalize_route(match.group(0))
+            if normalized:
+                return normalized
+
+        match = path_pattern.search(candidate)
+        if match:
+            normalized = normalize_route(match.group(1))
+            if normalized:
+                return normalized
+
+    return ""
+
+
+def split_findings(text: str):
+    blocks = []
+    current = []
+    for line in text.splitlines():
+        if re.match(r"^## \[FINDING-[A-Z]{2}-[0-9]{3}\]", line):
+            if current:
+                blocks.append("\n".join(current).strip() + "\n")
+            current = [line]
+        elif current:
+            current.append(line)
+    if current:
+        blocks.append("\n".join(current).strip() + "\n")
+    return blocks
+
+
+def parse_finding(text: str) -> dict[str, str]:
+    heading = re.search(r"(?m)^## \[(FINDING-[A-Z]{2}-[0-9]{3}|FINDING-ID)\]\s+(.+)$", text)
+    finding_id = heading.group(1) if heading else ""
+    title = heading.group(2) if heading else ""
+    severity = normalize_space(field_value(text, "Severity"))
+    owasp = normalize_space(field_value(text, "OWASP Category"))
+    return {
+        "id": finding_id,
+        "title": title,
+        "title_norm": normalize_space(title),
+        "severity": severity,
+        "owasp": owasp,
+        "route": extract_route(text),
+    }
+PY
+}
+
+find_existing_finding_id() {
     local findings_file="${1:?findings file required}"
-    local raw_title="${2-}"
-    local wanted normalized_title line finding_id title
+    local candidate_file="${2:?candidate file required}"
 
-    normalized_title="$(normalize_finding_title "$raw_title")"
-    [[ -n "$normalized_title" ]] || return 0
+    python3 - "$findings_file" "$candidate_file" <<PY
+$( _findings_python_helpers )
+import sys
+from pathlib import Path
 
-    while IFS= read -r line; do
-        if [[ "$line" =~ ^##\ \[(FINDING-[A-Z]{2}-[0-9]{3})\][[:space:]]+(.+)$ ]]; then
-            finding_id="${BASH_REMATCH[1]}"
-            title="${BASH_REMATCH[2]}"
-            wanted="$(normalize_finding_title "$title")"
-            if [[ "$wanted" == "$normalized_title" ]]; then
-                printf '%s\n' "$finding_id"
-                return 0
-            fi
-        fi
-    done < "$findings_file"
+findings_path = Path(sys.argv[1])
+candidate_path = Path(sys.argv[2])
+
+candidate = parse_finding(candidate_path.read_text(encoding="utf-8"))
+if not candidate["title_norm"] and not candidate["route"]:
+    raise SystemExit(0)
+
+for block in split_findings(findings_path.read_text(encoding="utf-8")):
+    existing = parse_finding(block)
+    if not existing["id"]:
+        continue
+    if candidate["title_norm"] and existing["title_norm"] == candidate["title_norm"]:
+        print(existing["id"])
+        raise SystemExit(0)
+    if (
+        candidate["route"]
+        and candidate["severity"]
+        and candidate["owasp"]
+        and existing["route"] == candidate["route"]
+        and existing["severity"] == candidate["severity"]
+        and existing["owasp"] == candidate["owasp"]
+    ):
+        print(existing["id"])
+        raise SystemExit(0)
+PY
+}
+
+list_duplicate_finding_signatures() {
+    local findings_file="${1:?findings file required}"
+
+    python3 - "$findings_file" <<PY
+$( _findings_python_helpers )
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+seen = {}
+for block in split_findings(path.read_text(encoding="utf-8")):
+    finding = parse_finding(block)
+    if not (finding["id"] and finding["route"] and finding["severity"] and finding["owasp"]):
+        continue
+    signature = f"{finding['route']}\t{finding['owasp']}\t{finding['severity']}"
+    if signature in seen:
+        print(f"{seen[signature]} <-> {finding['id']}: {finding['title']}")
+    else:
+        seen[signature] = finding["id"]
+PY
 }
 
 replace_finding_placeholder() {
