@@ -199,7 +199,7 @@ run_tool ffuf -u "http://target/api/login" \
   -d '{"username":"FUZZ","password":"invalid"}' \
   -w /seclists/Usernames/top-usernames-shortlist.txt \
   -fr "User not found" \
-  -o /engagement/scans/user_enum.json -of json
+  -o $DIR/scans/user_enum.json -of json
 
 # Email enumeration via registration check
 run_tool ffuf -u "http://target/api/register" \
@@ -207,15 +207,15 @@ run_tool ffuf -u "http://target/api/register" \
   -d '{"email":"FUZZ@target.com","password":"Test123!"}' \
   -w /seclists/Usernames/top-usernames-shortlist.txt \
   -fr "Check your email" \
-  -o /engagement/scans/email_enum.json -of json
+  -o $DIR/scans/email_enum.json -of json
 
 # Phone number enumeration (if applicable)
 run_tool ffuf -u "http://target/api/check-phone" \
   -X POST -H "Content-Type: application/json" \
   -d '{"phone":"FUZZ"}' \
-  -w /engagement/scans/phone_wordlist.txt \
+  -w $DIR/scans/phone_wordlist.txt \
   -fs <baseline_size> \
-  -o /engagement/scans/phone_enum.json -of json
+  -o $DIR/scans/phone_enum.json -of json
 ```
 
 ### 8. OTP / Verification Code Abuse

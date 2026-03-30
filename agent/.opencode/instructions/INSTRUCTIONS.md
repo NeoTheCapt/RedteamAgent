@@ -62,22 +62,23 @@ layer first, then call tools through it:
 source scripts/lib/container.sh
 export ENGAGEMENT_DIR="engagements/<current>"
 run_tool nmap -sV -sC target
-run_tool ffuf -u http://target/FUZZ -w /wordlists/dirb/common.txt -o /engagement/scans/ffuf.json
+run_tool ffuf -u http://target/FUZZ -w /wordlists/dirb/common.txt -o $DIR/scans/ffuf.json
 ```
 
 | Task | Command |
 |---|---|
-| Port scanning | `run_tool nmap -sC -sV -oN /engagement/scans/nmap.txt target` |
-| Directory fuzzing | `run_tool ffuf -u URL/FUZZ -w /wordlists/dirb/common.txt -fc 404 -o /engagement/scans/ffuf.json` |
+| Port scanning | `run_tool nmap -sC -sV -oN $DIR/scans/nmap.txt target` |
+| Directory fuzzing | `run_tool ffuf -u URL/FUZZ -w /wordlists/dirb/common.txt -fc 404 -o $DIR/scans/ffuf.json` |
 | Parameter fuzzing | `run_tool ffuf -u URL?FUZZ=value -w /wordlists/parameters.txt -fs <baseline>` |
 | SQL injection | `run_tool sqlmap -u URL --batch --level=3 --risk=2` |
 | Tech fingerprint | `run_tool whatweb target` |
-| Vuln scanning | `run_tool nuclei -u URL -o /engagement/scans/nuclei.txt` |
+| Vuln scanning | `run_tool nuclei -u URL -o $DIR/scans/nuclei.txt` |
 
 **Path mapping inside containers:**
 - `/engagement` → host `$ENGAGEMENT_DIR` (scans/, downloads/, tools/ etc.)
 - `/wordlists` → `/usr/share/wordlists` (Kali wordlists package)
 - `/seclists` → `/usr/share/seclists` (SecLists package)
+- When invoking tools, prefer `$DIR/scans/...`, `$DIR/downloads/...`, and other engagement-local `$DIR/...` paths instead of raw container-alias paths. OpenCode can treat those alias paths as external-directory access and prompt for approval, which stalls unattended runs.
 
 **For target HTTP requests, use `run_tool curl`**, not raw host `curl`. The engagement-scoped
 `rtcurl` wrapper automatically applies in-scope auth and the fixed engagement User-Agent.
