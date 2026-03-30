@@ -149,7 +149,7 @@ while IFS= read -r line; do
     evidence_ref=$(printf '%s' "$line" | jq -r '.evidence_ref // .evidence // ""' 2>/dev/null || true)
     status=$(printf '%s' "$line" | jq -r '.status // "discovered"' 2>/dev/null || true)
     method=$(printf '%s' "$line" | jq -r '.method // "GET"' 2>/dev/null || true)
-    url_value=$(printf '%s' "$line" | jq -r '.url // .["url/path"] // .path // empty' 2>/dev/null || true)
+    url_value=$(printf '%s' "$line" | jq -r '.url // .["url/path"] // .path // .url_or_pattern // .urlOrPattern // empty' 2>/dev/null || true)
     item_type=$(printf '%s' "$line" | jq -r '.type // empty' 2>/dev/null || true)
     auth_hint=$(printf '%s' "$line" | jq -r '.auth // empty' 2>/dev/null || true)
 
