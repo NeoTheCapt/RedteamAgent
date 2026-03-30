@@ -205,6 +205,143 @@ def test_auto_launch_emits_runtime_heartbeat_when_process_is_still_running(monke
     assert "No active engagement directory found." == metadata["stop_reason_text"]
 
 
+def test_heartbeat_context_prefers_newer_run_metadata_phase_over_stale_scope_phase():
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "https://phase-lag.example")
+
+    run_root = Path(run["engagement_root"])
+    workspace = run_root / "workspace"
+    engagement_dir = workspace / "engagements" / "2026-03-30-000000-phase-lag"
+    engagement_dir.mkdir(parents=True, exist_ok=True)
+    (workspace / "engagements" / ".active").write_text(
+        "engagements/2026-03-30-000000-phase-lag\n",
+        encoding="utf-8",
+    )
+
+    scope_path = engagement_dir / "scope.json"
+    scope_path.write_text(
+        json.dumps(
+            {
+                "status": "in_progress",
+                "current_phase": "recon",
+                "phases_completed": [],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    metadata_path = run_root / "run.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata["current_phase"] = "exploit"
+    metadata_path.write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
+
+    import os
+    from app.services.launcher import _heartbeat_context
+
+    old_epoch = datetime.now().timestamp() - 10
+    new_epoch = datetime.now().timestamp()
+    os.utime(scope_path, (old_epoch, old_epoch))
+    os.utime(metadata_path, (new_epoch, new_epoch))
+
+    run_row = db.get_run_by_id(run["id"])
+    assert run_row is not None
+
+    phase, summary = _heartbeat_context(run_row)
+    assert phase == "exploit"
+    assert summary == "Runtime active in exploit; waiting for new agent output."
+
+
+
+def test_heartbeat_context_prefers_newer_scope_phase_over_stale_run_metadata():
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "https://phase-lag-scope.example")
+
+    run_root = Path(run["engagement_root"])
+    workspace = run_root / "workspace"
+    engagement_dir = workspace / "engagements" / "2026-03-30-000001-phase-lag"
+    engagement_dir.mkdir(parents=True, exist_ok=True)
+    (workspace / "engagements" / ".active").write_text(
+        "engagements/2026-03-30-000001-phase-lag\n",
+        encoding="utf-8",
+    )
+
+    scope_path = engagement_dir / "scope.json"
+    scope_path.write_text(
+        json.dumps(
+            {
+                "status": "in_progress",
+                "current_phase": "consume_test",
+                "phases_completed": ["recon", "collect"],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    metadata_path = run_root / "run.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata["current_phase"] = "exploit"
+    metadata_path.write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
+
+    import os
+    from app.services.launcher import _heartbeat_context
+
+    old_epoch = datetime.now().timestamp() - 10
+    new_epoch = datetime.now().timestamp()
+    os.utime(metadata_path, (old_epoch, old_epoch))
+    os.utime(scope_path, (new_epoch, new_epoch))
+
+    run_row = db.get_run_by_id(run["id"])
+    assert run_row is not None
+
+    phase, summary = _heartbeat_context(run_row)
+    assert phase == "consume_test"
+    assert summary == "Runtime active in consume_test; waiting for new agent output."
+
+
+def test_normalize_scope_file_deduplicates_completed_phases_in_order():
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "https://dedupe.example")
+
+    run_root = Path(run["engagement_root"])
+    workspace = run_root / "workspace"
+    engagement_dir = workspace / "engagements" / "2026-03-30-000002-dedupe"
+    engagement_dir.mkdir(parents=True, exist_ok=True)
+
+    scope_path = engagement_dir / "scope.json"
+    scope_path.write_text(
+        json.dumps(
+            {
+                "status": "in_progress",
+                "current_phase": "consume_test",
+                "phases_completed": ["recon", "collect", "consume_test", "recon", "collect"],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    from app.services.launcher import _normalize_scope_file
+
+    run_row = db.get_run_by_id(run["id"])
+    assert run_row is not None
+
+    normalized = _normalize_scope_file(scope_path, run=run_row)
+    assert normalized is not None
+    assert normalized["phases_completed"] == ["recon", "collect", "consume_test"]
+
+    persisted = json.loads(scope_path.read_text(encoding="utf-8"))
+    assert persisted["phases_completed"] == ["recon", "collect", "consume_test"]
+
+
+
 def test_supervise_container_stops_live_stalled_runtime(monkeypatch):
     client = TestClient(app)
     token = register_and_login(client, "alice")
