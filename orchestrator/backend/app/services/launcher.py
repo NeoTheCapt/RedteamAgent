@@ -10,7 +10,7 @@ import subprocess
 import tempfile
 import time
 from collections import deque
-from datetime import datetime
+from datetime import UTC, datetime
 from threading import Thread
 from pathlib import Path
 from urllib.parse import quote, urlsplit, urlunsplit
@@ -1720,9 +1720,27 @@ def _close_log_streams(log_follower: subprocess.Popen[bytes] | None, log_handle)
     log_handle.close()
 
 
+def _runtime_log_follow_command(run: Run) -> list[str]:
+    command = ["docker", "logs", "-f"]
+    process_log = process_log_path_for(run)
+    if process_log.exists():
+        try:
+            has_history = process_log.stat().st_size > 0
+        except OSError:
+            has_history = False
+        if has_history:
+            latest_activity = _latest_process_log_activity_at(process_log)
+            if latest_activity is not None:
+                since_value = datetime.fromtimestamp(latest_activity, UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+                command.extend(["--since", since_value])
+    command.append(runtime_container_name(run))
+    return command
+
+
+
 def _spawn_runtime_log_follower(run: Run, log_handle) -> subprocess.Popen[bytes]:
     return subprocess.Popen(
-        ["docker", "logs", "-f", runtime_container_name(run)],
+        _runtime_log_follow_command(run),
         cwd=str(run.engagement_root),
         env=os.environ.copy(),
         stdout=log_handle,
