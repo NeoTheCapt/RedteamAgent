@@ -320,7 +320,7 @@ DOMAIN="<root domain>"
 PARENT_DIR="engagements/$(date +%Y-%m-%d)-$(date +%H%M%S)-wildcard-${DOMAIN//\./-}"
 mkdir -p "$PARENT_DIR/scans"
 source scripts/lib/container.sh && export ENGAGEMENT_DIR="$PARENT_DIR"
-run_tool subfinder -d "$DOMAIN" -all -silent -o /engagement/scans/subdomains_raw.txt
+run_tool subfinder -d "$DOMAIN" -all -silent -o $DIR/scans/subdomains_raw.txt
 ```
 
 Then follow subdomain-enumeration skill for 3-stage filter (DNS → web port → fingerprint).
