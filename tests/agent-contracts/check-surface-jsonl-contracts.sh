@@ -36,6 +36,15 @@ grep -q '"surface_type": "auth_entry"' "$ENG_DIR/surfaces.jsonl"
 grep -q '"surface_type": "dynamic_render"' "$ENG_DIR/surfaces.jsonl"
 
 cat <<'EOF' | "$ROOT/agent/scripts/append_surface_jsonl.sh" "$ENG_DIR"
+{"category":"dynamic_render","url_or_pattern":"https://www.okx.com/captcha","source":"recon-specialist","reason":"bounded discovery found a concrete CAPTCHA page"}
+{"category":"workflow_token","url_or_pattern":"https://www.okx.com/cdn/assets/okfe/customer-service/0.0.1232/asset-manifest.json","source":"source-analyzer","reason":"public manifest discloses OTP workflow modules"}
+EOF
+
+grep -q '"target": "GET https://www.okx.com/captcha"' "$ENG_DIR/surfaces.jsonl"
+grep -q '"target": "GET https://www.okx.com/cdn/assets/okfe/customer-service/0.0.1232/asset-manifest.json"' "$ENG_DIR/surfaces.jsonl"
+grep -q '"surface_type": "workflow_token"' "$ENG_DIR/surfaces.jsonl"
+
+cat <<'EOF' | "$ROOT/agent/scripts/append_surface_jsonl.sh" "$ENG_DIR"
 {"path":"/buy-crypto","source_case_id":56,"reason":"Concrete application route referenced in public landing-page JSON.","source":"vulnerability-analyst"}
 {"path":"/trade-spot/btc-usdt","source_case_id":56,"reason":"Concrete trading route referenced in public landing-page JSON.","source":"vulnerability-analyst"}
 {"path":"/historical-data","source_case_id":61,"reason":"Concrete route referenced in banner/config HTML content.","source":"vulnerability-analyst"}
