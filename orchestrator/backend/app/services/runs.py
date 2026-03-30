@@ -23,6 +23,7 @@ from .launcher import (
     _last_logged_stop_metadata,
     _latest_process_log_activity_at,
     _maybe_auto_resume_run,
+    _start_container_supervisor,
     _write_run_terminal_reason,
     engagement_completion_state,
     locate_runtime_pid,
@@ -483,6 +484,26 @@ def _reconcile_run_status(run: Run, project: Project | None = None, user: User |
         stop_run_runtime(failed)
         return failed
     return run
+
+
+def recover_active_run_supervisors_on_startup() -> None:
+    for run in db.list_runs_by_status("running"):
+        project = db.get_project_by_id(run.project_id)
+        if project is None:
+            continue
+        user = db.get_user_by_id(project.user_id)
+        if user is None:
+            continue
+
+        reconciled = _reconcile_run_status(run, project=project, user=user)
+        if reconciled.status != "running":
+            continue
+
+        runtime_pid = locate_runtime_pid(reconciled)
+        if runtime_pid in {None, RUNTIME_PID_LOOKUP_UNAVAILABLE}:
+            continue
+
+        _start_container_supervisor(reconciled, project, user)
 
 
 def list_runs_for_project(project_id: int, user: User) -> list[Run]:

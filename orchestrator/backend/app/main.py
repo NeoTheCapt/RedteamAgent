@@ -10,12 +10,14 @@ from .api.runs import router as runs_router
 from .config import settings
 from .api.auth import router as auth_router
 from .db import get_project_by_id, get_run_by_id, get_user_by_id, init_db
+from .services.runs import recover_active_run_supervisors_on_startup
 from .ws import broadcaster, ws_tickets
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    recover_active_run_supervisors_on_startup()
     yield
 
 
