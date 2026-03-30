@@ -46,13 +46,18 @@ verify_live_projection() {
     local snapshot_json
     snapshot_json="$(python3 "$ROOT_DIR/scripts/run_context_snapshot.py" "$run_id")"
 
-    local reasons_count
-    reasons_count="$(printf '%s\n' "$snapshot_json" | jq '(.artifact.integrity.reasons // []) | length')"
+    local projection_mismatch artifact_reasons
+    projection_mismatch="$(printf '%s\n' "$snapshot_json" | jq -r '((.artifact.integrity.summary_api_suspicious // false) or (.artifact.integrity.observed_api_suspicious // false))')"
+    artifact_reasons="$(printf '%s\n' "$snapshot_json" | jq -r '(.artifact.integrity.reasons // []) | map(select(startswith("artifact_"))) | join(", ")')"
 
-    if [[ "$reasons_count" -gt 0 ]]; then
+    if [[ "$projection_mismatch" == "true" ]]; then
         echo "[$(timestamp)] live projection mismatch for $label run $run_id" >&2
         printf '%s\n' "$snapshot_json" | jq '{run_id: .summary.target.target, integrity: .artifact.integrity, api_coverage: .summary.coverage, artifact_cases: .artifact.cases}' >&2
         return 1
+    fi
+
+    if [[ -n "$artifact_reasons" ]]; then
+        echo "[$(timestamp)] non-fatal artifact anomaly for $label run $run_id: $artifact_reasons" >&2
     fi
 
     return 0

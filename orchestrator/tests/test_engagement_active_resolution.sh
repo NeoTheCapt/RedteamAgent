@@ -28,7 +28,15 @@ mkdir -p "$canonical_active_dir"
 )
 canonical_active_dir="$(cd "$canonical_active_dir" && pwd)"
 active_marker="$(cat "$TMP_DIR/repo/engagements/.active")"
-[[ "$active_marker" == "$canonical_active_dir" ]]
+[[ "$active_marker" == 'engagements/2026-03-29-010101-second' ]]
+
+printf '%s\n' "$canonical_active_dir" > "$TMP_DIR/repo/engagements/.active"
+resolved_from_absolute_marker="$(
+  cd "$TMP_DIR"
+  source "$REPO_ROOT/agent/scripts/lib/engagement.sh"
+  resolve_engagement_dir "$TMP_DIR/repo"
+)"
+[[ "$resolved_from_absolute_marker" == "$canonical_active_dir" ]]
 
 env_override_relative="$(
   cd "$TMP_DIR"
