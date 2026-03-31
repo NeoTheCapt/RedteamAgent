@@ -51,6 +51,9 @@ def test_create_run_and_list_project_runs(isolate_data_dir):
     )
     assert run_payload["created_at"]
     assert run_payload["updated_at"]
+    assert run_payload["ended_at"] is None
+    assert run_payload["stop_reason_code"] is None
+    assert run_payload["stop_reason_text"] is None
 
     run_metadata = json.loads((Path(run_payload["engagement_root"]) / "run.json").read_text(encoding="utf-8"))
     assert run_metadata["id"] == run_payload["id"]
@@ -1720,10 +1723,15 @@ def test_list_runs_marks_completed_scope_as_completed_even_if_runtime_is_still_a
         headers={"Authorization": f"Bearer {token}"},
     )
     assert runs_response.status_code == 200
-    assert runs_response.json()[0]["status"] == "completed"
+    payload = runs_response.json()[0]
+    assert payload["status"] == "completed"
     metadata = json.loads((run_root / "run.json").read_text(encoding="utf-8"))
     assert metadata["stop_reason_code"] == "completed"
     assert metadata["stop_reason_text"] == "Run completed successfully."
+    assert metadata["ended_at"] == run["updated_at"]
+    assert payload["stop_reason_code"] == "completed"
+    assert payload["stop_reason_text"] == "Run completed successfully."
+    assert payload["ended_at"] == run["updated_at"]
     assert stopped == [run["id"]]
 
 
@@ -1785,12 +1793,17 @@ def test_list_runs_marks_completed_scope_alias_as_completed(monkeypatch):
         headers={"Authorization": f"Bearer {token}"},
     )
     assert runs_response.status_code == 200
-    assert runs_response.json()[0]["status"] == "completed"
+    payload = runs_response.json()[0]
+    assert payload["status"] == "completed"
     normalized = json.loads(scope_path.read_text(encoding="utf-8"))
     assert normalized["status"] == "complete"
     metadata = json.loads((run_root / "run.json").read_text(encoding="utf-8"))
     assert metadata["stop_reason_code"] == "completed"
     assert metadata["stop_reason_text"] == "Run completed successfully."
+    assert metadata["ended_at"] == run["updated_at"]
+    assert payload["stop_reason_code"] == "completed"
+    assert payload["stop_reason_text"] == "Run completed successfully."
+    assert payload["ended_at"] == run["updated_at"]
     assert stopped == [run["id"]]
 
 
@@ -1849,10 +1862,15 @@ def test_list_runs_marks_completed_scope_as_completed_when_runtime_has_already_e
         headers={"Authorization": f"Bearer {token}"},
     )
     assert runs_response.status_code == 200
-    assert runs_response.json()[0]["status"] == "completed"
+    payload = runs_response.json()[0]
+    assert payload["status"] == "completed"
     metadata = json.loads((run_root / "run.json").read_text(encoding="utf-8"))
     assert metadata["stop_reason_code"] == "completed"
     assert metadata["stop_reason_text"] == "Run completed successfully."
+    assert metadata["ended_at"] == run["updated_at"]
+    assert payload["stop_reason_code"] == "completed"
+    assert payload["stop_reason_text"] == "Run completed successfully."
+    assert payload["ended_at"] == run["updated_at"]
 
 
 def test_list_runs_rewrites_stale_terminal_reason_when_completed_scope_is_already_final(monkeypatch):
@@ -1916,10 +1934,15 @@ def test_list_runs_rewrites_stale_terminal_reason_when_completed_scope_is_alread
         headers={"Authorization": f"Bearer {token}"},
     )
     assert runs_response.status_code == 200
-    assert runs_response.json()[0]["status"] == "completed"
+    payload = runs_response.json()[0]
+    assert payload["status"] == "completed"
     refreshed = json.loads(metadata_path.read_text(encoding="utf-8"))
     assert refreshed["stop_reason_code"] == "completed"
     assert refreshed["stop_reason_text"] == "Run completed successfully."
+    assert refreshed["ended_at"] == run["updated_at"]
+    assert payload["stop_reason_code"] == "completed"
+    assert payload["stop_reason_text"] == "Run completed successfully."
+    assert payload["ended_at"] == run["updated_at"]
 
 
 def test_list_runs_normalizes_scope_phase_aliases(monkeypatch):

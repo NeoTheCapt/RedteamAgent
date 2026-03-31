@@ -1652,6 +1652,7 @@ def test_start_run_runtime_clears_stale_terminal_reason(monkeypatch):
     refreshed = json.loads(metadata_path.read_text(encoding="utf-8"))
     assert "stop_reason_code" not in refreshed
     assert "stop_reason_text" not in refreshed
+    assert "ended_at" not in refreshed
 
 
 def test_ensure_runtime_log_follower_restarts_dead_follower(monkeypatch):

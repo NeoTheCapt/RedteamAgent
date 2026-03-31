@@ -1358,6 +1358,7 @@ def _write_run_terminal_reason(run: Run, *, reason_code: str, reason_text: str) 
         payload = {}
     payload["stop_reason_code"] = reason_code
     payload["stop_reason_text"] = reason_text
+    payload["ended_at"] = str(payload.get("ended_at") or run.updated_at)
     metadata_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
@@ -1371,6 +1372,7 @@ def _clear_run_terminal_reason(run: Run) -> None:
         payload = {}
     payload.pop("stop_reason_code", None)
     payload.pop("stop_reason_text", None)
+    payload.pop("ended_at", None)
     metadata_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
