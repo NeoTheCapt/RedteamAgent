@@ -46,12 +46,17 @@ done
 : > "$elog"
 : > "$output"
 
-for i in $(seq 1 14); do
+for i in $(seq 1 7); do
   printf '%s\n' '{"request":{"method":"GET","endpoint":"https://www.example.com/priapi/v1/dx/test/'"$i"'","tag":"js","attribute":"regex","source":"https://www.example.com/cdn/assets/app.js"},"error":"hybrid: response is nil"}' >> "$output"
   sleep 0.05
 done
 
 printf '%s\n' '{"request":{"method":"GET","endpoint":"https://www.example.com/cdn/assets/app.js","tag":"script","attribute":"src","source":"https://www.example.com/en-sg"},"response":{"status_code":200,"headers":{"Content-Type":"application/javascript"}}}' >> "$output"
+
+for i in $(seq 8 14); do
+  printf '%s\n' '{"request":{"method":"GET","endpoint":"https://www.example.com/priapi/v1/dx/test/'"$i"'","tag":"js","attribute":"regex","source":"https://www.example.com/cdn/assets/app.js"},"error":"hybrid: response is nil"}' >> "$output"
+  sleep 0.05
+done
 
 sleep 2
 EOF
