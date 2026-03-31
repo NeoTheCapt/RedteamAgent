@@ -122,9 +122,48 @@ maybe_log_progress() {
     fi
 }
 
+katana_request_counts_as_success() {
+    local request_json="${1:-}"
+    local url method content_type response_status source_name url_path case_type
+
+    [[ -n "$request_json" ]] || return 1
+    if ! katana_request_should_ingest "$request_json"; then
+        return 1
+    fi
+
+    source_name="$(printf '%s' "$request_json" | jq -r '.source // "katana"' 2>/dev/null || echo "katana")"
+    if [[ "$source_name" == "katana-xhr" ]]; then
+        return 0
+    fi
+
+    response_status="$(printf '%s' "$request_json" | jq -r '.response_status // 0' 2>/dev/null || echo "0")"
+    [[ "$response_status" =~ ^[0-9]+$ ]] || response_status=0
+
+    url="$(printf '%s' "$request_json" | jq -r '.url // empty' 2>/dev/null || true)"
+    [[ -n "$url" ]] || return 1
+    method="$(printf '%s' "$request_json" | jq -r '.method // "GET"' 2>/dev/null || echo "GET")"
+    content_type="$(printf '%s' "$request_json" | jq -r '.content_type // ""' 2>/dev/null || true)"
+    url_path="$(extract_url_path "$url")"
+    case_type="$(classify_type "$method" "$url_path" "$content_type" "")"
+
+    if (( response_status >= 200 && response_status < 400 )); then
+        return 0
+    fi
+
+    if (( response_status == 401 || response_status == 403 )); then
+        case "$case_type" in
+            page|api|graphql|form|upload|websocket|data|unknown)
+                return 0
+                ;;
+        esac
+    fi
+
+    return 1
+}
+
 katana_line_counts_as_success() {
     local line="${1:-}"
-    local url method content_type url_path case_type xhr_count
+    local request_json
 
     [[ -n "$line" ]] || return 1
 
@@ -132,26 +171,43 @@ katana_line_counts_as_success() {
         return 1
     fi
 
-    xhr_count="$(printf '%s' "$line" | jq -r '(.response.xhr_requests // []) | length' 2>/dev/null || echo 0)"
-    if [[ "$xhr_count" =~ ^[0-9]+$ ]] && (( xhr_count > 0 )); then
-        return 0
-    fi
-
-    url="$(printf '%s' "$line" | jq -r '.request.endpoint // .request.url // .url // empty' 2>/dev/null || true)"
-    [[ -n "$url" ]] || return 1
-    method="$(printf '%s' "$line" | jq -r '.request.method // "GET"' 2>/dev/null || echo "GET")"
-    content_type="$(printf '%s' "$line" | jq -r '.response.headers["content-type"] // .response.headers["Content-Type"] // ""' 2>/dev/null || true)"
-    url_path="$(extract_url_path "$url")"
-    case_type="$(classify_type "$method" "$url_path" "$content_type" "")"
-
-    case "$case_type" in
-        page|api|graphql|form|upload|websocket|unknown)
+    while IFS= read -r request_json; do
+        [[ -n "$request_json" ]] || continue
+        if katana_request_counts_as_success "$request_json"; then
             return 0
-            ;;
-        *)
-            return 1
-            ;;
-    esac
+        fi
+    done < <(
+        printf '%s' "$line" | jq -c '
+            [
+              {
+                method: (.request.method // "GET"),
+                url: (.request.endpoint // .request.url // .url // empty),
+                content_type: (.response.headers["content-type"] // .response.headers["Content-Type"] // ""),
+                response_status: (.response.status_code // 0),
+                source: "katana",
+                source_ref: (.request.source // ""),
+                tag: (.request.tag // ""),
+                attribute: (.request.attribute // ""),
+                error: (.error // "")
+              },
+              (.response.xhr_requests[]? | {
+                method: (.method // "GET"),
+                url: (.endpoint // .url // empty),
+                content_type: (.headers["content-type"] // .headers["Content-Type"] // ""),
+                response_status: 0,
+                source: "katana-xhr",
+                source_ref: (.source // .request.source // ""),
+                tag: (.tag // ""),
+                attribute: (.attribute // ""),
+                error: (.error // "")
+              })
+            ]
+            | .[]
+            | select((.url // "") != "")
+        ' 2>/dev/null || true
+    )
+
+    return 1
 }
 
 ingest_request() {
