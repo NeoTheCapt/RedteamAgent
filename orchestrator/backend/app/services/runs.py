@@ -211,10 +211,10 @@ def _latest_runtime_activity_at(run: Run) -> datetime | None:
     latest_timestamp = _latest_process_log_activity_at(process_log_path_for(run))
     latest = _utc_datetime_from_timestamp(latest_timestamp) if latest_timestamp is not None else None
 
-    process_metadata = _path_mtime(process_metadata_path_for(run))
-    if process_metadata is not None and (latest is None or process_metadata > latest):
-        latest = process_metadata
-
+    # Treat runtime activity as real runtime output only. process.json is launcher
+    # metadata and can be rewritten by recovery/status helpers long after the
+    # container stopped making progress, which would incorrectly mask genuine
+    # queue stalls as fresh activity.
     opencode_logs_root = opencode_home_root_for(run) / "log"
     if opencode_logs_root.exists():
         for path in opencode_logs_root.glob("*.log"):
