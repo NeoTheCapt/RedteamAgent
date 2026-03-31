@@ -690,6 +690,14 @@ def _active_runtime_metadata_agents(run: Run) -> set[str]:
             continue
         if str(item.get("status") or "").strip().lower() != "active":
             continue
+        # run.json agent cards are also used by the UI and may synthesize
+        # queue-backed "active" agents from processing cases even when no live
+        # task/runtime event exists. Those synthetic cards intentionally have an
+        # empty updated_at. Launcher stall recovery must only treat agents with
+        # substantive runtime activity as active, otherwise orphaned processing
+        # assignments can mask queue stalls forever.
+        if not str(item.get("updated_at") or "").strip():
+            continue
         agent_name = str(item.get("agent_name") or item.get("task_name") or "").strip()
         if agent_name:
             active_agents.add(agent_name)
