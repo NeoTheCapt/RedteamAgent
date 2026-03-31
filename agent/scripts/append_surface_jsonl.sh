@@ -17,7 +17,7 @@ normalize_surface_type() {
     local raw="${1:-}"
     raw="$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]' | tr '-' '_')"
     case "$raw" in
-        auth_entry|account_recovery|object_reference|privileged_write|file_handling|dynamic_render|api_documentation|workflow_token)
+        auth_entry|account_recovery|object_reference|privileged_write|file_handling|dynamic_render|api_documentation|workflow_token|api_param_followup|cors_review)
             printf '%s\n' "$raw"
             return 0
             ;;
