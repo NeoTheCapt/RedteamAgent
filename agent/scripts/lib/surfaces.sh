@@ -43,8 +43,22 @@ surface_validate_type() {
     esac
 }
 
+surface_canonical_status() {
+    local status="${1:?status required}"
+    status="$(printf '%s' "$status" | tr '[:upper:]' '[:lower:]' | tr '-' '_')"
+    case "$status" in
+        candidate)
+            printf '%s\n' "discovered"
+            ;;
+        *)
+            printf '%s\n' "$status"
+            ;;
+    esac
+}
+
 surface_validate_status() {
     local status="${1:?status required}"
+    status="$(surface_canonical_status "$status")"
     case "$status" in
         discovered|covered|not_applicable|deferred)
             return 0
@@ -84,6 +98,7 @@ upsert_surface_record() {
     local surface_file tmp_file
 
     surface_validate_type "$surface_type"
+    status="$(surface_canonical_status "$status")"
     surface_validate_status "$status"
     surface_validate_target "$target"
 
