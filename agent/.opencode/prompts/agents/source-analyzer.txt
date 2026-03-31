@@ -198,3 +198,16 @@ Plus any secrets/tokens for findings.md.
     Before returning final results, append:
     `./scripts/append_log_entry.sh "$DIR" source-analyzer "Source analysis summary" "<files analyzed>" "<secrets, routes, endpoints, or surfaces discovered>"`
     Keep entries short and summary-oriented.
+17. OUTPUT BUDGET: Your final handoff must fit in one concise message. Cap the final response at roughly:
+    - 10 NEW ENDPOINT JSONL lines
+    - 8 frontend route rows
+    - 6 hidden-path/resource rows
+    - 6 surface-candidate JSONL lines
+    - 5 secret/intel rows per section
+    If more items exist, summarize the extra volume and return only the highest-signal, directly actionable subset.
+18. LARGE-SPA STOP RULE: For large SPAs, stop after root HTML plus a representative set of bundles/source maps
+    is enough to extract concrete requestable endpoints, secrets, or surfaces. Do NOT iterate through every chunk
+    just to make the report exhaustive once additional files are only yielding duplicates, route noise, or low-value strings.
+19. COMPLETION OVER EXHAUSTIVENESS: In unattended runs, prioritize returning a compact completed handoff over an
+    exhaustive catalog. Once you have enough evidence for queue-ready endpoints and surface candidates, finish the
+    structured report instead of continuing analysis loops for marginal additions.

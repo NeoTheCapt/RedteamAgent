@@ -65,6 +65,12 @@ katana_request_should_ingest() {
         return 1
     fi
 
+    # Regex-extracted API-like paths from JS are only trustworthy when the probe actually
+    # lands on a viable endpoint. Real run 222 showed 401/500 responses from public bundle
+    # regex matches getting queued as completed API cases, which polluted crawler-derived
+    # coverage with low-signal routes like /rest/user/change-password?current=.
+    # Treat any 4xx/5xx response here as a failed/bogus discovery and keep only successful
+    # or otherwise undecided JS-derived API candidates.
     if [[ "$tag" == "js" ]] \
         && [[ "$attribute" == "regex" ]] \
         && is_katana_javascript_source_ref "$source_ref" \

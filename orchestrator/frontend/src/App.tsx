@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import {
+  ApiError,
   createProject,
   createRun,
   deleteProject,
@@ -54,6 +55,14 @@ export default function App() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [runsByProject, setRunsByProject] = useState<Record<number, Run[]>>({});
 
+  function expireSession() {
+    window.localStorage.removeItem(SESSION_STORAGE_KEY);
+    setSession(null);
+    setProjects([]);
+    setRunsByProject({});
+    navigate("/login");
+  }
+
   useEffect(() => {
     const handler = () => setRoute(currentRoute());
     window.addEventListener("hashchange", handler);
@@ -70,14 +79,23 @@ export default function App() {
     let cancelled = false;
 
     async function refreshProjects() {
-      const nextProjects = await listProjects(session.token);
-      if (cancelled) return;
-      setProjects(nextProjects);
-      const entries = await Promise.all(
-        nextProjects.map(async (project) => [project.id, await listRuns(session.token, project.id)] as const),
-      );
-      if (cancelled) return;
-      setRunsByProject(Object.fromEntries(entries));
+      try {
+        const nextProjects = await listProjects(session.token);
+        if (cancelled) return;
+        setProjects(nextProjects);
+        const entries = await Promise.all(
+          nextProjects.map(async (project) => [project.id, await listRuns(session.token, project.id)] as const),
+        );
+        if (cancelled) return;
+        setRunsByProject(Object.fromEntries(entries));
+      } catch (error) {
+        if (cancelled) return;
+        if (error instanceof ApiError && error.status === 401) {
+          expireSession();
+          return;
+        }
+        throw error;
+      }
     }
 
     void refreshProjects();
@@ -155,9 +173,7 @@ export default function App() {
   }
 
   function handleLogout() {
-    window.localStorage.removeItem(SESSION_STORAGE_KEY);
-    setSession(null);
-    navigate("/login");
+    expireSession();
   }
 
   if (!session) {

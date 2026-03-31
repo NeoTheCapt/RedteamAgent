@@ -8,14 +8,17 @@ import tempfile
 import time
 from collections import Counter, defaultdict
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from urllib.parse import quote, urlparse
 
 from fastapi import HTTPException, status
 
+from ..models.project import Project
+from ..models.run import Run
 from ..models.user import User
 from .events import list_events_for_run
-from .launcher import _loopback_display_context, _rewrite_artifact_value
+from .launcher import _loopback_display_context, _rewrite_artifact_value, normalize_active_scope
 from .runs import _latest_workflow_activity_at, _project_or_404, _reconcile_run_status
 
 PHASE_ORDER = ["recon", "collect", "consume-test", "exploit", "report"]
@@ -38,6 +41,45 @@ AGENT_PHASES = {
 }
 DEFAULT_SUBAGENT_ROSTER = tuple(AGENT_PHASES.keys())
 TERMINAL_RUN_STATUSES = {"failed", "completed"}
+OVERVIEW_FUTURE_SKEW = timedelta(minutes=5)
+
+
+def _utc_now_naive() -> datetime:
+    return datetime.now(UTC).replace(tzinfo=None)
+
+
+def _parse_overview_timestamp(value: object) -> datetime | None:
+    if not value:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%SZ"):
+        try:
+            parsed = datetime.strptime(text, fmt)
+            if parsed.tzinfo is not None:
+                parsed = parsed.astimezone(UTC).replace(tzinfo=None)
+            return parsed.replace(tzinfo=None)
+        except ValueError:
+            continue
+    try:
+        normalized = text.replace("Z", "+00:00")
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone(UTC).replace(tzinfo=None)
+    return parsed.replace(tzinfo=None)
+
+
+def _overview_timestamp_is_future_skewed(value: datetime | None) -> bool:
+    if value is None:
+        return False
+    return value - _utc_now_naive() > OVERVIEW_FUTURE_SKEW
+
+
+def _format_overview_timestamp(value: datetime) -> str:
+    return value.replace(microsecond=0).strftime("%Y-%m-%d %H:%M:%S")
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,11 +113,25 @@ def _run_or_404(project_id: int, run_id: int, user: User):
     return _reconcile_run_status(run)
 
 
+def _engagement_dir_rank(path: Path) -> tuple[int, float, str]:
+    return (1 if (path / "scope.json").exists() else 0, path.stat().st_mtime, path.name)
+
+
+
 def _active_engagement_root(run_root: Path) -> Path:
-    engagements_root = run_root / "workspace" / "engagements"
-    active_file = run_root / "workspace" / "engagements" / ".active"
+    workspace = run_root / "workspace"
+    engagements_root = workspace / "engagements"
+    active_file = engagements_root / ".active"
     if not active_file.exists():
-        candidates = sorted([path for path in engagements_root.iterdir() if path.is_dir()], reverse=True) if engagements_root.exists() else []
+        candidates = (
+            sorted(
+                [path for path in engagements_root.iterdir() if path.is_dir()],
+                key=_engagement_dir_rank,
+                reverse=True,
+            )
+            if engagements_root.exists()
+            else []
+        )
         if candidates:
             active_file.write_text(f"engagements/{candidates[0].name}", encoding="utf-8")
             return candidates[0]
@@ -85,17 +141,32 @@ def _active_engagement_root(run_root: Path) -> Path:
     if not active_name:
         return run_root
 
-    active_relative = active_name.removeprefix("./").removeprefix("/")
-    if active_relative.startswith("engagements/"):
-        candidate = run_root / "workspace" / active_relative
+    active_path = Path(active_name)
+    if active_path.is_absolute():
+        if active_path.exists() and (active_path / "scope.json").exists():
+            return active_path
     else:
-        candidate = run_root / "workspace" / "engagements" / active_relative
-    if candidate.exists():
-        return candidate
-    candidates = sorted([path for path in engagements_root.iterdir() if path.is_dir()], reverse=True) if engagements_root.exists() else []
+        active_relative = active_name.removeprefix("./").removeprefix("/")
+        candidate = workspace / active_relative if active_relative.startswith("engagements/") else engagements_root / active_relative
+        if candidate.exists() and (candidate / "scope.json").exists():
+            return candidate
+
+    candidates = (
+        sorted(
+            [path for path in engagements_root.iterdir() if path.is_dir()],
+            key=_engagement_dir_rank,
+            reverse=True,
+        )
+        if engagements_root.exists()
+        else []
+    )
     if candidates:
         active_file.write_text(f"engagements/{candidates[0].name}", encoding="utf-8")
         return candidates[0]
+    if active_path.is_absolute() and active_path.exists():
+        return active_path
+    if 'candidate' in locals() and candidate.exists():
+        return candidate
     return run_root
 
 
@@ -237,6 +308,24 @@ def _phase_index(phase: str) -> int:
         return PHASE_ORDER.index(phase)
     except ValueError:
         return -1
+
+
+def _has_started_consume_test(scope: dict, events: list) -> bool:
+    scope_phase = _normalize_phase(scope.get("current_phase")) if scope else "unknown"
+    if _phase_index(scope_phase) >= _phase_index("consume-test"):
+        return True
+
+    completed = {_normalize_phase(item) for item in scope.get("phases_completed", [])} if scope else set()
+    if "consume-test" in completed:
+        return True
+
+    return any(_phase_index(_event_phase(event)) >= _phase_index("consume-test") for event in events)
+
+
+def _queue_requires_consume_test(scope: dict, events: list, pending_cases: int, processing_cases: int) -> bool:
+    if pending_cases <= 0 and processing_cases <= 0:
+        return False
+    return _has_started_consume_test(scope, events)
 
 
 def _event_phase(event) -> str:
@@ -502,10 +591,21 @@ def _latest_active_task_phase(events: list, scope_phase: str) -> str:
     return _resolved_event_phase(latest_active, scope_phase)
 
 
-def _effective_current_phase(scope: dict, events: list, processing_agents: list[dict], run_status: str) -> str:
+def _effective_current_phase(
+    scope: dict,
+    events: list,
+    processing_agents: list[dict],
+    run_status: str,
+    *,
+    pending_cases: int = 0,
+    processing_cases: int = 0,
+) -> str:
     scope_phase = _normalize_phase(scope.get("current_phase")) if scope else "unknown"
     if _is_terminal_run_status(run_status):
         return scope_phase
+
+    if _queue_requires_consume_test(scope, events, pending_cases, processing_cases):
+        return "consume-test"
 
     active_task_phase = _latest_active_task_phase(events, scope_phase)
     if active_task_phase != "unknown":
@@ -948,21 +1048,27 @@ def _overview_updated_at(run, active_root: Path, latest_task, latest_phase) -> s
     if _is_terminal_run_status(run.status):
         return str(run.updated_at)
 
-    candidates: list[str] = []
-    for value in (getattr(latest_task, "created_at", None), getattr(latest_phase, "created_at", None), getattr(run, "updated_at", None)):
-        if value:
-            candidates.append(str(value))
+    candidates: list[datetime] = []
+    for value in (
+        getattr(latest_task, "created_at", None),
+        getattr(latest_phase, "created_at", None),
+    ):
+        parsed = _parse_overview_timestamp(value)
+        if parsed is None or _overview_timestamp_is_future_skewed(parsed):
+            continue
+        candidates.append(parsed)
 
     workflow_activity_at = _latest_workflow_activity_at(run, active_root / "scope.json")
-    if workflow_activity_at is not None:
-        candidates.append(workflow_activity_at.strftime("%Y-%m-%d %H:%M:%S"))
+    if workflow_activity_at is not None and not _overview_timestamp_is_future_skewed(workflow_activity_at):
+        candidates.append(workflow_activity_at.replace(tzinfo=None))
 
-    return max(candidates) if candidates else ""
+    return _format_overview_timestamp(max(candidates)) if candidates else ""
 
 
-def summarize_run(project_id: int, run_id: int, user: User) -> RunSummary:
-    run = _run_or_404(project_id, run_id, user)
-    project = _project_or_404(project_id, user)
+def _summarize_existing_run(run: Run, project: Project, user: User) -> RunSummary:
+    from .. import db
+
+    normalize_active_scope(run)
     run_root = Path(run.engagement_root)
     active_root = _active_engagement_root(run_root)
     cases_db = _resolve_cases_db(run_root, active_root)
@@ -972,8 +1078,15 @@ def summarize_run(project_id: int, run_id: int, user: User) -> RunSummary:
     processing_agents = cases.get("processing_agents", [])
     surfaces = _load_surface_metrics(active_root / "surfaces.jsonl")
     findings_count = _count_findings(active_root / "findings.md")
-    events = list_events_for_run(project_id, run_id, user)
-    effective_current_phase = _effective_current_phase(scope, events, processing_agents, run.status)
+    events = list_events_for_run(project.id, run.id, user)
+    effective_current_phase = _effective_current_phase(
+        scope,
+        events,
+        processing_agents,
+        run.status,
+        pending_cases=int(cases.get("pending_cases", 0)),
+        processing_cases=int(cases.get("processing_cases", 0)),
+    )
     scope = _sync_scope_phase_projection(
         active_root / "scope.json",
         scope,
@@ -985,6 +1098,17 @@ def summarize_run(project_id: int, run_id: int, user: User) -> RunSummary:
 
     latest_task = next((event for event in reversed(events) if event.event_type.startswith("task.")), None)
     latest_phase = next((event for event in reversed(events) if event.event_type.startswith("phase.")), None)
+    overview_updated_at = _overview_updated_at(run, active_root, latest_task, latest_phase)
+    current_run_updated_at = _parse_overview_timestamp(getattr(run, "updated_at", None))
+    repaired_future_skew = _overview_timestamp_is_future_skewed(current_run_updated_at)
+    if overview_updated_at:
+        overview_dt = _parse_overview_timestamp(overview_updated_at)
+        if overview_dt is not None and (
+            repaired_future_skew
+            or current_run_updated_at is None
+            or overview_dt != current_run_updated_at
+        ):
+            run = db.set_run_updated_at(run.id, overview_updated_at)
     current = _current_activity(events, scope, processing_agents, run.status, str(run_metadata.get("stop_reason_text", "")))
     active_agents = 0 if _is_terminal_run_status(run.status) else sum(1 for agent in agents if agent["status"] == "active")
     available_agents = len(agents)
@@ -1007,7 +1131,7 @@ def summarize_run(project_id: int, run_id: int, user: User) -> RunSummary:
             "active_agents": active_agents,
             "available_agents": available_agents,
             "current_phase": effective_current_phase,
-            "updated_at": _overview_updated_at(run, active_root, latest_task, latest_phase),
+            "updated_at": overview_updated_at,
         },
         runtime_model=_load_runtime_model_verification(run_root, project),
         coverage={
@@ -1018,6 +1142,18 @@ def summarize_run(project_id: int, run_id: int, user: User) -> RunSummary:
         phases=phases,
         agents=agents,
     )
+
+
+
+def refresh_run_metadata_projection(run: Run, project: Project, user: User) -> RunSummary:
+    return _summarize_existing_run(run, project, user)
+
+
+
+def summarize_run(project_id: int, run_id: int, user: User) -> RunSummary:
+    run = _run_or_404(project_id, run_id, user)
+    project = _project_or_404(project_id, user)
+    return _summarize_existing_run(run, project, user)
 
 
 def list_observed_paths(project_id: int, run_id: int, user: User) -> list[ObservedPathRecord]:

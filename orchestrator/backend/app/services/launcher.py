@@ -10,8 +10,8 @@ import subprocess
 import tempfile
 import time
 from collections import deque
-from datetime import datetime
-from threading import Thread
+from datetime import UTC, datetime
+from threading import Lock, Thread
 from pathlib import Path
 from urllib.parse import quote, urlsplit, urlunsplit
 
@@ -21,6 +21,10 @@ from ..models.project import Project
 from ..models.run import Run
 from ..models.user import User
 from ..security import create_session_token, session_expiry_timestamp
+
+
+_ACTIVE_CONTAINER_SUPERVISORS: set[int] = set()
+_ACTIVE_CONTAINER_SUPERVISORS_LOCK = Lock()
 
 
 def runtime_root_for(run: Run) -> Path:
@@ -188,11 +192,25 @@ def _rewrite_runtime_target(target: str) -> str:
     return urlunsplit(rewritten)
 
 
+def _engagement_dir_rank(path: Path) -> tuple[int, float, str]:
+    return (1 if (path / "scope.json").exists() else 0, path.stat().st_mtime, path.name)
+
+
+
 def _active_engagement_dir(run: Run) -> Path | None:
-    engagements_root = workspace_root_for(run) / "engagements"
-    active_file = workspace_root_for(run) / "engagements" / ".active"
+    workspace = workspace_root_for(run)
+    engagements_root = workspace / "engagements"
+    active_file = engagements_root / ".active"
     if not active_file.exists():
-        candidates = sorted([path for path in engagements_root.iterdir() if path.is_dir()], reverse=True) if engagements_root.exists() else []
+        candidates = (
+            sorted(
+                [path for path in engagements_root.iterdir() if path.is_dir()],
+                key=_engagement_dir_rank,
+                reverse=True,
+            )
+            if engagements_root.exists()
+            else []
+        )
         if candidates:
             active_file.write_text(f"engagements/{candidates[0].name}", encoding="utf-8")
             return candidates[0]
@@ -202,17 +220,35 @@ def _active_engagement_dir(run: Run) -> Path | None:
     if not active_name:
         return None
 
-    active_relative = active_name.removeprefix("./").removeprefix("/")
-    if active_relative.startswith("engagements/"):
-        active_dir = workspace_root_for(run) / active_relative
+    active_path = Path(active_name)
+    if active_path.is_absolute():
+        if active_path.exists() and (active_path / "scope.json").exists():
+            return active_path
     else:
-        active_dir = workspace_root_for(run) / "engagements" / active_relative
-    if active_dir.exists():
-        return active_dir
-    candidates = sorted([path for path in engagements_root.iterdir() if path.is_dir()], reverse=True) if engagements_root.exists() else []
+        active_relative = active_name.removeprefix("./").removeprefix("/")
+        if active_relative.startswith("engagements/"):
+            active_dir = workspace / active_relative
+        else:
+            active_dir = engagements_root / active_relative
+        if active_dir.exists() and (active_dir / "scope.json").exists():
+            return active_dir
+
+    candidates = (
+        sorted(
+            [path for path in engagements_root.iterdir() if path.is_dir()],
+            key=_engagement_dir_rank,
+            reverse=True,
+        )
+        if engagements_root.exists()
+        else []
+    )
     if candidates:
         active_file.write_text(f"engagements/{candidates[0].name}", encoding="utf-8")
         return candidates[0]
+    if active_path.is_absolute() and active_path.exists():
+        return active_path
+    if 'active_dir' in locals() and active_dir.exists():
+        return active_dir
     return None
 
 
@@ -376,6 +412,10 @@ def _normalize_scope_file(scope_path: Path, *, run: Run | None = None) -> dict[s
 
 
 def _active_name_to_engagement_dir(workspace: Path, active_name: str) -> Path:
+    active_path = Path(active_name)
+    if active_path.is_absolute():
+        return active_path
+
     active_relative = active_name.removeprefix("./").removeprefix("/")
     if active_relative.startswith("engagements/"):
         return workspace / active_relative
@@ -490,6 +530,15 @@ def _iter_runtime_activity_timestamps(payload):
 
 
 _TEXT_LOG_TIMESTAMP_PATTERN = re.compile(r"\b(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)\b")
+_RUNTIME_ACTIVITY_FUTURE_SKEW_SECONDS = 5 * 60
+
+
+def _runtime_activity_candidate_is_valid(candidate: float | None) -> bool:
+    if candidate is None:
+        return False
+    if candidate <= 0:
+        return False
+    return candidate <= time.time() + _RUNTIME_ACTIVITY_FUTURE_SKEW_SECONDS
 
 
 def _latest_process_log_activity_at(path: Path, *, max_lines: int = 400) -> float | None:
@@ -512,6 +561,8 @@ def _latest_process_log_activity_at(path: Path, *, max_lines: int = 400) -> floa
                 payload = None
             if payload is not None:
                 for candidate in _iter_runtime_activity_timestamps(payload):
+                    if not _runtime_activity_candidate_is_valid(candidate):
+                        continue
                     if latest is None or candidate > latest:
                         latest = candidate
                 continue
@@ -520,7 +571,7 @@ def _latest_process_log_activity_at(path: Path, *, max_lines: int = 400) -> floa
         if text_match is None:
             continue
         candidate = _parse_runtime_activity_timestamp(text_match.group(1))
-        if candidate is not None and (latest is None or candidate > latest):
+        if _runtime_activity_candidate_is_valid(candidate) and (latest is None or candidate > latest):
             latest = candidate
 
     if latest is not None:
@@ -638,20 +689,26 @@ def _running_container_stall_reason(run: Run) -> tuple[str, str, str] | None:
             )
 
     runtime_activity_at = _latest_running_runtime_activity_at(run)
-    if runtime_activity_at is None:
-        return None
+    if runtime_activity_at is not None:
+        runtime_age = time.time() - runtime_activity_at
+        if runtime_age >= RUN_STALL_TIMEOUT_SECONDS:
+            return (
+                current_phase,
+                "queue_stalled",
+                "Runtime produced no new output before stall timeout elapsed.",
+            )
 
-    runtime_age = time.time() - runtime_activity_at
-    if runtime_age >= RUN_STALL_TIMEOUT_SECONDS:
-        return (
-            current_phase,
-            "queue_stalled",
-            "Runtime produced no new output before stall timeout elapsed.",
-        )
+    early_phase_activity_at = runtime_activity_at
+    if workflow_activity_at is not None and (
+        early_phase_activity_at is None or workflow_activity_at > early_phase_activity_at
+    ):
+        early_phase_activity_at = workflow_activity_at
+
     if (
         current_phase in EARLY_PHASE_STALL_PHASES
         and total_cases == 0
-        and runtime_age >= EARLY_PHASE_STALL_TIMEOUT_SECONDS
+        and early_phase_activity_at is not None
+        and (time.time() - early_phase_activity_at) >= EARLY_PHASE_STALL_TIMEOUT_SECONDS
     ):
         return (
             current_phase,
@@ -757,6 +814,83 @@ def _normalize_text_artifact(path: Path, context: dict[str, str] | None) -> None
     rewritten = _rewrite_loopback_text(original, context)
     if rewritten != original:
         path.write_text(rewritten, encoding="utf-8")
+
+
+def _engagement_header_date(scope: dict[str, object] | None) -> str:
+    if isinstance(scope, dict):
+        raw_start_time = str(scope.get("start_time") or "").strip()
+        if raw_start_time:
+            try:
+                parsed = datetime.fromisoformat(raw_start_time.replace("Z", "+00:00"))
+                return parsed.astimezone().strftime("%Y-%m-%d")
+            except ValueError:
+                pass
+    return datetime.now().astimezone().strftime("%Y-%m-%d")
+
+
+def _normalize_log_completion_artifact(path: Path) -> None:
+    if not path.exists():
+        return
+    original = path.read_text(encoding="utf-8", errors="replace")
+    rewritten = re.sub(
+        r"^- \*\*Status\*\*:.*$",
+        "- **Status**: Completed",
+        original,
+        count=1,
+        flags=re.MULTILINE,
+    )
+    if rewritten != original:
+        path.write_text(rewritten, encoding="utf-8")
+
+
+def _normalize_report_completion_artifact(path: Path, *, header_date: str) -> None:
+    if not path.exists():
+        return
+    original = path.read_text(encoding="utf-8", errors="replace")
+    trailing_newline = original.endswith("\n")
+    lines = original.splitlines()
+    changed = False
+    date_found = False
+
+    for index, line in enumerate(lines):
+        if line.startswith("**Date**:"):
+            normalized = f"**Date**: {header_date} — Completed"
+            if line != normalized:
+                lines[index] = normalized
+                changed = True
+            date_found = True
+            continue
+        if line.startswith("**Target**:"):
+            if "**Status**:" in line:
+                normalized = re.sub(r"\*\*Status\*\*: .*", "**Status**: Completed", line, count=1)
+            else:
+                normalized = f"{line}  **Status**: Completed"
+            if line != normalized:
+                lines[index] = normalized
+                changed = True
+
+    if not date_found:
+        insert_at = 1 if lines and lines[0].startswith("#") else 0
+        lines.insert(insert_at, f"**Date**: {header_date} — Completed")
+        changed = True
+
+    if not changed:
+        return
+
+    rewritten = "\n".join(lines)
+    if trailing_newline:
+        rewritten += "\n"
+    path.write_text(rewritten, encoding="utf-8")
+
+
+def _normalize_completion_artifacts(engagement_dir: Path, scope: dict[str, object] | None) -> None:
+    if not isinstance(scope, dict):
+        return
+    if _canonical_scope_status(scope.get("status")) != "complete":
+        return
+    header_date = _engagement_header_date(scope)
+    _normalize_log_completion_artifact(engagement_dir / "log.md")
+    _normalize_report_completion_artifact(engagement_dir / "report.md", header_date=header_date)
 
 
 _JSONL_DISALLOWED_CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
@@ -873,12 +1007,99 @@ _SURFACE_TYPE_ALIASES = {
     "client_route": "dynamic_render",
     "client_side_route": "dynamic_render",
     "frontend_route": "dynamic_render",
+    "auth_workflow": "account_recovery",
+    "identity_verification": "auth_entry",
+    "p2p_trading": "dynamic_render",
+    "web3_assets": "dynamic_render",
+    "preview_or_internal_content": "dynamic_render",
+    "file": "file_handling",
+    "upload": "file_handling",
+    "api_docs": "api_documentation",
+    "swagger": "api_documentation",
+    "openapi": "api_documentation",
+    "auth": "auth_entry",
+    "authentication": "auth_entry",
+    "login": "auth_entry",
+    "register": "auth_entry",
+    "mfa": "auth_entry",
+    "oauth": "auth_entry",
+    "oauth_flow": "auth_entry",
+    "business_logic": "privileged_write",
+    "logic_flow": "privileged_write",
+    "stateful_flow": "privileged_write",
+    "race_condition": "privileged_write",
 }
 
 
 def _normalize_surface_type(value: str) -> str:
     normalized = str(value or "").strip().lower().replace("-", "_")
     return _SURFACE_TYPE_ALIASES.get(normalized, normalized)
+
+
+def _infer_surface_type(method: str, target: str, item_type: str, auth_hint: str, rationale: str) -> str:
+    method_value = str(method or "").strip().upper() or "GET"
+    target_value = str(target or "").strip()
+    item_type_value = str(item_type or "").strip().lower().replace("-", "_")
+    auth_value = str(auth_hint or "").strip().lower()
+    rationale_value = str(rationale or "").strip().lower()
+    haystack = " ".join(
+        value
+        for value in [method_value.lower(), target_value.lower(), item_type_value, auth_value, rationale_value]
+        if value
+    )
+
+    if item_type_value == "file" or "kdbx" in haystack or "/ftp/" in haystack or "file-upload" in haystack:
+        return "file_handling"
+    if any(token in haystack for token in ("swagger", "openapi", "api doc", "documented", "/api-docs", "/api-v5", "docs-api")):
+        return "api_documentation"
+    if item_type_value in {"asset_distribution", "cdn_asset_host", "cdn_host", "download_host", "object_storage", "storage_bucket"} or any(
+        token in haystack for token in ("asset host", "cdn host", "installer manifest", "object storage")
+    ):
+        return "dynamic_render"
+    if any(token in haystack for token in ("forgot-password", "reset-password", "security-question", "account recovery", "password reset")):
+        return "account_recovery"
+    if any(token in haystack for token in ("change-password", "privileged")):
+        return "privileged_write"
+    if any(token in haystack for token in ("2fa", "totp", "otp", "token", "jwt", "session", "cookie", "workflow")):
+        return "workflow_token"
+    if any(token in haystack for token in ("object", "idor", "{id}", "/track-order/", "orderid")):
+        return "object_reference"
+    if method_value != "GET" and item_type_value == "api":
+        return "privileged_write"
+    if any(token in haystack for token in ("login", "register", "auth", "mfa")):
+        return "auth_entry"
+    if item_type_value == "page":
+        return "dynamic_render"
+    if not item_type_value and method_value == "GET" and target_value.startswith("GET /"):
+        if not (
+            target_value.startswith("GET /api")
+            or re.match(r"GET /v\d", target_value)
+            or target_value.startswith("GET /priapi")
+            or target_value.startswith("GET /rest/")
+            or re.match(r"GET /[^\s]+\.[^/\s]+$", target_value)
+        ):
+            return "dynamic_render"
+    return ""
+
+
+def _build_surface_target(payload: dict[str, object]) -> str:
+    target = str(payload.get("target") or "").strip()
+    if target:
+        return _normalize_surface_target_placeholders(target)
+
+    url_value = ""
+    for key in ("url", "url/path", "path", "url_or_pattern", "urlOrPattern"):
+        value = payload.get(key)
+        if value is None:
+            continue
+        url_value = str(value).strip()
+        if url_value:
+            break
+    if not url_value:
+        return ""
+
+    method = str(payload.get("method") or "GET").strip().upper() or "GET"
+    return _normalize_surface_target_placeholders(f"{method} {url_value}")
 
 
 def _surface_target_contains_placeholder(value: str) -> bool:
@@ -930,13 +1151,17 @@ def _extract_surface_candidates_from_text(text: str) -> list[dict[str, str]]:
         except json.JSONDecodeError:
             continue
 
-        surface_type = _normalize_surface_type(payload.get("surface_type") or "")
-        target = _normalize_surface_target_placeholders(payload.get("target") or "")
+        target = _build_surface_target(payload)
         source = str(payload.get("source") or payload.get("agent") or "").strip()
         rationale = str(payload.get("rationale") or payload.get("reason") or payload.get("notes") or "").strip()
         evidence_ref = str(payload.get("evidence_ref") or payload.get("evidence") or "").strip()
         status = str(payload.get("status") or "discovered").strip().lower().replace("-", "_")
-
+        method = str(payload.get("method") or "GET").strip().upper() or "GET"
+        item_type = str(payload.get("type") or "").strip()
+        auth_hint = str(payload.get("auth") or "").strip()
+        surface_type = _normalize_surface_type(payload.get("surface_type") or payload.get("category") or "")
+        if surface_type not in _VALID_SURFACE_TYPES:
+            surface_type = _infer_surface_type(method, target, item_type, auth_hint, rationale)
         if surface_type not in _VALID_SURFACE_TYPES:
             continue
         if status not in _VALID_SURFACE_STATUSES:
@@ -965,14 +1190,21 @@ def _canonicalize_surface_record(record: dict[str, str], context: dict[str, str]
     if not isinstance(normalized, dict):
         return record
     canonical = dict(normalized)
-    surface_type = _normalize_surface_type(canonical.get("surface_type") or "")
+    target = _build_surface_target(canonical)
+    rationale = str(canonical.get("rationale") or canonical.get("reason") or canonical.get("notes") or "").strip()
+    method = str(canonical.get("method") or "GET").strip().upper() or "GET"
+    item_type = str(canonical.get("type") or "").strip()
+    auth_hint = str(canonical.get("auth") or "").strip()
+    surface_type = _normalize_surface_type(canonical.get("surface_type") or canonical.get("category") or "")
+    if surface_type not in _VALID_SURFACE_TYPES:
+        surface_type = _infer_surface_type(method, target, item_type, auth_hint, rationale)
     status = str(canonical.get("status") or "discovered").strip().lower().replace("-", "_")
     canonical["surface_type"] = surface_type
     canonical["status"] = status if status in _VALID_SURFACE_STATUSES else "discovered"
-    canonical["target"] = _normalize_surface_target_placeholders(canonical.get("target") or "")
-    canonical["source"] = str(canonical.get("source") or "").strip()
-    canonical["rationale"] = str(canonical.get("rationale") or "").strip()
-    canonical["evidence_ref"] = str(canonical.get("evidence_ref") or "").strip()
+    canonical["target"] = target
+    canonical["source"] = str(canonical.get("source") or canonical.get("agent") or "").strip()
+    canonical["rationale"] = rationale
+    canonical["evidence_ref"] = str(canonical.get("evidence_ref") or canonical.get("evidence") or "").strip()
     return canonical
 
 
@@ -1102,7 +1334,8 @@ def normalize_active_scope(run: Run) -> None:
         return
 
     context = _loopback_display_context(run)
-    _normalize_scope_file(engagement_dir / "scope.json", run=run)
+    scope = _normalize_scope_file(engagement_dir / "scope.json", run=run)
+    _normalize_completion_artifacts(engagement_dir, scope)
     _backfill_surfaces_from_process_log(run, engagement_dir)
     _dedupe_surface_jsonl(engagement_dir / "surfaces.jsonl", context)
     if context is None:
@@ -1110,8 +1343,8 @@ def normalize_active_scope(run: Run) -> None:
 
     _normalize_text_artifact(engagement_dir / "findings.md", context)
     _normalize_text_artifact(engagement_dir / "report.md", context)
-    _normalize_jsonl_artifact(engagement_dir / "scans" / "katana_output.jsonl", context, redact_headers=True)
     if _should_persist_loopback_rewrite(run):
+        _normalize_jsonl_artifact(engagement_dir / "scans" / "katana_output.jsonl", context, redact_headers=True)
         _normalize_cases_db(engagement_dir / "cases.db", context)
 
 
@@ -1125,6 +1358,7 @@ def _write_run_terminal_reason(run: Run, *, reason_code: str, reason_text: str) 
         payload = {}
     payload["stop_reason_code"] = reason_code
     payload["stop_reason_text"] = reason_text
+    payload["ended_at"] = str(payload.get("ended_at") or run.updated_at)
     metadata_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
@@ -1138,6 +1372,7 @@ def _clear_run_terminal_reason(run: Run) -> None:
         payload = {}
     payload.pop("stop_reason_code", None)
     payload.pop("stop_reason_text", None)
+    payload.pop("ended_at", None)
     metadata_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
@@ -1170,6 +1405,7 @@ def _terminal_reason(
 
 
 def _terminal_reason_from_artifacts(run: Run) -> tuple[bool, str, str, str]:
+    normalize_active_scope(run)
     completion_ok, completion_reason = engagement_completion_state(run)
     init_only_exit = _init_only_exit(run)
     succeeded = completion_ok and not init_only_exit
@@ -1631,6 +1867,15 @@ def stop_run_runtime(run: Run) -> None:
                 )
 
 
+def _drain_runtime_log_follower(log_follower: subprocess.Popen[bytes] | None, *, timeout: int = 5) -> None:
+    if log_follower is None or log_follower.poll() is not None:
+        return
+    try:
+        log_follower.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return
+
+
 def _close_log_streams(log_follower: subprocess.Popen[bytes] | None, log_handle) -> None:
     if log_follower is not None and log_follower.poll() is None:
         log_follower.terminate()
@@ -1639,6 +1884,42 @@ def _close_log_streams(log_follower: subprocess.Popen[bytes] | None, log_handle)
         except subprocess.TimeoutExpired:
             log_follower.kill()
     log_handle.close()
+
+
+def _runtime_log_follow_command(run: Run) -> list[str]:
+    command = ["docker", "logs", "-f"]
+    process_log = process_log_path_for(run)
+    if process_log.exists():
+        try:
+            has_history = process_log.stat().st_size > 0
+        except OSError:
+            has_history = False
+        if has_history:
+            latest_activity = _latest_process_log_activity_at(process_log)
+            if latest_activity is not None:
+                since_value = datetime.fromtimestamp(latest_activity, UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+                command.extend(["--since", since_value])
+    command.append(runtime_container_name(run))
+    return command
+
+
+
+def _spawn_runtime_log_follower(run: Run, log_handle) -> subprocess.Popen[bytes]:
+    return subprocess.Popen(
+        _runtime_log_follow_command(run),
+        cwd=str(run.engagement_root),
+        env=os.environ.copy(),
+        stdout=log_handle,
+        stderr=subprocess.STDOUT,
+    )
+
+
+def _ensure_runtime_log_follower(run: Run, log_follower: subprocess.Popen[bytes] | None, log_handle) -> subprocess.Popen[bytes] | None:
+    if log_follower is None:
+        return _spawn_runtime_log_follower(run, log_handle)
+    if log_follower.poll() is None:
+        return log_follower
+    return _spawn_runtime_log_follower(run, log_handle)
 
 
 def _runtime_command_text(run: Run, *, resume: bool = False) -> str:
@@ -1694,6 +1975,7 @@ def _launch_runtime_container(
         "docker",
         "run",
         "-d",
+        "--init",
         "--name",
         runtime_container_name(run),
         "--add-host",
@@ -1724,13 +2006,7 @@ def _launch_runtime_container(
         raise RuntimeError(error_output or "docker run failed")
     container_id = (result.stdout or "").strip()
     _write_container_metadata(run, container_id, docker_command)
-    return subprocess.Popen(
-        ["docker", "logs", "-f", runtime_container_name(run)],
-        cwd=str(run.engagement_root),
-        env=os.environ.copy(),
-        stdout=log_handle,
-        stderr=subprocess.STDOUT,
-    )
+    return _spawn_runtime_log_follower(run, log_handle)
 
 
 def _maybe_auto_resume_run(
@@ -1770,11 +2046,13 @@ def _maybe_auto_resume_run(
         command_text=_runtime_command_text(resumed, resume=True),
         log_handle=log_handle,
     )
-    Thread(
-        target=_supervise_container,
-        args=(resumed, project, user, runtime_container_name(resumed), log_follower, log_handle),
-        daemon=True,
-    ).start()
+    _start_container_supervisor(
+        resumed,
+        project,
+        user,
+        log_follower=log_follower,
+        log_handle=log_handle,
+    )
     return True
 
 
@@ -1789,6 +2067,7 @@ def _supervise_process(run: Run, process: subprocess.Popen[bytes], log_handle, h
 
     log_handle.close()
     phase, summary = _heartbeat_context(run)
+    normalize_active_scope(run)
     completion_ok, completion_reason = engagement_completion_state(run)
     init_only_exit = _init_only_exit(run)
     succeeded = return_code == 0 and not init_only_exit and completion_ok
@@ -1808,6 +2087,53 @@ def _supervise_process(run: Run, process: subprocess.Popen[bytes], log_handle, h
     _write_run_terminal_reason(terminal, reason_code=reason_code, reason_text=reason_text)
 
 
+def _start_container_supervisor(
+    run: Run,
+    project: Project,
+    user: User,
+    *,
+    log_follower: subprocess.Popen[bytes] | None = None,
+    log_handle=None,
+) -> bool:
+    with _ACTIVE_CONTAINER_SUPERVISORS_LOCK:
+        if run.id in _ACTIVE_CONTAINER_SUPERVISORS:
+            return False
+        _ACTIVE_CONTAINER_SUPERVISORS.add(run.id)
+
+    created_log_handle = False
+    try:
+        if log_handle is None:
+            process_log_path_for(run).parent.mkdir(parents=True, exist_ok=True)
+            log_handle = open(process_log_path_for(run), "ab")
+            created_log_handle = True
+
+        def _runner() -> None:
+            try:
+                _supervise_container(
+                    run,
+                    project,
+                    user,
+                    runtime_container_name(run),
+                    log_follower,
+                    log_handle,
+                )
+            finally:
+                with _ACTIVE_CONTAINER_SUPERVISORS_LOCK:
+                    _ACTIVE_CONTAINER_SUPERVISORS.discard(run.id)
+
+        Thread(target=_runner, daemon=True).start()
+        return True
+    except Exception:
+        if created_log_handle and log_handle is not None:
+            try:
+                log_handle.close()
+            except Exception:
+                pass
+        with _ACTIVE_CONTAINER_SUPERVISORS_LOCK:
+            _ACTIVE_CONTAINER_SUPERVISORS.discard(run.id)
+        raise
+
+
 def _supervise_container(
     run: Run,
     project: Project,
@@ -1822,6 +2148,7 @@ def _supervise_container(
     while True:
         status = _container_status(container_name)
         if status in {"running", "restarting"}:
+            log_follower = _ensure_runtime_log_follower(run, log_follower, log_handle)
             phase, summary = _heartbeat_context(run)
             _append_runtime_event(run, "run.heartbeat", phase, summary)
 
@@ -1861,8 +2188,10 @@ def _supervise_container(
             _write_run_terminal_reason(terminal, reason_code=reason_code, reason_text=reason_text)
             break
         if status == "exited":
+            _drain_runtime_log_follower(log_follower)
             exit_code = _container_exit_code(container_name)
             phase, _ = _heartbeat_context(run)
+            normalize_active_scope(run)
             completion_ok, completion_reason = engagement_completion_state(run)
             init_only_exit = _init_only_exit(run)
             succeeded = exit_code == 0 and not init_only_exit and completion_ok
@@ -1892,6 +2221,7 @@ def _supervise_container(
             _write_run_terminal_reason(terminal, reason_code=reason_code, reason_text=reason_text)
             break
         if status is None:
+            _drain_runtime_log_follower(log_follower)
             phase, _ = _heartbeat_context(run)
             succeeded, reason_code, reason_text, summary = _terminal_reason_from_artifacts(run)
             if not succeeded and _maybe_auto_resume_run(
@@ -1935,9 +2265,11 @@ def start_run_runtime(project: Project, run: Run, user: User) -> Run:
     running = db.update_run_status(run.id, "running")
     _clear_run_terminal_reason(running)
     _append_runtime_event(running, "run.started", "initializing", "Runtime launched; waiting for agent activity.")
-    Thread(
-        target=_supervise_container,
-        args=(running, project, user, runtime_container_name(run), log_follower, log_handle),
-        daemon=True,
-    ).start()
+    _start_container_supervisor(
+        running,
+        project,
+        user,
+        log_follower=log_follower,
+        log_handle=log_handle,
+    )
     return running
