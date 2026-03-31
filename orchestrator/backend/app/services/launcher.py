@@ -10,7 +10,7 @@ import subprocess
 import tempfile
 import time
 from collections import deque
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from threading import Lock, Thread
 from pathlib import Path
 from urllib.parse import quote, urlsplit, urlunsplit
@@ -1896,7 +1896,12 @@ def _runtime_log_follow_command(run: Run) -> list[str]:
         if has_history:
             latest_activity = _latest_process_log_activity_at(process_log)
             if latest_activity is not None:
-                since_value = datetime.fromtimestamp(latest_activity, UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+                # `docker logs --since` is inclusive. Advancing by 1 ms avoids
+                # replaying the last captured line each time the follower is
+                # restarted, which otherwise duplicates structured runtime
+                # events in process.log.
+                since_at = datetime.fromtimestamp(latest_activity, UTC) + timedelta(milliseconds=1)
+                since_value = since_at.isoformat(timespec="milliseconds").replace("+00:00", "Z")
                 command.extend(["--since", since_value])
     command.append(runtime_container_name(run))
     return command
