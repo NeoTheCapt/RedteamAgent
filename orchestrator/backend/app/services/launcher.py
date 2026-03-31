@@ -1087,6 +1087,8 @@ _VALID_SURFACE_TYPES = {
     "dynamic_render",
     "api_documentation",
     "workflow_token",
+    "api_param_followup",
+    "cors_review",
 }
 _VALID_SURFACE_STATUSES = {"discovered", "covered", "not_applicable", "deferred"}
 _SURFACE_TYPE_ALIASES = {
