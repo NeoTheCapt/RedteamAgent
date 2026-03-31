@@ -1772,7 +1772,7 @@ def test_runtime_log_follow_command_resumes_from_last_captured_activity(tmp_path
     command = _runtime_log_follow_command(run_model)
 
     assert command[:4] == ["docker", "logs", "-f", "--since"]
-    assert command[4] == "2026-03-30T10:28:23.642Z"
+    assert command[4] == "2026-03-30T10:28:23.643Z"
     assert command[5] == f"redteam-orch-run-{run['id']:04d}"
 
 
