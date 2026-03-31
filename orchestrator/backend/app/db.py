@@ -540,14 +540,15 @@ def create_event(
     summary: str,
 ) -> Event:
     with get_connection() as connection:
-        connection.execute(
-            """
-            UPDATE runs
-            SET updated_at = CURRENT_TIMESTAMP
-            WHERE id = ?
-            """,
-            (run_id,),
-        )
+        if event_type != "run.heartbeat":
+            connection.execute(
+                """
+                UPDATE runs
+                SET updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (run_id,),
+            )
         cursor = connection.execute(
             """
             INSERT INTO events (run_id, event_type, phase, task_name, agent_name, summary)
@@ -598,6 +599,23 @@ def get_latest_event_for_run(run_id: int, prefix: str) -> Event | None:
             SELECT id, run_id, event_type, phase, task_name, agent_name, summary, created_at
             FROM events
             WHERE run_id = ? AND event_type LIKE ?
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (run_id, f"{prefix}%"),
+        ).fetchone()
+    return Event.from_row(row) if row else None
+
+
+def get_latest_non_heartbeat_event_for_run(run_id: int, prefix: str = "") -> Event | None:
+    with get_connection() as connection:
+        row = connection.execute(
+            """
+            SELECT id, run_id, event_type, phase, task_name, agent_name, summary, created_at
+            FROM events
+            WHERE run_id = ?
+              AND event_type != 'run.heartbeat'
+              AND event_type LIKE ?
             ORDER BY id DESC
             LIMIT 1
             """,

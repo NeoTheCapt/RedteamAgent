@@ -1168,6 +1168,66 @@ def test_run_summary_syncs_run_metadata_updated_at_to_latest_event_when_newer_th
 
 
 
+def test_run_summary_ignores_heartbeat_only_freshness_when_syncing_updated_at(monkeypatch):
+    from app import db as app_db
+    from app.db import database_path
+
+    monkeypatch.setattr("app.services.run_summary._reconcile_run_status", lambda current_run: current_run)
+
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "https://target.example")
+    active_dir = setup_active_engagement(run)
+    (active_dir / "scope.json").write_text(
+        json.dumps(
+            {
+                "hostname": "target.example",
+                "status": "in_progress",
+                "current_phase": "consume_test",
+                "phases_completed": ["recon", "collect"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (active_dir / "log.md").write_text("# log\n", encoding="utf-8")
+    app_db.update_run_status(run["id"], "running")
+
+    stale_activity = datetime(2026, 3, 25, 0, 0, 0, tzinfo=UTC)
+    stale_epoch = stale_activity.timestamp()
+    for path in (active_dir / "scope.json", active_dir / "log.md"):
+        os.utime(path, (stale_epoch, stale_epoch))
+
+    substantive_event_at = "2026-03-25 00:00:30"
+    heartbeat_event_at = datetime.now(UTC).replace(microsecond=0).strftime("%Y-%m-%d %H:%M:%S")
+
+    with sqlite3.connect(database_path()) as connection:
+        connection.execute(
+            "UPDATE runs SET updated_at = ? WHERE id = ?",
+            (heartbeat_event_at, run["id"]),
+        )
+        connection.execute(
+            "INSERT INTO events(run_id, event_type, phase, task_name, agent_name, summary, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (run["id"], "task.completed", "consume-test", "source-analyzer", "source-analyzer", "Substantive event", substantive_event_at),
+        )
+        connection.execute(
+            "INSERT INTO events(run_id, event_type, phase, task_name, agent_name, summary, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (run["id"], "run.heartbeat", "consume-test", "runtime", "launcher", "Heartbeat only", heartbeat_event_at),
+        )
+        connection.commit()
+
+    response = client.get(
+        f"/projects/{project['id']}/runs/{run['id']}/summary",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+
+    run_metadata = json.loads((Path(run["engagement_root"]) / "run.json").read_text(encoding="utf-8"))
+    assert response.json()["overview"]["updated_at"] == substantive_event_at
+    assert run_metadata["updated_at"] == substantive_event_at
+
+
+
 def test_run_summary_repairs_future_skewed_run_updated_at_from_workflow_activity(monkeypatch):
     from app import db as app_db
     from app.db import database_path

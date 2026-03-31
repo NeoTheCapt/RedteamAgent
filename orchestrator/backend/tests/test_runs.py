@@ -1193,6 +1193,84 @@ def test_list_runs_ignores_replayed_opencode_log_mtime_when_text_timestamps_are_
     assert metadata["stop_reason_text"] == "Runtime produced no new output before stall timeout elapsed."
 
 
+def test_list_runs_ignores_recent_heartbeat_events_when_detecting_queue_stalls(monkeypatch):
+    from app.db import database_path
+
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+
+    create_run = client.post(
+        f"/projects/{project['id']}/runs",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"target": "https://example.com"},
+    )
+    assert create_run.status_code == 201
+    run = create_run.json()
+    db.update_run_status(run["id"], "running")
+
+    run_root = Path(run["engagement_root"])
+    workspace = run_root / "workspace"
+    engagement_dir = workspace / "engagements" / "2026-03-28-000000-example"
+    engagement_dir.mkdir(parents=True, exist_ok=True)
+    (workspace / "engagements" / ".active").write_text(
+        "engagements/2026-03-28-000000-example\n",
+        encoding="utf-8",
+    )
+    scope_path = engagement_dir / "scope.json"
+    scope_path.write_text(
+        json.dumps(
+            {
+                "status": "in_progress",
+                "current_phase": "consume_test",
+                "phases_completed": ["recon", "collect"],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    old_epoch = datetime.now().timestamp() - 950
+    os.utime(scope_path, (old_epoch, old_epoch))
+    (engagement_dir / "log.md").write_text("stale consume-test\n", encoding="utf-8")
+    os.utime(engagement_dir / "log.md", (old_epoch, old_epoch))
+    with sqlite3.connect(engagement_dir / "cases.db") as connection:
+        connection.execute(
+            "CREATE TABLE cases (id INTEGER PRIMARY KEY AUTOINCREMENT, status TEXT NOT NULL, assigned_agent TEXT, source TEXT)"
+        )
+        connection.execute(
+            "INSERT INTO cases(status, assigned_agent, source) VALUES ('processing', 'vulnerability-analyst', 'katana')"
+        )
+        connection.commit()
+
+    heartbeat_at = datetime.now(UTC).replace(microsecond=0).strftime("%Y-%m-%d %H:%M:%S")
+    with sqlite3.connect(database_path()) as connection:
+        connection.execute(
+            "INSERT INTO events(run_id, event_type, phase, task_name, agent_name, summary, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (run["id"], "run.heartbeat", "consume-test", "runtime", "launcher", "still waiting", heartbeat_at),
+        )
+        connection.execute(
+            "UPDATE runs SET updated_at = ? WHERE id = ?",
+            (heartbeat_at, run["id"]),
+        )
+        connection.commit()
+
+    monkeypatch.setattr("app.services.runs.locate_runtime_pid", lambda _run: 12345)
+    stopped: list[int] = []
+    monkeypatch.setattr("app.services.runs.stop_run_runtime", lambda reconciled_run: stopped.append(reconciled_run.id))
+
+    runs_response = client.get(
+        f"/projects/{project['id']}/runs",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert runs_response.status_code == 200
+    assert runs_response.json()[0]["status"] == "failed"
+    assert stopped == [run["id"]]
+    metadata = json.loads((run_root / "run.json").read_text(encoding="utf-8"))
+    assert metadata["stop_reason_code"] == "queue_stalled"
+    assert "stall timeout elapsed" in metadata["stop_reason_text"]
+
+
+
 def test_list_runs_keeps_recent_opencode_log_activity_running(monkeypatch):
     client = TestClient(app)
     token = register_and_login(client, "alice")
