@@ -1052,7 +1052,6 @@ def _overview_updated_at(run, active_root: Path, latest_task, latest_phase) -> s
     for value in (
         getattr(latest_task, "created_at", None),
         getattr(latest_phase, "created_at", None),
-        getattr(run, "updated_at", None),
     ):
         parsed = _parse_overview_timestamp(value)
         if parsed is None or _overview_timestamp_is_future_skewed(parsed):
@@ -1104,8 +1103,10 @@ def _summarize_existing_run(run: Run, project: Project, user: User) -> RunSummar
     repaired_future_skew = _overview_timestamp_is_future_skewed(current_run_updated_at)
     if overview_updated_at:
         overview_dt = _parse_overview_timestamp(overview_updated_at)
-        if repaired_future_skew or current_run_updated_at is None or (
-            overview_dt is not None and overview_dt > current_run_updated_at
+        if overview_dt is not None and (
+            repaired_future_skew
+            or current_run_updated_at is None
+            or overview_dt != current_run_updated_at
         ):
             run = db.set_run_updated_at(run.id, overview_updated_at)
     current = _current_activity(events, scope, processing_agents, run.status, str(run_metadata.get("stop_reason_text", "")))

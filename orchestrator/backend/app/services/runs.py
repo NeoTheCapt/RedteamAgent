@@ -243,7 +243,7 @@ def _latest_workflow_activity_at(run: Run, scope_path: Path | None) -> datetime 
             if latest is None or candidate > latest:
                 latest = candidate
 
-    latest_event = db.get_latest_event_for_run(run.id, "")
+    latest_event = db.get_latest_non_heartbeat_event_for_run(run.id)
     event_created_at = _parse_db_timestamp(getattr(latest_event, "created_at", ""))
     if event_created_at is not None and (latest is None or event_created_at > latest):
         latest = event_created_at
