@@ -8,6 +8,7 @@ import tempfile
 import time
 from collections import Counter, defaultdict
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from urllib.parse import quote, urlparse
 
@@ -40,6 +41,45 @@ AGENT_PHASES = {
 }
 DEFAULT_SUBAGENT_ROSTER = tuple(AGENT_PHASES.keys())
 TERMINAL_RUN_STATUSES = {"failed", "completed"}
+OVERVIEW_FUTURE_SKEW = timedelta(minutes=5)
+
+
+def _utc_now_naive() -> datetime:
+    return datetime.now(UTC).replace(tzinfo=None)
+
+
+def _parse_overview_timestamp(value: object) -> datetime | None:
+    if not value:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%SZ"):
+        try:
+            parsed = datetime.strptime(text, fmt)
+            if parsed.tzinfo is not None:
+                parsed = parsed.astimezone(UTC).replace(tzinfo=None)
+            return parsed.replace(tzinfo=None)
+        except ValueError:
+            continue
+    try:
+        normalized = text.replace("Z", "+00:00")
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone(UTC).replace(tzinfo=None)
+    return parsed.replace(tzinfo=None)
+
+
+def _overview_timestamp_is_future_skewed(value: datetime | None) -> bool:
+    if value is None:
+        return False
+    return value - _utc_now_naive() > OVERVIEW_FUTURE_SKEW
+
+
+def _format_overview_timestamp(value: datetime) -> str:
+    return value.replace(microsecond=0).strftime("%Y-%m-%d %H:%M:%S")
 
 
 @dataclass(frozen=True, slots=True)
@@ -1008,16 +1048,22 @@ def _overview_updated_at(run, active_root: Path, latest_task, latest_phase) -> s
     if _is_terminal_run_status(run.status):
         return str(run.updated_at)
 
-    candidates: list[str] = []
-    for value in (getattr(latest_task, "created_at", None), getattr(latest_phase, "created_at", None), getattr(run, "updated_at", None)):
-        if value:
-            candidates.append(str(value))
+    candidates: list[datetime] = []
+    for value in (
+        getattr(latest_task, "created_at", None),
+        getattr(latest_phase, "created_at", None),
+        getattr(run, "updated_at", None),
+    ):
+        parsed = _parse_overview_timestamp(value)
+        if parsed is None or _overview_timestamp_is_future_skewed(parsed):
+            continue
+        candidates.append(parsed)
 
     workflow_activity_at = _latest_workflow_activity_at(run, active_root / "scope.json")
-    if workflow_activity_at is not None:
-        candidates.append(workflow_activity_at.strftime("%Y-%m-%d %H:%M:%S"))
+    if workflow_activity_at is not None and not _overview_timestamp_is_future_skewed(workflow_activity_at):
+        candidates.append(workflow_activity_at.replace(tzinfo=None))
 
-    return max(candidates) if candidates else ""
+    return _format_overview_timestamp(max(candidates)) if candidates else ""
 
 
 def _summarize_existing_run(run: Run, project: Project, user: User) -> RunSummary:
@@ -1054,8 +1100,14 @@ def _summarize_existing_run(run: Run, project: Project, user: User) -> RunSummar
     latest_task = next((event for event in reversed(events) if event.event_type.startswith("task.")), None)
     latest_phase = next((event for event in reversed(events) if event.event_type.startswith("phase.")), None)
     overview_updated_at = _overview_updated_at(run, active_root, latest_task, latest_phase)
-    if overview_updated_at and overview_updated_at > str(run.updated_at):
-        run = db.set_run_updated_at(run.id, overview_updated_at)
+    current_run_updated_at = _parse_overview_timestamp(getattr(run, "updated_at", None))
+    repaired_future_skew = _overview_timestamp_is_future_skewed(current_run_updated_at)
+    if overview_updated_at:
+        overview_dt = _parse_overview_timestamp(overview_updated_at)
+        if repaired_future_skew or current_run_updated_at is None or (
+            overview_dt is not None and overview_dt > current_run_updated_at
+        ):
+            run = db.set_run_updated_at(run.id, overview_updated_at)
     current = _current_activity(events, scope, processing_agents, run.status, str(run_metadata.get("stop_reason_text", "")))
     active_agents = 0 if _is_terminal_run_status(run.status) else sum(1 for agent in agents if agent["status"] == "active")
     available_agents = len(agents)
