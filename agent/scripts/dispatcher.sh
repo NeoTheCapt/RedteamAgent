@@ -6,6 +6,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib/params.sh"
+source "$SCRIPT_DIR/lib/placeholders.sh"
 source "$SCRIPT_DIR/lib/source_queue_filter.sh"
 
 DB="${1:-}"
@@ -150,6 +151,9 @@ case "$ACTION" in
       [[ "$TYPE" == "null" || -z "$TYPE" ]] && TYPE="unknown"
       [[ "$SOURCE" == "null" || -z "$SOURCE" ]] && SOURCE="requeue"
       [[ -z "$URL_PATH" ]] && URL_PATH="$(extract_url_path "$URL")"
+      if contains_queue_placeholder "$URL" || contains_queue_placeholder "$URL_PATH"; then
+        continue
+      fi
       [[ -z "$QUERY_PARAMS" ]] && QUERY_PARAMS="$(extract_query_params "$URL" | jq -c '.')"
       [[ -z "$BODY_PARAMS" ]] && BODY_PARAMS="{}"
       [[ -z "$PATH_PARAMS" ]] && PATH_PARAMS="$(extract_path_params "$URL_PATH" | jq -c '.')"

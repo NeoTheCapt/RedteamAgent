@@ -29,6 +29,7 @@ cat <<'EOF' | "$REQUEUE_SCRIPT" "$db" requeue >/dev/null
 {"method":"GET","url":"https://target.local/docs-v5/broker_en/","url_path":"/docs-v5/broker_en/","type":"page","source":"source-analyzer"}
 {"method":"GET","url":"https://target.local/ftp/incident-support.kdbx","url_path":"/ftp/incident-support.kdbx","type":"data","source":"source-analyzer"}
 {"method":"GET","url":"https://target.local/ftp/acquisitions.md","url_path":"/ftp/acquisitions.md","type":"data","source":"source-analyzer"}
+{"method":"GET","url":"https://target.local/rest/user/security-question?email=<email>","url_path":"/rest/user/security-question","type":"api","source":"vulnerability-analyst"}
 {"method":"GET","url":"https://target.local/default-index.xml","url_path":"/default-index.xml","type":"data","source":"recon-specialist"}
 EOF
 

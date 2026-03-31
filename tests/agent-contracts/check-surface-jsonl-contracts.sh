@@ -99,6 +99,15 @@ after_count=$(wc -l < "$ENG_DIR/surfaces.jsonl")
 grep -q '"target": "GET /real/session/token"' "$ENG_DIR/surfaces.jsonl"
 
 before_count=$(wc -l < "$ENG_DIR/surfaces.jsonl")
+"$ROOT/agent/scripts/append_surface.sh" "$ENG_DIR" account_recovery "PUT http://127.0.0.1:8000/rest/continue-code-fixIt/apply/<continueCode>" vulnerability-analyst "templated continuation segment is not concrete" "direct append" discovered
+"$ROOT/agent/scripts/append_surface.sh" "$ENG_DIR" workflow_token "GET /real/direct/token" source-analyzer "concrete token endpoint remains importable" "direct append" discovered
+
+after_count=$(wc -l < "$ENG_DIR/surfaces.jsonl")
+[[ "$after_count" -eq $((before_count + 1)) ]]
+! grep -q 'real/continue-code-fixIt/apply/<continueCode>' "$ENG_DIR/surfaces.jsonl"
+grep -q '"target": "GET /real/direct/token"' "$ENG_DIR/surfaces.jsonl"
+
+before_count=$(wc -l < "$ENG_DIR/surfaces.jsonl")
 cat <<'EOF' | "$ROOT/agent/scripts/append_surface_jsonl.sh" "$ENG_DIR"
 {"surface_type":"account_recovery","target":"POST /rest/user/reset-password and GET /rest/user/security-question?email=<email>","source":"source-analyzer","rationale":"mixed advisory should preserve the concrete recovery flow while normalizing the templated fragment","status":"discovered"}
 EOF

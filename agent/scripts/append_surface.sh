@@ -14,6 +14,12 @@ RATIONALE="${5:-}"
 EVIDENCE_REF="${6:-}"
 STATUS="${7:-discovered}"
 
+TARGET="$(normalize_surface_placeholder_target "$TARGET")"
+if contains_surface_placeholder "$TARGET"; then
+    echo "WARN: skipping unresolved placeholder surface target: $TARGET" >&2
+    exit 0
+fi
+
 upsert_surface_record "$ENG_DIR" "$SURFACE_TYPE" "$TARGET" "$SOURCE_NAME" "$RATIONALE" "$EVIDENCE_REF" "$STATUS"
 
 if [[ -f "$EMIT_RUNTIME_EVENT" ]]; then
