@@ -472,7 +472,7 @@ activate_plain_katana_fallback() {
         return 0
     fi
 
-    echo "[katana_ingest] Activating plain katana fallback after ${KATANA_RECOVERABLE_ERROR_LINES} recoverable hybrid errors and no successful crawl rows"
+    echo "[katana_ingest] Activating headless katana fallback after ${KATANA_RECOVERABLE_ERROR_LINES} recoverable hybrid errors and no successful crawl rows"
     stop_katana >/dev/null 2>&1 || true
     sanitize_katana_output_for_restart
 
