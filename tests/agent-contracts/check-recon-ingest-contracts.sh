@@ -29,6 +29,7 @@ cat <<'EOF' | "$SCRIPT" "$db" source-analyzer >/dev/null
 {"method":"POST","url":"http://host.docker.internal:8000/rest/user/login","url_path":"/rest/user/login","type":"api","query_params":{},"body_params":{"email":"demo@target.local","password":"Password123!"},"path_params":{},"cookie_params":{"sid":"abc123"}}
 {"method":"GET","url":"http://localhost:3000/.well-known/csaf/provider-metadata.json","url_path":"/.well-known/csaf/provider-metadata.json","type":"data"}
 {"method":"GET","url":"http://127.0.0.1:8000/rest/products/42/reviews?limit=5","url_path":"/rest/products/42/reviews","type":"api","query_params":{"limit":"5"},"body_params":{},"path_params":{"seg_3":"42"}}
+- `GET http://host.docker.internal:8000/rest/chatbot/status`
 {"method":"PUT","url":"https://target.local/rest/continue-code-fixIt/apply/<continueCode>","type":"api"}
 {"method":"GET","url":"https://target.local/swagger/*","type":"api"}
 EOF
@@ -43,7 +44,7 @@ con = sqlite3.connect(db)
 rows = con.execute(
     "select method,url,url_path,query_params,body_params,path_params,cookie_params,type,source,params_key_sig from cases order by id"
 ).fetchall()
-assert len(rows) == 2, rows
+assert len(rows) == 3, rows
 
 post = rows[0]
 assert post[0] == "POST", post
@@ -63,6 +64,14 @@ assert json.loads(get[3])["limit"] == "5", get
 assert json.loads(get[5])["seg_3"] == "42", get
 assert get[7] == "api", get
 assert get[8] == "source-analyzer", get
+
+status = rows[2]
+assert status[0] == "GET", status
+assert status[1] == "http://127.0.0.1:8000/rest/chatbot/status", status
+assert status[2] == "/rest/chatbot/status", status
+assert status[7] == "api", status
+assert status[8] == "source-analyzer", status
+
 assert not any("localhost:3000" in row[1] for row in rows), rows
 PY
 
