@@ -23,6 +23,7 @@ from .launcher import (
     _last_logged_stop_metadata,
     _latest_process_log_activity_at,
     _maybe_auto_resume_run,
+    _start_container_supervisor,
     _write_run_terminal_reason,
     engagement_completion_state,
     locate_runtime_pid,
@@ -158,17 +159,35 @@ def _parse_db_timestamp(value: str) -> datetime | None:
 
 
 def _active_scope_path(run: Run) -> Path | None:
-    engagement_dir = Path(run.engagement_root) / "workspace" / "engagements"
+    workspace = Path(run.engagement_root) / "workspace"
+    engagement_dir = workspace / "engagements"
     active_file = engagement_dir / ".active"
-    if not active_file.exists():
-        return None
+    if active_file.exists():
+        active_name = active_file.read_text(encoding="utf-8").strip()
+        if active_name:
+            active_path = Path(active_name)
+            if active_path.is_absolute():
+                scope_path = active_path / "scope.json"
+            else:
+                active_relative = active_name.removeprefix("./").removeprefix("/")
+                scope_path = (
+                    workspace / active_relative / "scope.json"
+                    if active_relative.startswith("engagements/")
+                    else engagement_dir / active_relative / "scope.json"
+                )
+            if scope_path.exists():
+                return scope_path
 
-    active_name = active_file.read_text(encoding="utf-8").strip().removeprefix("./").removeprefix("/")
-    if not active_name:
-        return None
-    if active_name.startswith("engagements/"):
-        return Path(run.engagement_root) / "workspace" / active_name / "scope.json"
-    return engagement_dir / active_name / "scope.json"
+    candidates = (
+        sorted(
+            [path for path in engagement_dir.iterdir() if path.is_dir() and (path / "scope.json").exists()],
+            key=lambda path: (path.stat().st_mtime, path.name),
+            reverse=True,
+        )
+        if engagement_dir.exists()
+        else []
+    )
+    return candidates[0] / "scope.json" if candidates else None
 
 
 def _utc_now_naive() -> datetime:
@@ -211,20 +230,24 @@ def _latest_runtime_activity_at(run: Run) -> datetime | None:
 
 def _latest_workflow_activity_at(run: Run, scope_path: Path | None) -> datetime | None:
     latest = None
-    if scope_path is None or not scope_path.exists():
-        return latest
+    if scope_path is not None and scope_path.exists():
+        for path in (
+            scope_path,
+            scope_path.parent / "log.md",
+            scope_path.parent / "findings.md",
+            scope_path.parent / "report.md",
+        ):
+            candidate = _path_mtime(path)
+            if candidate is None:
+                continue
+            if latest is None or candidate > latest:
+                latest = candidate
 
-    for path in (
-        scope_path,
-        scope_path.parent / "log.md",
-        scope_path.parent / "findings.md",
-        scope_path.parent / "report.md",
-    ):
-        candidate = _path_mtime(path)
-        if candidate is None:
-            continue
-        if latest is None or candidate > latest:
-            latest = candidate
+    latest_event = db.get_latest_non_heartbeat_event_for_run(run.id)
+    event_created_at = _parse_db_timestamp(getattr(latest_event, "created_at", ""))
+    if event_created_at is not None and (latest is None or event_created_at > latest):
+        latest = event_created_at
+
     return latest
 
 
@@ -381,26 +404,41 @@ def _reconcile_run_status(run: Run, project: Project | None = None, user: User |
                 stop_run_runtime(failed)
                 return failed
 
-            if (
-                current_phase.replace("_", "-") in EARLY_PHASE_STALL_PHASES
-                and total_cases == 0
-                and log_age >= timedelta(seconds=EARLY_PHASE_STALL_TIMEOUT_SECONDS)
-            ):
-                failed = db.update_run_status(run.id, "failed")
-                _write_run_terminal_reason(
-                    failed,
-                    reason_code="recon_stalled",
-                    reason_text="Runtime stalled in early recon/collect without producing any observed paths.",
-                )
-                stop_run_runtime(failed)
-                return failed
+        early_phase_activity_at = last_activity_at
+        if workflow_activity_at is not None and (
+            early_phase_activity_at is None or workflow_activity_at > early_phase_activity_at
+        ):
+            early_phase_activity_at = workflow_activity_at
+
+        if (
+            current_phase.replace("_", "-") in EARLY_PHASE_STALL_PHASES
+            and total_cases == 0
+            and early_phase_activity_at is not None
+            and (_utc_now_naive() - early_phase_activity_at) >= timedelta(seconds=EARLY_PHASE_STALL_TIMEOUT_SECONDS)
+        ):
+            failed = db.update_run_status(run.id, "failed")
+            _write_run_terminal_reason(
+                failed,
+                reason_code="recon_stalled",
+                reason_text="Runtime stalled in early recon/collect without producing any observed paths.",
+            )
+            stop_run_runtime(failed)
+            return failed
         if run.status == "running":
             run = _sync_run_updated_at_from_activity(run, workflow_activity_at, last_activity_at)
         if run.status != "running":
             refreshed = db.update_run_status(run.id, "running")
             _clear_run_terminal_reason(refreshed)
+            if project is not None and user is not None:
+                from .run_summary import refresh_run_metadata_projection
+
+                refresh_run_metadata_projection(refreshed, project, user)
             return refreshed
         _clear_run_terminal_reason(run)
+        if project is not None and user is not None:
+            from .run_summary import refresh_run_metadata_projection
+
+            refresh_run_metadata_projection(run, project, user)
         return run
 
     if run.status == "completed":
@@ -453,6 +491,26 @@ def _reconcile_run_status(run: Run, project: Project | None = None, user: User |
         stop_run_runtime(failed)
         return failed
     return run
+
+
+def recover_active_run_supervisors_on_startup() -> None:
+    for run in db.list_runs_by_status("running"):
+        project = db.get_project_by_id(run.project_id)
+        if project is None:
+            continue
+        user = db.get_user_by_id(project.user_id)
+        if user is None:
+            continue
+
+        reconciled = _reconcile_run_status(run, project=project, user=user)
+        if reconciled.status != "running":
+            continue
+
+        runtime_pid = locate_runtime_pid(reconciled)
+        if runtime_pid in {None, RUNTIME_PID_LOOKUP_UNAVAILABLE}:
+            continue
+
+        _start_container_supervisor(reconciled, project, user)
 
 
 def list_runs_for_project(project_id: int, user: User) -> list[Run]:

@@ -57,6 +57,7 @@ def _artifact_snapshot(engagement_dir: Path) -> dict[str, Any]:
         "files": {
             "engagement_dir": str(engagement_dir),
             "cases_db_exists": False,
+            "cases_db_error": "",
             "surfaces_lines": 0,
             "katana_output_lines": 0,
             "katana_error_tail": "",
@@ -85,42 +86,51 @@ def _artifact_snapshot(engagement_dir: Path) -> dict[str, Any]:
     if not cases_db.exists():
         return artifact
 
-    with sqlite3.connect(cases_db) as connection:
-        columns = {str(row[1]) for row in connection.execute("PRAGMA table_info(cases)").fetchall()}
-        type_rows = connection.execute(
-            "SELECT type, status, COUNT(*) FROM cases GROUP BY type, status"
-        ).fetchall()
-        processing_rows = (
-            connection.execute(
-                "SELECT assigned_agent, COUNT(*) "
-                "FROM cases "
-                "WHERE status = 'processing' AND assigned_agent IS NOT NULL AND assigned_agent != '' "
-                "GROUP BY assigned_agent"
+    try:
+        with sqlite3.connect(cases_db) as connection:
+            columns = {str(row[1]) for row in connection.execute("PRAGMA table_info(cases)").fetchall()}
+            if not columns:
+                artifact["files"]["cases_db_error"] = "cases table missing"
+                artifact["integrity"]["reasons"].append("artifact_cases_table_missing")
+                return artifact
+            type_rows = connection.execute(
+                "SELECT type, status, COUNT(*) FROM cases GROUP BY type, status"
             ).fetchall()
-            if "assigned_agent" in columns
-            else []
-        )
-        source_rows = (
-            connection.execute(
-                "SELECT COALESCE(source, '(unknown)'), COUNT(*) "
-                "FROM cases GROUP BY 1 ORDER BY 2 DESC, 1"
-            ).fetchall()
-            if "source" in columns
-            else []
-        )
-        selected_columns = [
-            name for name in ("method", "url", "type", "status", "assigned_agent", "source") if name in columns
-        ]
-        observed_rows = (
-            connection.execute(
-                f"SELECT {', '.join(selected_columns)} FROM cases "
-                "ORDER BY "
-                "CASE WHEN status = 'processing' THEN 0 WHEN status = 'pending' THEN 1 WHEN status = 'done' THEN 2 ELSE 3 END, "
-                "type, url"
-            ).fetchall()
-            if selected_columns
-            else []
-        )
+            processing_rows = (
+                connection.execute(
+                    "SELECT assigned_agent, COUNT(*) "
+                    "FROM cases "
+                    "WHERE status = 'processing' AND assigned_agent IS NOT NULL AND assigned_agent != '' "
+                    "GROUP BY assigned_agent"
+                ).fetchall()
+                if "assigned_agent" in columns
+                else []
+            )
+            source_rows = (
+                connection.execute(
+                    "SELECT COALESCE(source, '(unknown)'), COUNT(*) "
+                    "FROM cases GROUP BY 1 ORDER BY 2 DESC, 1"
+                ).fetchall()
+                if "source" in columns
+                else []
+            )
+            selected_columns = [
+                name for name in ("method", "url", "type", "status", "assigned_agent", "source") if name in columns
+            ]
+            observed_rows = (
+                connection.execute(
+                    f"SELECT {', '.join(selected_columns)} FROM cases "
+                    "ORDER BY "
+                    "CASE WHEN status = 'processing' THEN 0 WHEN status = 'pending' THEN 1 WHEN status = 'done' THEN 2 ELSE 3 END, "
+                    "type, url"
+                ).fetchall()
+                if selected_columns
+                else []
+            )
+    except sqlite3.Error as exc:
+        artifact["files"]["cases_db_error"] = str(exc)
+        artifact["integrity"]["reasons"].append(f"artifact_cases_db_read_failed:{exc.__class__.__name__}")
+        return artifact
 
     metrics = artifact["cases"]
     by_type: dict[str, Counter] = defaultdict(Counter)
@@ -197,21 +207,28 @@ artifact_total_cases = int(artifact["cases"]["total_cases"])
 artifact_observed_total = len(artifact["observed_paths"])
 katana_output_lines = int(artifact["files"]["katana_output_lines"])
 
-reasons: list[str] = []
+reasons: list[str] = list(artifact.get("integrity", {}).get("reasons", []))
+fallback_reasons: list[str] = []
 if artifact_total_cases > 0 and api_total_cases == 0:
     artifact["integrity"]["summary_api_suspicious"] = True
-    reasons.append("api_summary_zero_cases_while_cases_db_has_rows")
+    reason = "api_summary_zero_cases_while_cases_db_has_rows"
+    reasons.append(reason)
+    fallback_reasons.append(reason)
 if artifact_observed_total > 0 and api_observed_total == 0:
     artifact["integrity"]["observed_api_suspicious"] = True
-    reasons.append("api_observed_paths_empty_while_cases_db_has_rows")
+    reason = "api_observed_paths_empty_while_cases_db_has_rows"
+    reasons.append(reason)
+    fallback_reasons.append(reason)
 if katana_output_lines > 0 and api_observed_total == 0:
     artifact["integrity"]["observed_api_suspicious"] = True
-    reasons.append("api_observed_paths_empty_while_katana_output_exists")
+    reason = "api_observed_paths_empty_while_katana_output_exists"
+    reasons.append(reason)
+    fallback_reasons.append(reason)
 artifact["integrity"]["reasons"] = reasons
 
 patched_summary = json.loads(json.dumps(summary)) if isinstance(summary, dict) else {}
 patched_observed_paths = observed_paths if isinstance(observed_paths, list) else []
-if reasons:
+if fallback_reasons:
     coverage = patched_summary.setdefault("coverage", {})
     for key in (
         "total_cases",
@@ -241,7 +258,7 @@ else:
         {
             "coverage_source": "api",
             "observed_paths_source": "api",
-            "reasons": [],
+            "reasons": reasons,
         }
     )
 

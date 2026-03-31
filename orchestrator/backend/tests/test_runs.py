@@ -51,6 +51,9 @@ def test_create_run_and_list_project_runs(isolate_data_dir):
     )
     assert run_payload["created_at"]
     assert run_payload["updated_at"]
+    assert run_payload["ended_at"] is None
+    assert run_payload["stop_reason_code"] is None
+    assert run_payload["stop_reason_text"] is None
 
     run_metadata = json.loads((Path(run_payload["engagement_root"]) / "run.json").read_text(encoding="utf-8"))
     assert run_metadata["id"] == run_payload["id"]
@@ -236,6 +239,160 @@ def test_list_runs_syncs_updated_at_from_live_workflow_activity(monkeypatch):
 
 
 
+def test_list_runs_projects_live_agent_state_into_run_metadata(monkeypatch):
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+
+    create_run = client.post(
+        f"/projects/{project['id']}/runs",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"target": "http://127.0.0.1:8000"},
+    )
+    assert create_run.status_code == 201
+    run = create_run.json()
+    db.update_run_status(run["id"], "running")
+
+    run_root = Path(run["engagement_root"])
+    workspace = run_root / "workspace"
+    engagement_dir = workspace / "engagements" / "2026-03-30-000000-local"
+    engagement_dir.mkdir(parents=True, exist_ok=True)
+    (workspace / "engagements" / ".active").write_text(
+        "engagements/2026-03-30-000000-local\n",
+        encoding="utf-8",
+    )
+    (engagement_dir / "scope.json").write_text(
+        json.dumps(
+            {
+                "hostname": "127.0.0.1",
+                "status": "in_progress",
+                "current_phase": "consume_test",
+                "phases_completed": ["recon", "collect"],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (engagement_dir / "log.md").write_text("# Engagement Log\n", encoding="utf-8")
+    with sqlite3.connect(engagement_dir / "cases.db") as connection:
+        connection.execute(
+            "CREATE TABLE cases (id INTEGER PRIMARY KEY AUTOINCREMENT, type TEXT NOT NULL, status TEXT NOT NULL, assigned_agent TEXT, source TEXT)"
+        )
+        connection.execute(
+            "INSERT INTO cases(type, status, assigned_agent, source) VALUES ('api', 'processing', 'vulnerability-analyst', 'katana')"
+        )
+        connection.commit()
+
+    event_response = client.post(
+        f"/projects/{project['id']}/runs/{run['id']}/events",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "event_type": "task.started",
+            "phase": "consume-test",
+            "task_name": "vulnerability-analyst",
+            "agent_name": "vulnerability-analyst",
+            "summary": "Analysis start",
+        },
+    )
+    assert event_response.status_code == 201
+
+    monkeypatch.setattr("app.services.runs.locate_runtime_pid", lambda _run: 12345)
+    monkeypatch.setattr("app.services.runs.stop_run_runtime", lambda _run: None)
+
+    runs_response = client.get(
+        f"/projects/{project['id']}/runs",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert runs_response.status_code == 200
+    assert runs_response.json()[0]["status"] == "running"
+
+    metadata = json.loads((run_root / "run.json").read_text(encoding="utf-8"))
+    assert metadata["current_action"] == {
+        "phase": "consume-test",
+        "task_name": "vulnerability-analyst",
+        "agent_name": "vulnerability-analyst",
+        "summary": "Analysis start",
+    }
+    consume_phase = next(item for item in metadata["phase_waterfall"] if item["phase"] == "consume-test")
+    assert consume_phase["state"] == "active"
+    assert consume_phase["active_agents"] == 1
+    agent_card = next(item for item in metadata["agents"] if item["agent_name"] == "vulnerability-analyst")
+    assert agent_card["status"] == "active"
+    assert agent_card["summary"] == "Analysis start"
+
+
+
+def test_list_runs_syncs_updated_at_from_latest_event_when_newer_than_workflow_files(monkeypatch):
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+
+    create_run = client.post(
+        f"/projects/{project['id']}/runs",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"target": "https://example.com"},
+    )
+    assert create_run.status_code == 201
+    run = create_run.json()
+    db.update_run_status(run["id"], "running")
+
+    run_root = Path(run["engagement_root"])
+    workspace = run_root / "workspace"
+    engagement_dir = workspace / "engagements" / "2026-03-28-000000-example"
+    engagement_dir.mkdir(parents=True, exist_ok=True)
+    (workspace / "engagements" / ".active").write_text(
+        "engagements/2026-03-28-000000-example\n",
+        encoding="utf-8",
+    )
+
+    scope_path = engagement_dir / "scope.json"
+    scope_path.write_text(
+        json.dumps(
+            {
+                "status": "in_progress",
+                "current_phase": "consume_test",
+                "phases_completed": ["recon", "collect"],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (engagement_dir / "log.md").write_text("recent activity\n", encoding="utf-8")
+    stale_activity = datetime(2026, 3, 25, 0, 0, 0, tzinfo=UTC)
+    stale_epoch = stale_activity.timestamp()
+    os.utime(scope_path, (stale_epoch, stale_epoch))
+    os.utime(engagement_dir / "log.md", (stale_epoch, stale_epoch))
+
+    with sqlite3.connect(database_path()) as connection:
+        connection.execute(
+            "UPDATE runs SET updated_at = '2026-03-25 00:00:00' WHERE id = ?",
+            (run["id"],),
+        )
+        connection.execute(
+            "INSERT INTO events(run_id, event_type, phase, task_name, agent_name, summary, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (run["id"], "task.completed", "consume-test", "source-analyzer", "source-analyzer", "Late event", "2026-03-30 09:40:45"),
+        )
+        connection.commit()
+
+    monkeypatch.setattr("app.services.runs.locate_runtime_pid", lambda _run: 12345)
+    stopped: list[int] = []
+    monkeypatch.setattr("app.services.runs.stop_run_runtime", lambda reconciled_run: stopped.append(reconciled_run.id))
+
+    runs_response = client.get(
+        f"/projects/{project['id']}/runs",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert runs_response.status_code == 200
+    payload = runs_response.json()[0]
+    assert payload["status"] == "running"
+    assert payload["updated_at"] == "2026-03-30 09:40:45"
+    assert stopped == []
+
+    metadata = json.loads((run_root / "run.json").read_text(encoding="utf-8"))
+    assert metadata["updated_at"] == payload["updated_at"]
+
+
+
 def test_list_runs_repairs_future_skewed_updated_at_from_live_workflow_activity(monkeypatch):
     client = TestClient(app)
     token = register_and_login(client, "alice")
@@ -289,6 +446,58 @@ def test_list_runs_repairs_future_skewed_updated_at_from_live_workflow_activity(
         connection.execute(
             "UPDATE runs SET updated_at = ? WHERE id = ?",
             (future_skewed.strftime("%Y-%m-%d %H:%M:%S"), run["id"]),
+        )
+        connection.commit()
+
+    monkeypatch.setattr("app.services.runs.locate_runtime_pid", lambda _run: 12345)
+    stopped: list[int] = []
+    monkeypatch.setattr("app.services.runs.stop_run_runtime", lambda reconciled_run: stopped.append(reconciled_run.id))
+
+    runs_response = client.get(
+        f"/projects/{project['id']}/runs",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert runs_response.status_code == 200
+    payload = runs_response.json()[0]
+    assert payload["status"] == "running"
+    assert payload["updated_at"] == recent_activity.strftime("%Y-%m-%d %H:%M:%S")
+    assert stopped == []
+
+    metadata = json.loads((run_root / "run.json").read_text(encoding="utf-8"))
+    assert metadata["updated_at"] == payload["updated_at"]
+
+
+
+def test_list_runs_ignores_future_timestamps_embedded_in_process_log_text(monkeypatch):
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+
+    create_run = client.post(
+        f"/projects/{project['id']}/runs",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"target": "https://example.com"},
+    )
+    assert create_run.status_code == 201
+    run = create_run.json()
+    db.update_run_status(run["id"], "running")
+
+    run_root = Path(run["engagement_root"])
+    runtime_dir = run_root / "runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    process_log = runtime_dir / "process.log"
+    process_log.write_text(
+        "Exploit response included paymentDue=2026-04-14T06:09:11.080Z but runtime is still active\n",
+        encoding="utf-8",
+    )
+    recent_activity = datetime.now(UTC).replace(microsecond=0)
+    recent_epoch = recent_activity.timestamp()
+    os.utime(process_log, (recent_epoch, recent_epoch))
+
+    with sqlite3.connect(database_path()) as connection:
+        connection.execute(
+            "UPDATE runs SET updated_at = '2026-03-25 00:00:00' WHERE id = ?",
+            (run["id"],),
         )
         connection.commit()
 
@@ -987,6 +1196,84 @@ def test_list_runs_ignores_replayed_opencode_log_mtime_when_text_timestamps_are_
     assert metadata["stop_reason_text"] == "Runtime produced no new output before stall timeout elapsed."
 
 
+def test_list_runs_ignores_recent_heartbeat_events_when_detecting_queue_stalls(monkeypatch):
+    from app.db import database_path
+
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+
+    create_run = client.post(
+        f"/projects/{project['id']}/runs",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"target": "https://example.com"},
+    )
+    assert create_run.status_code == 201
+    run = create_run.json()
+    db.update_run_status(run["id"], "running")
+
+    run_root = Path(run["engagement_root"])
+    workspace = run_root / "workspace"
+    engagement_dir = workspace / "engagements" / "2026-03-28-000000-example"
+    engagement_dir.mkdir(parents=True, exist_ok=True)
+    (workspace / "engagements" / ".active").write_text(
+        "engagements/2026-03-28-000000-example\n",
+        encoding="utf-8",
+    )
+    scope_path = engagement_dir / "scope.json"
+    scope_path.write_text(
+        json.dumps(
+            {
+                "status": "in_progress",
+                "current_phase": "consume_test",
+                "phases_completed": ["recon", "collect"],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    old_epoch = datetime.now().timestamp() - 950
+    os.utime(scope_path, (old_epoch, old_epoch))
+    (engagement_dir / "log.md").write_text("stale consume-test\n", encoding="utf-8")
+    os.utime(engagement_dir / "log.md", (old_epoch, old_epoch))
+    with sqlite3.connect(engagement_dir / "cases.db") as connection:
+        connection.execute(
+            "CREATE TABLE cases (id INTEGER PRIMARY KEY AUTOINCREMENT, status TEXT NOT NULL, assigned_agent TEXT, source TEXT)"
+        )
+        connection.execute(
+            "INSERT INTO cases(status, assigned_agent, source) VALUES ('processing', 'vulnerability-analyst', 'katana')"
+        )
+        connection.commit()
+
+    heartbeat_at = datetime.now(UTC).replace(microsecond=0).strftime("%Y-%m-%d %H:%M:%S")
+    with sqlite3.connect(database_path()) as connection:
+        connection.execute(
+            "INSERT INTO events(run_id, event_type, phase, task_name, agent_name, summary, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (run["id"], "run.heartbeat", "consume-test", "runtime", "launcher", "still waiting", heartbeat_at),
+        )
+        connection.execute(
+            "UPDATE runs SET updated_at = ? WHERE id = ?",
+            (heartbeat_at, run["id"]),
+        )
+        connection.commit()
+
+    monkeypatch.setattr("app.services.runs.locate_runtime_pid", lambda _run: 12345)
+    stopped: list[int] = []
+    monkeypatch.setattr("app.services.runs.stop_run_runtime", lambda reconciled_run: stopped.append(reconciled_run.id))
+
+    runs_response = client.get(
+        f"/projects/{project['id']}/runs",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert runs_response.status_code == 200
+    assert runs_response.json()[0]["status"] == "failed"
+    assert stopped == [run["id"]]
+    metadata = json.loads((run_root / "run.json").read_text(encoding="utf-8"))
+    assert metadata["stop_reason_code"] == "queue_stalled"
+    assert "stall timeout elapsed" in metadata["stop_reason_text"]
+
+
+
 def test_list_runs_keeps_recent_opencode_log_activity_running(monkeypatch):
     client = TestClient(app)
     token = register_and_login(client, "alice")
@@ -1436,10 +1723,15 @@ def test_list_runs_marks_completed_scope_as_completed_even_if_runtime_is_still_a
         headers={"Authorization": f"Bearer {token}"},
     )
     assert runs_response.status_code == 200
-    assert runs_response.json()[0]["status"] == "completed"
+    payload = runs_response.json()[0]
+    assert payload["status"] == "completed"
     metadata = json.loads((run_root / "run.json").read_text(encoding="utf-8"))
     assert metadata["stop_reason_code"] == "completed"
     assert metadata["stop_reason_text"] == "Run completed successfully."
+    assert metadata["ended_at"] == run["updated_at"]
+    assert payload["stop_reason_code"] == "completed"
+    assert payload["stop_reason_text"] == "Run completed successfully."
+    assert payload["ended_at"] == run["updated_at"]
     assert stopped == [run["id"]]
 
 
@@ -1501,12 +1793,17 @@ def test_list_runs_marks_completed_scope_alias_as_completed(monkeypatch):
         headers={"Authorization": f"Bearer {token}"},
     )
     assert runs_response.status_code == 200
-    assert runs_response.json()[0]["status"] == "completed"
+    payload = runs_response.json()[0]
+    assert payload["status"] == "completed"
     normalized = json.loads(scope_path.read_text(encoding="utf-8"))
     assert normalized["status"] == "complete"
     metadata = json.loads((run_root / "run.json").read_text(encoding="utf-8"))
     assert metadata["stop_reason_code"] == "completed"
     assert metadata["stop_reason_text"] == "Run completed successfully."
+    assert metadata["ended_at"] == run["updated_at"]
+    assert payload["stop_reason_code"] == "completed"
+    assert payload["stop_reason_text"] == "Run completed successfully."
+    assert payload["ended_at"] == run["updated_at"]
     assert stopped == [run["id"]]
 
 
@@ -1565,10 +1862,15 @@ def test_list_runs_marks_completed_scope_as_completed_when_runtime_has_already_e
         headers={"Authorization": f"Bearer {token}"},
     )
     assert runs_response.status_code == 200
-    assert runs_response.json()[0]["status"] == "completed"
+    payload = runs_response.json()[0]
+    assert payload["status"] == "completed"
     metadata = json.loads((run_root / "run.json").read_text(encoding="utf-8"))
     assert metadata["stop_reason_code"] == "completed"
     assert metadata["stop_reason_text"] == "Run completed successfully."
+    assert metadata["ended_at"] == run["updated_at"]
+    assert payload["stop_reason_code"] == "completed"
+    assert payload["stop_reason_text"] == "Run completed successfully."
+    assert payload["ended_at"] == run["updated_at"]
 
 
 def test_list_runs_rewrites_stale_terminal_reason_when_completed_scope_is_already_final(monkeypatch):
@@ -1632,10 +1934,15 @@ def test_list_runs_rewrites_stale_terminal_reason_when_completed_scope_is_alread
         headers={"Authorization": f"Bearer {token}"},
     )
     assert runs_response.status_code == 200
-    assert runs_response.json()[0]["status"] == "completed"
+    payload = runs_response.json()[0]
+    assert payload["status"] == "completed"
     refreshed = json.loads(metadata_path.read_text(encoding="utf-8"))
     assert refreshed["stop_reason_code"] == "completed"
     assert refreshed["stop_reason_text"] == "Run completed successfully."
+    assert refreshed["ended_at"] == run["updated_at"]
+    assert payload["stop_reason_code"] == "completed"
+    assert payload["stop_reason_text"] == "Run completed successfully."
+    assert payload["ended_at"] == run["updated_at"]
 
 
 def test_list_runs_normalizes_scope_phase_aliases(monkeypatch):
@@ -1832,6 +2139,71 @@ def test_list_runs_marks_early_recon_stall_failed_even_if_pid_is_alive(monkeypat
     assert stopped == [run["id"]]
     metadata = json.loads((run_root / "run.json").read_text(encoding="utf-8"))
     assert metadata["stop_reason_code"] == "queue_stalled"
+
+
+def test_list_runs_keeps_early_recon_running_when_workflow_activity_is_recent(monkeypatch):
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+
+    create_run = client.post(
+        f"/projects/{project['id']}/runs",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"target": "https://example.com"},
+    )
+    assert create_run.status_code == 201
+    run = create_run.json()
+    db.update_run_status(run["id"], "running")
+
+    run_root = Path(run["engagement_root"])
+    runtime_dir = run_root / "runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    process_log = runtime_dir / "process.log"
+    process_log.write_text("stalled recon\n", encoding="utf-8")
+    old_epoch = datetime.now().timestamp() - 240
+    os.utime(process_log, (old_epoch, old_epoch))
+
+    workspace = run_root / "workspace"
+    engagement_dir = workspace / "engagements" / "2026-03-28-000000-example-recent-workflow"
+    engagement_dir.mkdir(parents=True, exist_ok=True)
+    (workspace / "engagements" / ".active").write_text(
+        "engagements/2026-03-28-000000-example-recent-workflow\n",
+        encoding="utf-8",
+    )
+    scope_path = engagement_dir / "scope.json"
+    scope_path.write_text(
+        json.dumps(
+            {
+                "status": "in_progress",
+                "current_phase": "recon",
+                "phases_completed": [],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    recent_epoch = datetime.now().timestamp() - 15
+    os.utime(scope_path, (recent_epoch, recent_epoch))
+    log_path = engagement_dir / "log.md"
+    log_path.write_text("recent source analysis summary\n", encoding="utf-8")
+    os.utime(log_path, (recent_epoch, recent_epoch))
+    with sqlite3.connect(engagement_dir / "cases.db") as connection:
+        connection.execute(
+            "CREATE TABLE cases (id INTEGER PRIMARY KEY AUTOINCREMENT, status TEXT NOT NULL)"
+        )
+        connection.commit()
+
+    monkeypatch.setattr("app.services.runs.locate_runtime_pid", lambda _run: 12345)
+    stopped: list[int] = []
+    monkeypatch.setattr("app.services.runs.stop_run_runtime", lambda reconciled_run: stopped.append(reconciled_run.id))
+
+    runs_response = client.get(
+        f"/projects/{project['id']}/runs",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert runs_response.status_code == 200
+    assert runs_response.json()[0]["status"] == "running"
+    assert stopped == []
 
 
 def test_delete_run_removes_runtime_files_and_db_records():

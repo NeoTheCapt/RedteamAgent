@@ -53,8 +53,10 @@ next_finding_id() {
 
     prefix="$(finding_prefix_for_agent "$agent_name")"
     max_id="$(
-        rg -o "FINDING-${prefix}-[0-9]{3}" "$findings_file" 2>/dev/null \
+        rg --text -o "FINDING-${prefix}-[0-9]{3}" "$findings_file" 2>/dev/null \
             | sed "s/FINDING-${prefix}-//" \
+            | tr -d '\r' \
+            | awk '/^[0-9]+$/' \
             | sort -n \
             | tail -1
     )"
@@ -145,6 +147,14 @@ def normalize_route(route: str) -> str:
     return ""
 
 
+def normalize_artifact_ref(value: str) -> str:
+    token = strip_wrapping(value)
+    if not token:
+        return ""
+    token = token.removeprefix("./")
+    return normalize_space(token)
+
+
 def extract_route(text: str) -> str:
     candidates = [
         field_value(text, "Parameter"),
@@ -186,6 +196,32 @@ def extract_route(text: str) -> str:
     return ""
 
 
+def extract_artifact_ref(text: str) -> str:
+    candidates = [
+        field_value(text, "Evidence"),
+        field_value(text, "Evidence Ref"),
+        field_value(text, "Parameter"),
+        field_value(text, "Target"),
+        text,
+    ]
+
+    artifact_pattern = re.compile(
+        r"(?<![A-Za-z0-9])((?:[A-Za-z0-9._-]+/)*[A-Za-z0-9._-]+\.(?:js|mjs|cjs|css|html|json|map|txt|md|wasm)(?::\d+(?::\d+)?)?)"
+    )
+
+    for candidate in candidates:
+        if not candidate:
+            continue
+        match = artifact_pattern.search(candidate)
+        if not match:
+            continue
+        normalized = normalize_artifact_ref(match.group(1))
+        if normalized:
+            return normalized
+
+    return ""
+
+
 def split_findings(text: str):
     blocks = []
     current = []
@@ -207,13 +243,16 @@ def parse_finding(text: str) -> dict[str, str]:
     title = heading.group(2) if heading else ""
     severity = normalize_space(field_value(text, "Severity"))
     owasp = normalize_space(field_value(text, "OWASP Category"))
+    finding_type = normalize_space(field_value(text, "Type"))
     return {
         "id": finding_id,
         "title": title,
         "title_norm": normalize_space(title),
         "severity": severity,
         "owasp": owasp,
+        "type": finding_type,
         "route": extract_route(text),
+        "artifact_ref": extract_artifact_ref(text),
     }
 PY
 }
@@ -251,6 +290,14 @@ for block in split_findings(findings_path.read_text(encoding="utf-8")):
     ):
         print(existing["id"])
         raise SystemExit(0)
+    if (
+        candidate["artifact_ref"]
+        and candidate["type"]
+        and existing["artifact_ref"] == candidate["artifact_ref"]
+        and existing["type"] == candidate["type"]
+    ):
+        print(existing["id"])
+        raise SystemExit(0)
 PY
 }
 
@@ -263,16 +310,24 @@ import sys
 from pathlib import Path
 
 path = Path(sys.argv[1])
-seen = {}
+seen_route = {}
+seen_artifact = {}
 for block in split_findings(path.read_text(encoding="utf-8")):
     finding = parse_finding(block)
-    if not (finding["id"] and finding["route"] and finding["severity"] and finding["owasp"]):
-        continue
-    signature = f"{finding['route']}\t{finding['owasp']}\t{finding['severity']}"
-    if signature in seen:
-        print(f"{seen[signature]} <-> {finding['id']}: {finding['title']}")
-    else:
-        seen[signature] = finding["id"]
+    if finding["id"] and finding["route"] and finding["severity"] and finding["owasp"]:
+        signature = f"{finding['route']}\t{finding['owasp']}\t{finding['severity']}"
+        if signature in seen_route:
+            print(f"{seen_route[signature]} <-> {finding['id']}: {finding['title']}")
+        else:
+            seen_route[signature] = finding["id"]
+    if finding["id"] and finding["artifact_ref"] and finding["type"]:
+        signature = f"{finding['artifact_ref']}\t{finding['type']}"
+        if signature in seen_artifact:
+            print(
+                f"{seen_artifact[signature]} <-> {finding['id']}: artifact={finding['artifact_ref']} type={finding['type']}"
+            )
+        else:
+            seen_artifact[signature] = finding["id"]
 PY
 }
 

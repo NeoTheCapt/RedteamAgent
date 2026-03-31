@@ -1,8 +1,9 @@
 import json
+import os
 import sqlite3
 import threading
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -49,6 +50,119 @@ def setup_active_engagement(run: dict) -> Path:
     active_dir.mkdir(parents=True, exist_ok=True)
     (engagements / ".active").write_text(f"engagements/{active_name}", encoding="utf-8")
     return active_dir
+
+
+def test_run_summary_resolves_absolute_active_marker_before_fallback_candidates():
+    client = TestClient(app)
+    token = register_and_login(client, "alice-absolute-active")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "http://127.0.0.1:8000")
+
+    workspace = Path(run["engagement_root"], "workspace")
+    engagements = workspace / "engagements"
+    real_name = "2026-03-30-113636-host-docker-internal"
+    real_dir = engagements / real_name
+    real_dir.mkdir(parents=True, exist_ok=True)
+    sqltest_dir = engagements / "sqltest"
+    sqltest_dir.mkdir(parents=True, exist_ok=True)
+
+    (engagements / ".active").write_text(str(real_dir.resolve()), encoding="utf-8")
+    (real_dir / "scope.json").write_text(
+        json.dumps(
+            {
+                "target": "http://127.0.0.1:8000",
+                "hostname": "127.0.0.1",
+                "port": 8000,
+                "scope": ["127.0.0.1"],
+                "status": "in_progress",
+                "start_time": "2026-03-30T11:36:36Z",
+                "phases_completed": ["recon"],
+                "current_phase": "collect",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (real_dir / "log.md").write_text("recent activity\n", encoding="utf-8")
+    with sqlite3.connect(real_dir / "cases.db") as connection:
+        connection.execute(
+            "CREATE TABLE cases (method TEXT, url TEXT, type TEXT NOT NULL, status TEXT NOT NULL, assigned_agent TEXT, source TEXT)"
+        )
+        connection.execute(
+            "INSERT INTO cases (method, url, type, status, assigned_agent, source) VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                "GET",
+                "http://127.0.0.1:8000/rest/admin/application-version",
+                "api",
+                "pending",
+                "",
+                "katana-xhr",
+            ),
+        )
+        connection.commit()
+    with sqlite3.connect(sqltest_dir / "cases.db") as connection:
+        connection.execute("CREATE TABLE placeholder (value TEXT)")
+        connection.commit()
+
+    response = client.get(
+        f"/projects/{project['id']}/runs/{run['id']}/summary",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+
+    assert payload["target"]["engagement_dir"] == str(real_dir.resolve())
+    assert payload["coverage"]["total_cases"] == 1
+    assert payload["current"]["phase"] == "collect"
+
+
+def test_run_summary_recovers_from_scope_less_active_marker():
+    client = TestClient(app)
+    token = register_and_login(client, "alice-poisoned-active")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "http://127.0.0.1:8000")
+
+    workspace = Path(run["engagement_root"], "workspace")
+    engagements = workspace / "engagements"
+    real_dir = engagements / "2026-03-30-113636-host-docker-internal"
+    real_dir.mkdir(parents=True, exist_ok=True)
+    (real_dir / "scope.json").write_text(
+        json.dumps(
+            {
+                "target": "http://127.0.0.1:8000",
+                "hostname": "127.0.0.1",
+                "port": 8000,
+                "scope": ["127.0.0.1"],
+                "status": "in_progress",
+                "start_time": "2026-03-30T11:36:36Z",
+                "phases_completed": ["recon"],
+                "current_phase": "collect",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (real_dir / "log.md").write_text("recent activity\n", encoding="utf-8")
+    with sqlite3.connect(real_dir / "cases.db") as connection:
+        connection.execute("CREATE TABLE cases (type TEXT NOT NULL, status TEXT NOT NULL)")
+        connection.execute("INSERT INTO cases (type, status) VALUES (?, ?)", ("api", "pending"))
+        connection.commit()
+
+    sqltest_dir = engagements / "sqltest"
+    sqltest_dir.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(sqltest_dir / "cases.db") as connection:
+        connection.execute("CREATE TABLE placeholder (value TEXT)")
+        connection.commit()
+    (engagements / ".active").write_text("engagements/sqltest", encoding="utf-8")
+
+    response = client.get(
+        f"/projects/{project['id']}/runs/{run['id']}/summary",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+
+    assert payload["target"]["engagement_dir"] == str(real_dir)
+    assert payload["coverage"]["total_cases"] == 1
+    assert payload["current"]["phase"] == "collect"
 
 
 def test_run_summary_combines_target_coverage_and_agent_state():
@@ -794,6 +908,106 @@ def test_run_summary_reopened_current_phase_prunes_completed_marker_and_stays_ac
     assert consume_waterfall["active_agents"] == 1
 
 
+def test_run_summary_reopens_consume_test_when_queue_remains_after_exploit_escalation():
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "http://127.0.0.1:8000")
+    active_dir = setup_active_engagement(run)
+    (active_dir / "scope.json").write_text(
+        json.dumps(
+            {
+                "hostname": "127.0.0.1",
+                "status": "in_progress",
+                "phases_completed": ["recon", "collect", "consume_test"],
+                "current_phase": "exploit",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with sqlite3.connect(active_dir / "cases.db") as connection:
+        connection.execute(
+            "CREATE TABLE cases (type TEXT NOT NULL, status TEXT NOT NULL, assigned_agent TEXT, source TEXT)"
+        )
+        connection.execute(
+            "INSERT INTO cases (type, status, assigned_agent, source) VALUES ('api', 'processing', 'vulnerability-analyst', 'katana-xhr')"
+        )
+        connection.execute(
+            "INSERT INTO cases (type, status, assigned_agent, source) VALUES ('api', 'pending', NULL, 'katana')"
+        )
+        connection.commit()
+
+    process_log = Path(run["engagement_root"], "runtime", "process.log")
+    process_log.parent.mkdir(parents=True, exist_ok=True)
+    process_log.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "type": "tool_use",
+                        "timestamp": 1774848785415,
+                        "part": {
+                            "tool": "task",
+                            "state": {
+                                "status": "completed",
+                                "input": {
+                                    "description": "Exploit high findings",
+                                    "subagent_type": "exploit-developer",
+                                    "prompt": "Current phase: consume_test (escalated high findings)\n",
+                                },
+                            },
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "tool_use",
+                        "timestamp": 1774848798572,
+                        "part": {
+                            "tool": "bash",
+                            "title": "Fetch second API batch",
+                            "state": {
+                                "status": "completed",
+                                "input": {
+                                    "description": "Fetch second API batch",
+                                    "command": "./scripts/dispatcher.sh stats",
+                                },
+                            },
+                        },
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    response = client.get(
+        f"/projects/{project['id']}/runs/{run['id']}/summary",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+
+    consume_phase = next(item for item in payload["phases"] if item["phase"] == "consume-test")
+    exploit_phase = next(item for item in payload["phases"] if item["phase"] == "exploit")
+    assert payload["overview"]["current_phase"] == "consume-test"
+    assert payload["current"]["phase"] == "consume-test"
+    assert consume_phase["state"] == "active"
+    assert exploit_phase["state"] == "pending"
+
+    persisted_scope = json.loads((active_dir / "scope.json").read_text(encoding="utf-8"))
+    assert persisted_scope["current_phase"] == "consume_test"
+    assert persisted_scope["phases_completed"] == ["recon", "collect"]
+
+    run_metadata = json.loads((Path(run["engagement_root"]) / "run.json").read_text(encoding="utf-8"))
+    assert run_metadata["current_phase"] == "consume-test"
+    consume_agent = next(item for item in run_metadata["agents"] if item["agent_name"] == "vulnerability-analyst")
+    assert consume_agent["status"] == "active"
+    assert consume_agent["phase"] == "consume-test"
+
+
 def test_run_summary_event_creation_updates_run_metadata_timestamp():
     client = TestClient(app)
     token = register_and_login(client, "alice")
@@ -864,9 +1078,11 @@ def test_run_summary_prefers_workflow_activity_timestamp_over_stale_events():
     assert response.json()["overview"]["updated_at"] == expected_utc
 
 
-def test_run_summary_syncs_run_metadata_updated_at_to_utc_workflow_activity():
+def test_run_summary_syncs_run_metadata_updated_at_to_utc_workflow_activity(monkeypatch):
     from app import db as app_db
     from app.db import database_path
+
+    monkeypatch.setattr("app.services.run_summary._reconcile_run_status", lambda current_run: current_run)
 
     client = TestClient(app)
     token = register_and_login(client, "alice")
@@ -901,6 +1117,159 @@ def test_run_summary_syncs_run_metadata_updated_at_to_utc_workflow_activity():
     run_metadata = json.loads((Path(run["engagement_root"]) / "run.json").read_text(encoding="utf-8"))
     assert response.json()["overview"]["updated_at"] == expected_utc
     assert run_metadata["updated_at"] == expected_utc
+
+
+def test_run_summary_syncs_run_metadata_updated_at_to_latest_event_when_newer_than_workflow_files(monkeypatch):
+    from app import db as app_db
+    from app.db import database_path
+
+    monkeypatch.setattr("app.services.run_summary._reconcile_run_status", lambda current_run: current_run)
+
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "https://target.example")
+    active_dir = setup_active_engagement(run)
+    (active_dir / "scope.json").write_text(
+        json.dumps({"hostname": "target.example", "status": "in_progress", "current_phase": "consume_test"}),
+        encoding="utf-8",
+    )
+    (active_dir / "log.md").write_text("# log\n", encoding="utf-8")
+    app_db.update_run_status(run["id"], "running")
+
+    stale_activity = datetime(2026, 3, 25, 0, 0, 0, tzinfo=UTC)
+    stale_epoch = stale_activity.timestamp()
+    for path in (active_dir / "scope.json", active_dir / "log.md"):
+        os.utime(path, (stale_epoch, stale_epoch))
+
+    time.sleep(1.1)
+    late_event_at = datetime.now(UTC).replace(microsecond=0).strftime("%Y-%m-%d %H:%M:%S")
+
+    with sqlite3.connect(database_path()) as connection:
+        connection.execute(
+            "UPDATE runs SET updated_at = '2026-03-25 00:00:00' WHERE id = ?",
+            (run["id"],),
+        )
+        connection.execute(
+            "INSERT INTO events(run_id, event_type, phase, task_name, agent_name, summary, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (run["id"], "task.completed", "consume-test", "source-analyzer", "source-analyzer", "Late event", late_event_at),
+        )
+        connection.commit()
+
+    response = client.get(
+        f"/projects/{project['id']}/runs/{run['id']}/summary",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+
+    run_metadata = json.loads((Path(run["engagement_root"]) / "run.json").read_text(encoding="utf-8"))
+    assert response.json()["overview"]["updated_at"] == late_event_at
+    assert run_metadata["updated_at"] == late_event_at
+
+
+
+def test_run_summary_ignores_heartbeat_only_freshness_when_syncing_updated_at(monkeypatch):
+    from app import db as app_db
+    from app.db import database_path
+
+    monkeypatch.setattr("app.services.run_summary._reconcile_run_status", lambda current_run: current_run)
+
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "https://target.example")
+    active_dir = setup_active_engagement(run)
+    (active_dir / "scope.json").write_text(
+        json.dumps(
+            {
+                "hostname": "target.example",
+                "status": "in_progress",
+                "current_phase": "consume_test",
+                "phases_completed": ["recon", "collect"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (active_dir / "log.md").write_text("# log\n", encoding="utf-8")
+    app_db.update_run_status(run["id"], "running")
+
+    stale_activity = datetime(2026, 3, 25, 0, 0, 0, tzinfo=UTC)
+    stale_epoch = stale_activity.timestamp()
+    for path in (active_dir / "scope.json", active_dir / "log.md"):
+        os.utime(path, (stale_epoch, stale_epoch))
+
+    substantive_event_at = "2026-03-25 00:00:30"
+    heartbeat_event_at = datetime.now(UTC).replace(microsecond=0).strftime("%Y-%m-%d %H:%M:%S")
+
+    with sqlite3.connect(database_path()) as connection:
+        connection.execute(
+            "UPDATE runs SET updated_at = ? WHERE id = ?",
+            (heartbeat_event_at, run["id"]),
+        )
+        connection.execute(
+            "INSERT INTO events(run_id, event_type, phase, task_name, agent_name, summary, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (run["id"], "task.completed", "consume-test", "source-analyzer", "source-analyzer", "Substantive event", substantive_event_at),
+        )
+        connection.execute(
+            "INSERT INTO events(run_id, event_type, phase, task_name, agent_name, summary, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (run["id"], "run.heartbeat", "consume-test", "runtime", "launcher", "Heartbeat only", heartbeat_event_at),
+        )
+        connection.commit()
+
+    response = client.get(
+        f"/projects/{project['id']}/runs/{run['id']}/summary",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+
+    run_metadata = json.loads((Path(run["engagement_root"]) / "run.json").read_text(encoding="utf-8"))
+    assert response.json()["overview"]["updated_at"] == substantive_event_at
+    assert run_metadata["updated_at"] == substantive_event_at
+
+
+
+def test_run_summary_repairs_future_skewed_run_updated_at_from_workflow_activity(monkeypatch):
+    from app import db as app_db
+    from app.db import database_path
+
+    monkeypatch.setattr("app.services.run_summary._reconcile_run_status", lambda current_run: current_run)
+
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "https://target.example")
+    active_dir = setup_active_engagement(run)
+    (active_dir / "scope.json").write_text(
+        json.dumps({"hostname": "target.example", "status": "in_progress", "current_phase": "consume_test"}),
+        encoding="utf-8",
+    )
+    (active_dir / "log.md").write_text("# log\nupdated\n", encoding="utf-8")
+    app_db.update_run_status(run["id"], "running")
+
+    recent_activity = datetime.now(UTC).replace(microsecond=0)
+    recent_epoch = recent_activity.timestamp()
+    for path in (active_dir / "scope.json", active_dir / "log.md"):
+        os.utime(path, (recent_epoch, recent_epoch))
+
+    future_skewed = (recent_activity + timedelta(hours=8)).strftime("%Y-%m-%d %H:%M:%S")
+    with sqlite3.connect(database_path()) as connection:
+        connection.execute(
+            "UPDATE runs SET updated_at = ? WHERE id = ?",
+            (future_skewed, run["id"]),
+        )
+        connection.commit()
+
+    response = client.get(
+        f"/projects/{project['id']}/runs/{run['id']}/summary",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+
+    expected_utc = recent_activity.strftime("%Y-%m-%d %H:%M:%S")
+    run_metadata = json.loads((Path(run["engagement_root"]) / "run.json").read_text(encoding="utf-8"))
+    assert response.json()["overview"]["updated_at"] == expected_utc
+    assert run_metadata["updated_at"] == expected_utc
+
 
 
 def test_run_summary_projects_current_state_into_run_metadata():
@@ -1557,29 +1926,27 @@ def test_run_summary_normalizes_loopback_runtime_artifacts_and_redacts_katana_he
     )
     scans_dir = active_dir / "scans"
     scans_dir.mkdir(parents=True, exist_ok=True)
-    (scans_dir / "katana_output.jsonl").write_text(
-        json.dumps(
-            {
-                "request": {"method": "GET", "endpoint": "http://host.docker.internal:8000/"},
-                "response": {
-                    "headers": {"Content-Type": "text/html"},
-                    "xhr_requests": [
-                        {
-                            "method": "GET",
-                            "endpoint": "http://host.docker.internal:8000/rest/admin/application-version",
-                            "headers": {
-                                "Authorization": "Bearer secret-jwt",
-                                "Cookie": "sid=secret-cookie",
-                                "Accept": "application/json",
-                            },
-                        }
-                    ],
-                },
+    original_katana_text = json.dumps(
+        {
+            "request": {"method": "GET", "endpoint": "http://host.docker.internal:8000/"},
+            "response": {
+                "headers": {"Content-Type": "text/html"},
+                "xhr_requests": [
+                    {
+                        "method": "GET",
+                        "endpoint": "http://host.docker.internal:8000/rest/admin/application-version",
+                        "headers": {
+                            "Authorization": "Bearer secret-jwt",
+                            "Cookie": "sid=secret-cookie",
+                            "Accept": "application/json",
+                        },
+                    }
+                ],
             },
-            separators=(",", ":"),
-        ),
-        encoding="utf-8",
+        },
+        separators=(",", ":"),
     )
+    (scans_dir / "katana_output.jsonl").write_text(original_katana_text, encoding="utf-8")
 
     with sqlite3.connect(active_dir / "cases.db") as connection:
         connection.execute(
@@ -1626,13 +1993,14 @@ def test_run_summary_normalizes_loopback_runtime_artifacts_and_redacts_katana_he
     assert "host.docker.internal" not in findings_text
     assert "host.docker.internal" not in report_text
     assert "host.docker.internal" not in surfaces_text
-    assert "host.docker.internal" not in katana_text
-    assert "secret-jwt" not in katana_text
-    assert "secret-cookie" not in katana_text
-    assert '<redacted>' in katana_text
+    assert katana_text == original_katana_text
+    assert "host.docker.internal" in katana_text
+    assert "secret-jwt" in katana_text
+    assert "secret-cookie" in katana_text
+    assert '<redacted>' not in katana_text
 
 
-def test_run_summary_normalizes_malformed_katana_jsonl_streams():
+def test_run_summary_normalizes_malformed_katana_jsonl_streams_for_terminal_runs():
     client = TestClient(app)
     token = register_and_login(client, "alice")
     project = create_project(client, token)
@@ -1698,6 +2066,10 @@ def test_run_summary_normalizes_malformed_katana_jsonl_streams():
     )
     malformed_second = second.replace("Feature-Policy", f"Feature-Policy{chr(0)}").replace("payment 'self'", f"pa{chr(0)}yment 'self'")
     (scans_dir / "katana_output.jsonl").write_text(first + third + "\n" + malformed_second + "\n", encoding="utf-8")
+
+    from app import db as app_db
+
+    app_db.update_run_status(run["id"], "completed")
 
     response = client.get(
         f"/projects/{project['id']}/runs/{run['id']}/summary",
@@ -1852,6 +2224,83 @@ def test_run_summary_backfill_normalizes_spa_route_surface_candidates_to_dynamic
             "evidence_ref": "/rest/admin/application-configuration",
             "status": "discovered",
         }
+    ]
+
+
+def test_run_summary_backfill_accepts_category_and_path_surface_candidates():
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "http://127.0.0.1:8000")
+    active_dir = setup_active_engagement(run)
+
+    (active_dir / "scope.json").write_text(
+        json.dumps(
+            {
+                "target": "http://host.docker.internal:8000",
+                "hostname": "host.docker.internal",
+                "port": 8000,
+                "scope": ["host.docker.internal", "*.host.docker.internal"],
+                "status": "in_progress",
+                "current_phase": "recon",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (active_dir / "surfaces.jsonl").write_text("", encoding="utf-8")
+
+    process_log = Path(run["engagement_root"], "runtime", "process.log")
+    process_log.parent.mkdir(parents=True, exist_ok=True)
+    process_log.write_text(
+        json.dumps(
+            {
+                "type": "tool_use",
+                "part": {
+                    "state": {
+                        "output": (
+                            "[source-analyzer] #### Surface Candidates\n"
+                            "[source-analyzer] {\"category\":\"auth_entry\",\"path\":\"/rest/user/login\",\"method\":\"POST\",\"source\":\"source-analyzer\",\"rationale\":\"main.js exposes login flow and hardcoded test credentials in the login component\",\"priority\":\"high\"}\n"
+                            "[source-analyzer] {\"category\":\"dynamic_render\",\"url_or_pattern\":\"http://host.docker.internal:8000/#/web3-sandbox\",\"source\":\"source-analyzer\",\"reason\":\"lazy-loaded web3 sandbox compiles Solidity client-side\",\"status\":\"discovered\"}\n"
+                            "\n"
+                            "[source-analyzer] #### Findings\n"
+                        )
+                    }
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    response = client.get(
+        f"/projects/{project['id']}/runs/{run['id']}/summary",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+
+    payload = response.json()
+    assert payload["coverage"]["total_surfaces"] == 2
+    assert any(item["type"] == "auth_entry" and item["count"] == 1 for item in payload["coverage"]["surface_types"])
+    assert any(item["type"] == "dynamic_render" and item["count"] == 1 for item in payload["coverage"]["surface_types"])
+
+    surfaces_rows = [json.loads(line) for line in (active_dir / "surfaces.jsonl").read_text(encoding="utf-8").splitlines() if line.strip()]
+    assert surfaces_rows == [
+        {
+            "surface_type": "auth_entry",
+            "target": "POST /rest/user/login",
+            "source": "source-analyzer",
+            "rationale": "main.js exposes login flow and hardcoded test credentials in the login component",
+            "evidence_ref": "",
+            "status": "discovered",
+        },
+        {
+            "surface_type": "dynamic_render",
+            "target": "GET http://127.0.0.1:8000/#/web3-sandbox",
+            "source": "source-analyzer",
+            "rationale": "lazy-loaded web3 sandbox compiles Solidity client-side",
+            "evidence_ref": "",
+            "status": "discovered",
+        },
     ]
 
 

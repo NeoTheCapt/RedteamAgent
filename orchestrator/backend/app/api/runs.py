@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 from dataclasses import asdict
+from pathlib import Path
 
 from fastapi import APIRouter, status
 from pydantic import BaseModel, Field
@@ -29,6 +31,9 @@ class RunResponse(BaseModel):
     engagement_root: str
     created_at: str
     updated_at: str
+    ended_at: str | None = None
+    stop_reason_code: str | None = None
+    stop_reason_text: str | None = None
 
 
 class RunSummaryTargetResponse(BaseModel):
@@ -130,6 +135,15 @@ class ObservedPathResponse(BaseModel):
 
 
 def _run_response(run: Run) -> RunResponse:
+    metadata = {}
+    metadata_path = Path(run.engagement_root) / "run.json"
+    if metadata_path.exists():
+        try:
+            payload = json.loads(metadata_path.read_text(encoding="utf-8"))
+            if isinstance(payload, dict):
+                metadata = payload
+        except json.JSONDecodeError:
+            metadata = {}
     return RunResponse(
         id=run.id,
         target=run.target,
@@ -137,6 +151,9 @@ def _run_response(run: Run) -> RunResponse:
         engagement_root=run.engagement_root,
         created_at=run.created_at,
         updated_at=run.updated_at,
+        ended_at=metadata.get("ended_at") if isinstance(metadata.get("ended_at"), str) else None,
+        stop_reason_code=metadata.get("stop_reason_code") if isinstance(metadata.get("stop_reason_code"), str) else None,
+        stop_reason_text=metadata.get("stop_reason_text") if isinstance(metadata.get("stop_reason_text"), str) else None,
     )
 
 

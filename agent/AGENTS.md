@@ -85,13 +85,17 @@ Rules:
 | report-writer | Final or interim report | Phase 5 |
 
 Context on every dispatch: agent identity, target URL, current phase, prior findings, specific task.
+When a dispatch references the engagement workspace, copy the exact active `$DIR` path verbatim.
+Never reconstruct, rename, or re-sanitize that path from the hostname (for example do not turn
+`host-docker-internal` back into `host-docker.internal`). If a subagent needs scratch space, place it
+under that exact `$DIR`.
 
 DEDUP: Check log.md before dispatch. Never dispatch same agent for same objective twice.
 PARALLEL: Independent tasks → parallel. Dependent → sequential.
 
 ## Phase Flow
 
-1. **RECON** → dispatch recon-specialist + source-analyzer in parallel
+1. **RECON** → dispatch recon-specialist + source-analyzer in parallel. During `/engage` handoff, the SAME assistant turn that appends the recon-start log entry must also launch both recon tasks (or record an explicit stop reason). Do not stop after todowrite, file reads, or the recon-start log entry.
 2. **COLLECT** → import endpoints (`recon_ingest.sh`), start Katana, show stats
 3. **CONSUME & TEST** → dispatcher loop: reset-stale → stats → fetch → dispatch → done → requeue → repeat. Exit only when pending=0 AND processing=0.
    Dispatch rule is strict:
@@ -102,13 +106,16 @@ PARALLEL: Independent tasks → parallel. Dependent → sequential.
    - do NOT launch overlapping `task` calls inside the same consume-test pass, even when multiple fetched batch files are non-empty
    - never leave fetched cases in `processing` without a dispatched subagent task
    - after each dispatched subagent returns, immediately consume its `### Case Outcomes` and run the required `done` / `requeue` updates before the next fetch cycle
-   Before leaving Test phase, run `./scripts/check_surface_coverage.sh "$DIR"`.
-   If it fails, do not advance. Resolve each remaining discovered surface by selecting a representative validation path and marking it `covered`, `deferred`, or `not_applicable`.
+   Before leaving Test phase, run `./scripts/reconcile_surface_coverage.sh "$DIR" --ingest-followups` and then `./scripts/check_surface_coverage.sh "$DIR"`.
+   `reconcile_surface_coverage.sh` auto-promotes already-validated surfaces to `covered`/`not_applicable` and can enqueue concrete follow-up cases for unresolved, requestable surfaces. If it adds follow-up cases, stay in consume-test and work that queue before checking coverage again.
+   If coverage still fails, do not advance. In that SAME turn, either mark the surface with `./scripts/append_surface.sh ... covered|not_applicable|deferred` using existing evidence or dispatch exactly one bounded surface-coverage follow-up batch. Do NOT grep the scripts directory and then idle.
    Reuse existing evidence before issuing new probes. Any ad-hoc in-scope HTTP validation MUST stay bounded: use at most 1-2 representative probes per surface, prefer already-queued endpoints/artifacts, and every `run_tool curl` command MUST include both `--connect-timeout 5` and `--max-time 20` (or stricter). Never launch long multi-endpoint bundles, unbounded loops, or background probes during surface-coverage follow-up.
    High-risk surfaces `account_recovery`, `dynamic_render`, `object_reference`, and `privileged_write`
    may NOT remain `deferred` when moving to Exploit/Report. They must be `covered` or `not_applicable`.
 4. **EXPLOIT** → dispatch osint-analyst + exploit-developer in parallel. After osint: read intel.md, HIGH value → findings.md + exploit 2nd round.
+   Exploit-phase exit rule is strict: once queue stats are pending=0 and processing=0, collection health passes, surface coverage passes, and all active exploit tasks have returned with no new concrete branch to pursue, do NOT idle in exploit. In that same turn, append a concise phase-transition log entry, mark `exploit` complete in `scope.json`, switch `current_phase` to `report`, update the todo list, and dispatch `report-writer` immediately.
 5. **REPORT** → dispatch report-writer
+   Never stop after saying reporting is next. The same assistant turn that decides reporting should begin MUST actually dispatch `report-writer`.
 
 ## Stop Conditions
 
@@ -151,9 +158,16 @@ jq '.phases_completed = (reduce (((.phases_completed // []) + ["<phase>"])[]) as
 
 When ANY agent discovers credentials:
 1. Write to auth.json immediately
-2. Try login, save token
-3. Trigger POST-AUTH RE-COLLECTION (restart Katana with auth)
-4. Dispatch exploit-developer to test authenticated access
+2. In the SAME turn, dispatch a bounded exploit-developer auth-validation task (do not stop after only logging `Credential validation dispatch`)
+3. Try login, save token
+4. Trigger POST-AUTH RE-COLLECTION (restart Katana with auth)
+5. Continue consume-test from the updated queue/auth state
+
+Auth-validation task requirements:
+- Use exploit-developer for the login/JWT acquisition attempt
+- Keep the task narrow: validate exactly the discovered credential(s), acquire session material if successful, and test one immediate authenticated foothold
+- If validation fails, log the failure and resume the queue instead of stalling
+- Any credential-validation status/log entry must be paired in the same turn with the actual exploit-developer dispatch or another advancing action
 
 ## Containerized Tool Execution
 

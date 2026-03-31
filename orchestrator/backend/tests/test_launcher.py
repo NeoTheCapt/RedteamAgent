@@ -122,6 +122,47 @@ def test_create_run_can_auto_launch_when_enabled(monkeypatch):
     assert Path(run["engagement_root"], "runtime", "process.log").exists()
 
 
+def test_launch_runtime_container_uses_docker_init(monkeypatch):
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "https://init-check.example")
+
+    from app.services.launcher import _launch_runtime_container
+
+    started_commands = []
+
+    class FakeLogFollower:
+        def poll(self):
+            return 0
+
+    def fake_run(command, **kwargs):
+        if command[:3] == ["docker", "rm", "-f"]:
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        if command[:3] == ["docker", "run", "-d"]:
+            started_commands.append(command)
+            return subprocess.CompletedProcess(command, 0, stdout="container-123\n", stderr="")
+        raise AssertionError(command)
+
+    monkeypatch.setattr("app.services.launcher.subprocess.run", fake_run)
+    monkeypatch.setattr("app.services.launcher._spawn_runtime_log_follower", lambda *_args, **_kwargs: FakeLogFollower())
+
+    project_obj = db.get_project_by_id(project["id"])
+    user_obj = db.get_user_by_username("alice")
+    run_obj = db.get_run_by_id(run["id"])
+    assert project_obj is not None
+    assert user_obj is not None
+    assert run_obj is not None
+
+    runtime_log = Path(run["engagement_root"]) / "runtime" / "process.log"
+    runtime_log.parent.mkdir(parents=True, exist_ok=True)
+    with runtime_log.open("ab") as log_handle:
+        _launch_runtime_container(project_obj, run_obj, user_obj, command_text="/autoengage https://init-check.example", log_handle=log_handle)
+
+    assert started_commands
+    assert "--init" in started_commands[0]
+
+
 def test_locate_runtime_pid_treats_running_container_without_matching_launcher_pid_as_live_runtime(monkeypatch):
     client = TestClient(app)
     token = register_and_login(client, "alice")
@@ -492,6 +533,61 @@ def test_running_container_stall_reason_keeps_early_collect_alive_when_rw_cases_
         return connection
 
     monkeypatch.setattr("app.services.launcher.sqlite3.connect", flaky_connect)
+
+    from app.services.launcher import _running_container_stall_reason
+
+    assert _running_container_stall_reason(run_row) is None
+
+
+
+def test_running_container_stall_reason_keeps_early_recon_alive_when_workflow_activity_is_recent():
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "https://recent-recon.example")
+    db.update_run_status(run["id"], "running")
+
+    run_row = db.get_run_by_id(run["id"])
+    assert run_row is not None
+
+    run_root = Path(run["engagement_root"])
+    process_log = run_root / "runtime" / "process.log"
+    process_log.parent.mkdir(parents=True, exist_ok=True)
+    process_log.write_text("recon started\n", encoding="utf-8")
+    old_epoch = datetime.now().timestamp() - 240
+    import os
+    os.utime(process_log, (old_epoch, old_epoch))
+
+    workspace = run_root / "workspace"
+    engagement_dir = workspace / "engagements" / "2026-03-30-000000-recent-recon"
+    engagement_dir.mkdir(parents=True, exist_ok=True)
+    (workspace / "engagements" / ".active").write_text(
+        "engagements/2026-03-30-000000-recent-recon\n",
+        encoding="utf-8",
+    )
+    scope_path = engagement_dir / "scope.json"
+    scope_path.write_text(
+        json.dumps(
+            {
+                "status": "in_progress",
+                "current_phase": "recon",
+                "phases_completed": [],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    recent_epoch = datetime.now().timestamp() - 15
+    os.utime(scope_path, (recent_epoch, recent_epoch))
+    log_path = engagement_dir / "log.md"
+    log_path.write_text("recent source analysis summary\n", encoding="utf-8")
+    os.utime(log_path, (recent_epoch, recent_epoch))
+
+    with sqlite3.connect(engagement_dir / "cases.db") as connection:
+        connection.execute(
+            "CREATE TABLE cases (id INTEGER PRIMARY KEY AUTOINCREMENT, status TEXT NOT NULL)"
+        )
+        connection.commit()
 
     from app.services.launcher import _running_container_stall_reason
 
@@ -1149,6 +1245,87 @@ def test_engagement_completion_state_accepts_completed_status_alias():
     assert normalized["status"] == "complete"
 
 
+def test_normalize_active_scope_marks_completed_report_and_log_headers(monkeypatch):
+    import os
+    import time
+
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "https://example.com")
+
+    run_root = Path(run["engagement_root"])
+    workspace = run_root / "workspace"
+    engagement_dir = workspace / "engagements" / "2026-03-30-000000-example"
+    engagement_dir.mkdir(parents=True, exist_ok=True)
+    (workspace / "engagements" / ".active").write_text(
+        "engagements/2026-03-30-000000-example\n",
+        encoding="utf-8",
+    )
+    (engagement_dir / "scope.json").write_text(
+        json.dumps(
+            {
+                "status": "complete",
+                "current_phase": "complete",
+                "start_time": "2026-03-29T23:59:38Z",
+                "phases_completed": ["recon", "collect", "consume_test", "exploit", "report"],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (engagement_dir / "log.md").write_text(
+        "# Engagement Log\n\n"
+        "- **Target**: https://example.com\n"
+        "- **Date**: 2026-03-29\n"
+        "- **Status**: In Progress\n",
+        encoding="utf-8",
+    )
+    (engagement_dir / "report.md").write_text(
+        "# Penetration Test Report: https://example.com\n"
+        "**Date**: 2026-03-29 — In Progress\n"
+        "**Target**: https://example.com  **Scope**: example.com, *.example.com  **Status**: In Progress\n",
+        encoding="utf-8",
+    )
+    (engagement_dir / "surfaces.jsonl").write_text("", encoding="utf-8")
+    with sqlite3.connect(engagement_dir / "cases.db") as connection:
+        connection.execute(
+            "CREATE TABLE cases (id INTEGER PRIMARY KEY AUTOINCREMENT, status TEXT NOT NULL)"
+        )
+        connection.executemany(
+            "INSERT INTO cases(status) VALUES (?)",
+            [("done",), ("error",)],
+        )
+        connection.commit()
+
+    from app import db as app_db
+    from app.services.launcher import normalize_active_scope
+
+    latest = app_db.get_run_by_id(run["id"])
+    assert latest is not None
+
+    original_tz = os.environ.get("TZ")
+    monkeypatch.setenv("TZ", "Asia/Singapore")
+    if hasattr(time, "tzset"):
+        time.tzset()
+    try:
+        normalize_active_scope(latest)
+    finally:
+        if original_tz is None:
+            monkeypatch.delenv("TZ", raising=False)
+        else:
+            monkeypatch.setenv("TZ", original_tz)
+        if hasattr(time, "tzset"):
+            time.tzset()
+
+    log_text = (engagement_dir / "log.md").read_text(encoding="utf-8")
+    report_text = (engagement_dir / "report.md").read_text(encoding="utf-8")
+
+    assert "- **Status**: Completed" in log_text
+    assert "**Date**: 2026-03-30 — Completed" in report_text
+    assert "**Status**: Completed" in report_text
+
+
 def test_auto_launch_marks_completed_only_when_engagement_is_finalized(monkeypatch):
     client = TestClient(app)
     token = register_and_login(client, "alice")
@@ -1475,6 +1652,152 @@ def test_start_run_runtime_clears_stale_terminal_reason(monkeypatch):
     refreshed = json.loads(metadata_path.read_text(encoding="utf-8"))
     assert "stop_reason_code" not in refreshed
     assert "stop_reason_text" not in refreshed
+    assert "ended_at" not in refreshed
+
+
+def test_ensure_runtime_log_follower_restarts_dead_follower(monkeypatch):
+    from app.services.launcher import _ensure_runtime_log_follower
+
+    client = TestClient(app)
+    token = register_and_login(client, "alice-log-follower")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "https://log-follower.example")
+
+    run_model = db.get_run_by_id(run["id"])
+    assert run_model is not None
+
+    started_commands: list[list[str]] = []
+
+    class DeadFollower:
+        def poll(self):
+            return 1
+
+    class LiveFollower:
+        def poll(self):
+            return None
+
+    def fake_popen(command, **kwargs):
+        started_commands.append(command)
+        return LiveFollower()
+
+    monkeypatch.setattr("app.services.launcher.subprocess.Popen", fake_popen)
+
+    follower = _ensure_runtime_log_follower(run_model, DeadFollower(), io.BytesIO())
+    assert follower is not None
+    assert follower.poll() is None
+    assert started_commands == [["docker", "logs", "-f", f"redteam-orch-run-{run['id']:04d}"]]
+
+
+def test_runtime_log_follow_command_resumes_from_last_captured_activity(tmp_path):
+    from app.services.launcher import _runtime_log_follow_command, process_log_path_for
+
+    client = TestClient(app)
+    token = register_and_login(client, "alice-log-follow-resume")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "https://resume-log.example")
+
+    run_model = db.get_run_by_id(run["id"])
+    assert run_model is not None
+
+    process_log = process_log_path_for(run_model)
+    process_log.parent.mkdir(parents=True, exist_ok=True)
+    process_log.write_text(
+        '{"timestamp": 1774866503642, "type": "tool_use"}\n',
+        encoding="utf-8",
+    )
+
+    command = _runtime_log_follow_command(run_model)
+
+    assert command[:4] == ["docker", "logs", "-f", "--since"]
+    assert command[4] == "2026-03-30T10:28:23.642Z"
+    assert command[5] == f"redteam-orch-run-{run['id']:04d}"
+
+
+def test_supervise_container_drains_runtime_log_follower_before_terminal_state(monkeypatch):
+    from app.services.launcher import _supervise_container, process_log_path_for
+
+    client = TestClient(app)
+    token = register_and_login(client, "alice-log-drain")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "https://drain-log.example")
+
+    run_model = db.get_run_by_id(run["id"])
+    project_model = db.get_project_by_id(project["id"])
+    user_model = db.get_user_by_username("alice-log-drain")
+    assert run_model is not None
+    assert project_model is not None
+    assert user_model is not None
+
+    workspace = Path(run["engagement_root"]) / "workspace"
+    engagement_dir = workspace / "engagements" / "2026-03-30-000000-drain-log-example"
+    engagement_dir.mkdir(parents=True, exist_ok=True)
+    (workspace / "engagements" / ".active").write_text(
+        "engagements/2026-03-30-000000-drain-log-example\n",
+        encoding="utf-8",
+    )
+    (engagement_dir / "scope.json").write_text(
+        json.dumps(
+            {
+                "status": "complete",
+                "current_phase": "complete",
+                "phases_completed": ["recon", "collect", "consume_test", "exploit", "report"],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (engagement_dir / "log.md").write_text("# Log\n- **Status**: Completed\n", encoding="utf-8")
+    (engagement_dir / "report.md").write_text("# Report\n", encoding="utf-8")
+    (engagement_dir / "surfaces.jsonl").write_text("", encoding="utf-8")
+    with sqlite3.connect(engagement_dir / "cases.db") as connection:
+        connection.execute("CREATE TABLE cases (id INTEGER PRIMARY KEY AUTOINCREMENT, status TEXT NOT NULL)")
+        connection.execute("INSERT INTO cases(status) VALUES ('done')")
+        connection.commit()
+
+    process_log = process_log_path_for(run_model)
+    process_log.parent.mkdir(parents=True, exist_ok=True)
+    process_log.write_text('{"type":"tool_use","part":{"tool":"todowrite","state":{"input":{}}}}\n', encoding="utf-8")
+
+    class SlowFollower:
+        def __init__(self):
+            self.wait_calls = 0
+            self._done = False
+            self.terminated = False
+            self.killed = False
+
+        def poll(self):
+            return 0 if self._done else None
+
+        def wait(self, timeout=None):
+            self.wait_calls += 1
+            with process_log.open("a", encoding="utf-8") as handle:
+                handle.write('{"timestamp":1774887570000,"type":"tool_use","part":{"tool":"task","agent":"report-writer","state":{"status":"completed"}}}\n')
+            self._done = True
+            return 0
+
+        def terminate(self):
+            self.terminated = True
+            self._done = True
+
+        def kill(self):
+            self.killed = True
+            self._done = True
+
+    monkeypatch.setattr("app.services.launcher._container_status", lambda _name: "exited")
+    monkeypatch.setattr("app.services.launcher._container_exit_code", lambda _name: 0)
+
+    follower = SlowFollower()
+    with process_log.open("ab") as log_handle:
+        _supervise_container(run_model, project_model, user_model, "container-123", follower, log_handle)
+
+    latest = db.get_run_by_id(run["id"])
+    assert latest is not None
+    assert latest.status == "completed"
+    assert follower.wait_calls == 1
+    log_text = process_log.read_text(encoding="utf-8")
+    assert '"report-writer"' in log_text
+    assert not follower.terminated
+    assert not follower.killed
 
 
 def test_auto_launch_allows_third_resume_attempt(monkeypatch):

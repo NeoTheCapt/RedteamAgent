@@ -41,8 +41,16 @@ while IFS= read -r line; do
     [[ -z "$line" ]] && continue
     [[ "$line" =~ ^# ]] && continue
 
+    line="$(printf '%s' "$line" | sed -E 's/^[[:space:]]*-[[:space:]]+//; s/^[[:space:]]+|[[:space:]]+$//g')"
+    if [[ "$line" == \`* ]]; then
+        line="$(printf '%s' "$line" | sed -E 's/^`([^`]*)`.*/\1/')"
+    fi
+    line="$(printf '%s' "$line" | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')"
+    [[ -z "$line" ]] && continue
+
     method=""
     url=""
+    url_path=""
     override_type=""
     query_params=""
     body_params=""

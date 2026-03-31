@@ -51,6 +51,29 @@ def write_engagement_artifact(run: dict, name: str, content: str) -> Path:
     return artifact_path
 
 
+def test_read_engagement_artifact_with_absolute_active_marker():
+    client = TestClient(app)
+    token = register_and_login(client, "alice-absolute-artifact")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"])
+
+    workspace = Path(run["engagement_root"], "workspace")
+    engagements = workspace / "engagements"
+    active_dir = engagements / "2026-03-30-113636-host-docker-internal"
+    active_dir.mkdir(parents=True, exist_ok=True)
+    (engagements / ".active").write_text(str(active_dir.resolve()), encoding="utf-8")
+    (active_dir / "scope.json").write_text('{"current_phase":"collect"}\n', encoding="utf-8")
+    (active_dir / "log.md").write_text("# Correct log\n", encoding="utf-8")
+    (engagements / "sqltest").mkdir(parents=True, exist_ok=True)
+
+    response = client.get(
+        f"/projects/{project['id']}/runs/{run['id']}/artifacts/log.md",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    assert response.json()["content"] == "# Correct log\n"
+
+
 def test_list_artifacts_marks_sensitive_files_and_presence():
     client = TestClient(app)
     token = register_and_login(client, "alice")

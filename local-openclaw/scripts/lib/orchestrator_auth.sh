@@ -7,6 +7,24 @@ LOCAL_OPENCLAW_REPO_ROOT="$(cd "$LOCAL_OPENCLAW_ROOT/.." && pwd)"
 DEFAULT_ORCH_DATA_DIR="$LOCAL_OPENCLAW_REPO_ROOT/orchestrator/backend/data"
 DEFAULT_SCHEDULER_ENV_FILE="$LOCAL_OPENCLAW_STATE_DIR/scheduler.env"
 
+load_scheduler_env_if_needed() {
+  local env_file="${LOCAL_OPENCLAW_ENV_FILE:-$DEFAULT_SCHEDULER_ENV_FILE}"
+
+  # The unattended loop often invokes helper scripts directly from a clean shell.
+  # When PROJECT_ID is missing, fall back to the repo-local scheduler env so
+  # build_context.sh / create_runs.sh / run_cycle_prep.sh can still run without
+  # the caller having to pre-source local-openclaw/state/scheduler.env.
+  [[ -n "${PROJECT_ID:-}" ]] && return 0
+  [[ -f "$env_file" ]] || return 0
+
+  set -a
+  # shellcheck disable=SC1090
+  source "$env_file"
+  set +a
+}
+
+load_scheduler_env_if_needed
+
 orchestrator_db_path() {
   local data_dir="${REDTEAM_ORCHESTRATOR_DATA_DIR:-$DEFAULT_ORCH_DATA_DIR}"
   printf '%s/orchestrator.sqlite3\n' "$data_dir"
