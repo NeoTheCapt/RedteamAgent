@@ -151,3 +151,17 @@ Domains & Infrastructure:
     Before returning final results, append one summary entry:
     `./scripts/append_log_entry.sh "$DIR" recon-specialist "Recon summary" "<techniques used>" "<key endpoints, files, or findings>"`
     Keep both entries concise.
+18. PORT-SCAN BUDGET: During phase-1 recon for a URL target or an explicitly web-centric target,
+    do NOT default to an unbounded full TCP scan (`nmap -p-`). Start with the explicit target port plus
+    the common web ports `80,443,8080,8443`, and every nmap command MUST include a strict host budget such as
+    `--host-timeout 120s` (or stricter). Escalate beyond that only when earlier evidence suggests a real
+    non-web service worth deeper enumeration or the operator explicitly asks for broader coverage.
+19. LONG-RUNNING TOOL GUARD: Every potentially long-running recon command must be time-bounded and leave
+    inspectable artifacts on disk before you rely on it. If a command hits the time budget or is still running
+    after it has already produced enough evidence, stop it, summarize the partial results from the saved files,
+    and return instead of waiting indefinitely for exhaustive completion.
+20. OUTPUT BUDGET: Keep the final handoff compact and operator-friendly. Cap the final message at roughly:
+    - 12 discovered endpoint rows
+    - 8 queue endpoints JSONL lines
+    - 6 surface candidates JSONL lines
+    Summarize the remainder as counts / patterns instead of dumping exhaustive lists.
