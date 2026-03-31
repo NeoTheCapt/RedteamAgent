@@ -81,6 +81,7 @@ _AUTO_RESUME_REASON_CODES = {
 _AUTO_RESUME_LIMIT = 3
 
 RUN_STALL_TIMEOUT_SECONDS = 900
+PROCESSING_AGENT_MISMATCH_GRACE_SECONDS = 120
 EARLY_PHASE_STALL_TIMEOUT_SECONDS = 180
 EARLY_PHASE_STALL_PHASES = {"unknown", "recon", "collect"}
 
@@ -658,6 +659,38 @@ def _load_running_queue_state(engagement_dir: Path | None) -> tuple[str, int, in
     return (current_phase, total_cases, pending_cases, processing_cases)
 
 
+def _load_running_processing_agents(engagement_dir: Path | None) -> set[str]:
+    if engagement_dir is None:
+        return set()
+
+    cases_db = engagement_dir / "cases.db"
+    if not cases_db.exists():
+        return set()
+
+    def _reader(connection: sqlite3.Connection) -> list[str]:
+        rows = connection.execute(
+            "SELECT DISTINCT assigned_agent FROM cases WHERE status = 'processing'"
+        ).fetchall()
+        return [str(row[0] or "").strip() for row in rows]
+
+    raw_agents = _read_sqlite_with_fallback(cases_db, _reader, [])
+    return {agent for agent in raw_agents if agent}
+
+
+def _active_runtime_metadata_agents(run: Run) -> set[str]:
+    payload = _read_run_metadata(run)
+    active_agents: set[str] = set()
+    for item in payload.get("agents") or []:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("status") or "").strip().lower() != "active":
+            continue
+        agent_name = str(item.get("agent_name") or item.get("task_name") or "").strip()
+        if agent_name:
+            active_agents.add(agent_name)
+    return active_agents
+
+
 def _running_container_stall_reason(run: Run) -> tuple[str, str, str] | None:
     engagement_dir = _active_engagement_dir(run)
     current_phase, total_cases, pending_cases, processing_cases = _load_running_queue_state(engagement_dir)
@@ -690,6 +723,31 @@ def _running_container_stall_reason(run: Run) -> tuple[str, str, str] | None:
     runtime_activity_at = _latest_running_runtime_activity_at(run)
     if runtime_activity_at is not None:
         runtime_age = time.time() - runtime_activity_at
+        processing_agents = _load_running_processing_agents(engagement_dir)
+        active_runtime_agents = _active_runtime_metadata_agents(run)
+        if (
+            current_phase not in EARLY_PHASE_STALL_PHASES
+            and processing_agents
+            and runtime_age >= PROCESSING_AGENT_MISMATCH_GRACE_SECONDS
+            and processing_agents.isdisjoint(active_runtime_agents)
+        ):
+            assigned = ", ".join(sorted(processing_agents))
+            if active_runtime_agents:
+                active = ", ".join(sorted(active_runtime_agents))
+                reason = (
+                    f"Processing queue assignments ({assigned}) had no matching active runtime agent "
+                    f"after stall grace period elapsed (active agents: {active})."
+                )
+            else:
+                reason = (
+                    f"Processing queue assignments ({assigned}) had no matching active runtime agent "
+                    "after stall grace period elapsed."
+                )
+            return (
+                current_phase,
+                "queue_stalled",
+                reason,
+            )
         if runtime_age >= RUN_STALL_TIMEOUT_SECONDS:
             return (
                 current_phase,
