@@ -26,6 +26,9 @@ KATANA_RATE_LIMIT="${KATANA_RATE_LIMIT:-60}"
 KATANA_STRATEGY="${KATANA_STRATEGY:-breadth-first}"
 KATANA_ENABLE_JSLUICE="${KATANA_ENABLE_JSLUICE:-0}"
 KATANA_ENABLE_PATH_CLIMB="${KATANA_ENABLE_PATH_CLIMB:-0}"
+KATANA_ENABLE_HYBRID="${KATANA_ENABLE_HYBRID:-1}"
+KATANA_ENABLE_XHR="${KATANA_ENABLE_XHR:-1}"
+KATANA_ENABLE_HEADLESS="${KATANA_ENABLE_HEADLESS:-1}"
 HOST_GATEWAY_ALIAS="${HOST_GATEWAY_ALIAS:-host.docker.internal}"
 
 runtime_mode() {
@@ -395,17 +398,6 @@ start_katana() {
     runtime_target="$(_rewrite_runtime_target_arg "$target")"
     local katana_args=(
         -u "$runtime_target"
-        -hh
-        -jc
-        -xhr
-        -xhr-extraction
-        -fx
-        -td
-        -tlsi
-        -duc
-        -system-chrome
-        -system-chrome-path "$KATANA_CHROME_BIN"
-        -headless-options "$KATANA_HEADLESS_OPTIONS"
         -kf all
         -iqp
         -fsu
@@ -426,6 +418,19 @@ start_katana() {
         -jsonl
         -silent
     )
+    if [[ "${KATANA_ENABLE_HYBRID}" == "1" ]]; then
+        katana_args+=(-hh -jc -fx -td -tlsi -duc)
+    fi
+    if [[ "${KATANA_ENABLE_XHR}" == "1" ]]; then
+        katana_args+=(-xhr -xhr-extraction)
+    fi
+    if [[ "${KATANA_ENABLE_HEADLESS}" == "1" ]]; then
+        katana_args+=(
+            -system-chrome
+            -system-chrome-path "$KATANA_CHROME_BIN"
+            -headless-options "$KATANA_HEADLESS_OPTIONS"
+        )
+    fi
     if [[ "${KATANA_ENABLE_JSLUICE}" == "1" ]]; then
         katana_args+=(-jsl)
     fi
