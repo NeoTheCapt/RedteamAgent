@@ -1001,12 +1001,99 @@ _SURFACE_TYPE_ALIASES = {
     "client_route": "dynamic_render",
     "client_side_route": "dynamic_render",
     "frontend_route": "dynamic_render",
+    "auth_workflow": "account_recovery",
+    "identity_verification": "auth_entry",
+    "p2p_trading": "dynamic_render",
+    "web3_assets": "dynamic_render",
+    "preview_or_internal_content": "dynamic_render",
+    "file": "file_handling",
+    "upload": "file_handling",
+    "api_docs": "api_documentation",
+    "swagger": "api_documentation",
+    "openapi": "api_documentation",
+    "auth": "auth_entry",
+    "authentication": "auth_entry",
+    "login": "auth_entry",
+    "register": "auth_entry",
+    "mfa": "auth_entry",
+    "oauth": "auth_entry",
+    "oauth_flow": "auth_entry",
+    "business_logic": "privileged_write",
+    "logic_flow": "privileged_write",
+    "stateful_flow": "privileged_write",
+    "race_condition": "privileged_write",
 }
 
 
 def _normalize_surface_type(value: str) -> str:
     normalized = str(value or "").strip().lower().replace("-", "_")
     return _SURFACE_TYPE_ALIASES.get(normalized, normalized)
+
+
+def _infer_surface_type(method: str, target: str, item_type: str, auth_hint: str, rationale: str) -> str:
+    method_value = str(method or "").strip().upper() or "GET"
+    target_value = str(target or "").strip()
+    item_type_value = str(item_type or "").strip().lower().replace("-", "_")
+    auth_value = str(auth_hint or "").strip().lower()
+    rationale_value = str(rationale or "").strip().lower()
+    haystack = " ".join(
+        value
+        for value in [method_value.lower(), target_value.lower(), item_type_value, auth_value, rationale_value]
+        if value
+    )
+
+    if item_type_value == "file" or "kdbx" in haystack or "/ftp/" in haystack or "file-upload" in haystack:
+        return "file_handling"
+    if any(token in haystack for token in ("swagger", "openapi", "api doc", "documented", "/api-docs", "/api-v5", "docs-api")):
+        return "api_documentation"
+    if item_type_value in {"asset_distribution", "cdn_asset_host", "cdn_host", "download_host", "object_storage", "storage_bucket"} or any(
+        token in haystack for token in ("asset host", "cdn host", "installer manifest", "object storage")
+    ):
+        return "dynamic_render"
+    if any(token in haystack for token in ("forgot-password", "reset-password", "security-question", "account recovery", "password reset")):
+        return "account_recovery"
+    if any(token in haystack for token in ("change-password", "privileged")):
+        return "privileged_write"
+    if any(token in haystack for token in ("2fa", "totp", "otp", "token", "jwt", "session", "cookie", "workflow")):
+        return "workflow_token"
+    if any(token in haystack for token in ("object", "idor", "{id}", "/track-order/", "orderid")):
+        return "object_reference"
+    if method_value != "GET" and item_type_value == "api":
+        return "privileged_write"
+    if any(token in haystack for token in ("login", "register", "auth", "mfa")):
+        return "auth_entry"
+    if item_type_value == "page":
+        return "dynamic_render"
+    if not item_type_value and method_value == "GET" and target_value.startswith("GET /"):
+        if not (
+            target_value.startswith("GET /api")
+            or re.match(r"GET /v\d", target_value)
+            or target_value.startswith("GET /priapi")
+            or target_value.startswith("GET /rest/")
+            or re.match(r"GET /[^\s]+\.[^/\s]+$", target_value)
+        ):
+            return "dynamic_render"
+    return ""
+
+
+def _build_surface_target(payload: dict[str, object]) -> str:
+    target = str(payload.get("target") or "").strip()
+    if target:
+        return _normalize_surface_target_placeholders(target)
+
+    url_value = ""
+    for key in ("url", "url/path", "path", "url_or_pattern", "urlOrPattern"):
+        value = payload.get(key)
+        if value is None:
+            continue
+        url_value = str(value).strip()
+        if url_value:
+            break
+    if not url_value:
+        return ""
+
+    method = str(payload.get("method") or "GET").strip().upper() or "GET"
+    return _normalize_surface_target_placeholders(f"{method} {url_value}")
 
 
 def _surface_target_contains_placeholder(value: str) -> bool:
@@ -1058,13 +1145,17 @@ def _extract_surface_candidates_from_text(text: str) -> list[dict[str, str]]:
         except json.JSONDecodeError:
             continue
 
-        surface_type = _normalize_surface_type(payload.get("surface_type") or "")
-        target = _normalize_surface_target_placeholders(payload.get("target") or "")
+        target = _build_surface_target(payload)
         source = str(payload.get("source") or payload.get("agent") or "").strip()
         rationale = str(payload.get("rationale") or payload.get("reason") or payload.get("notes") or "").strip()
         evidence_ref = str(payload.get("evidence_ref") or payload.get("evidence") or "").strip()
         status = str(payload.get("status") or "discovered").strip().lower().replace("-", "_")
-
+        method = str(payload.get("method") or "GET").strip().upper() or "GET"
+        item_type = str(payload.get("type") or "").strip()
+        auth_hint = str(payload.get("auth") or "").strip()
+        surface_type = _normalize_surface_type(payload.get("surface_type") or payload.get("category") or "")
+        if surface_type not in _VALID_SURFACE_TYPES:
+            surface_type = _infer_surface_type(method, target, item_type, auth_hint, rationale)
         if surface_type not in _VALID_SURFACE_TYPES:
             continue
         if status not in _VALID_SURFACE_STATUSES:
@@ -1093,14 +1184,21 @@ def _canonicalize_surface_record(record: dict[str, str], context: dict[str, str]
     if not isinstance(normalized, dict):
         return record
     canonical = dict(normalized)
-    surface_type = _normalize_surface_type(canonical.get("surface_type") or "")
+    target = _build_surface_target(canonical)
+    rationale = str(canonical.get("rationale") or canonical.get("reason") or canonical.get("notes") or "").strip()
+    method = str(canonical.get("method") or "GET").strip().upper() or "GET"
+    item_type = str(canonical.get("type") or "").strip()
+    auth_hint = str(canonical.get("auth") or "").strip()
+    surface_type = _normalize_surface_type(canonical.get("surface_type") or canonical.get("category") or "")
+    if surface_type not in _VALID_SURFACE_TYPES:
+        surface_type = _infer_surface_type(method, target, item_type, auth_hint, rationale)
     status = str(canonical.get("status") or "discovered").strip().lower().replace("-", "_")
     canonical["surface_type"] = surface_type
     canonical["status"] = status if status in _VALID_SURFACE_STATUSES else "discovered"
-    canonical["target"] = _normalize_surface_target_placeholders(canonical.get("target") or "")
-    canonical["source"] = str(canonical.get("source") or "").strip()
-    canonical["rationale"] = str(canonical.get("rationale") or "").strip()
-    canonical["evidence_ref"] = str(canonical.get("evidence_ref") or "").strip()
+    canonical["target"] = target
+    canonical["source"] = str(canonical.get("source") or canonical.get("agent") or "").strip()
+    canonical["rationale"] = rationale
+    canonical["evidence_ref"] = str(canonical.get("evidence_ref") or canonical.get("evidence") or "").strip()
     return canonical
 
 
