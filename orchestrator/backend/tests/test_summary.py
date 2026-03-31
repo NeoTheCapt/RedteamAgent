@@ -2224,6 +2224,83 @@ def test_run_summary_backfill_normalizes_spa_route_surface_candidates_to_dynamic
     ]
 
 
+def test_run_summary_backfill_accepts_category_and_path_surface_candidates():
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "http://127.0.0.1:8000")
+    active_dir = setup_active_engagement(run)
+
+    (active_dir / "scope.json").write_text(
+        json.dumps(
+            {
+                "target": "http://host.docker.internal:8000",
+                "hostname": "host.docker.internal",
+                "port": 8000,
+                "scope": ["host.docker.internal", "*.host.docker.internal"],
+                "status": "in_progress",
+                "current_phase": "recon",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (active_dir / "surfaces.jsonl").write_text("", encoding="utf-8")
+
+    process_log = Path(run["engagement_root"], "runtime", "process.log")
+    process_log.parent.mkdir(parents=True, exist_ok=True)
+    process_log.write_text(
+        json.dumps(
+            {
+                "type": "tool_use",
+                "part": {
+                    "state": {
+                        "output": (
+                            "[source-analyzer] #### Surface Candidates\n"
+                            "[source-analyzer] {\"category\":\"auth_entry\",\"path\":\"/rest/user/login\",\"method\":\"POST\",\"source\":\"source-analyzer\",\"rationale\":\"main.js exposes login flow and hardcoded test credentials in the login component\",\"priority\":\"high\"}\n"
+                            "[source-analyzer] {\"category\":\"dynamic_render\",\"url_or_pattern\":\"http://host.docker.internal:8000/#/web3-sandbox\",\"source\":\"source-analyzer\",\"reason\":\"lazy-loaded web3 sandbox compiles Solidity client-side\",\"status\":\"discovered\"}\n"
+                            "\n"
+                            "[source-analyzer] #### Findings\n"
+                        )
+                    }
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    response = client.get(
+        f"/projects/{project['id']}/runs/{run['id']}/summary",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+
+    payload = response.json()
+    assert payload["coverage"]["total_surfaces"] == 2
+    assert any(item["type"] == "auth_entry" and item["count"] == 1 for item in payload["coverage"]["surface_types"])
+    assert any(item["type"] == "dynamic_render" and item["count"] == 1 for item in payload["coverage"]["surface_types"])
+
+    surfaces_rows = [json.loads(line) for line in (active_dir / "surfaces.jsonl").read_text(encoding="utf-8").splitlines() if line.strip()]
+    assert surfaces_rows == [
+        {
+            "surface_type": "auth_entry",
+            "target": "POST /rest/user/login",
+            "source": "source-analyzer",
+            "rationale": "main.js exposes login flow and hardcoded test credentials in the login component",
+            "evidence_ref": "",
+            "status": "discovered",
+        },
+        {
+            "surface_type": "dynamic_render",
+            "target": "GET http://127.0.0.1:8000/#/web3-sandbox",
+            "source": "source-analyzer",
+            "rationale": "lazy-loaded web3 sandbox compiles Solidity client-side",
+            "evidence_ref": "",
+            "status": "discovered",
+        },
+    ]
+
+
 def test_run_summary_backfill_normalizes_loopback_surface_candidates_without_duplicate_growth():
     client = TestClient(app)
     token = register_and_login(client, "alice")
