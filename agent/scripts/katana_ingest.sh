@@ -398,6 +398,44 @@ PY
     rm -f "$lines_file" "$remainder_file"
 }
 
+sanitize_katana_output_for_restart() {
+    [[ -f "$KATANA_OUTPUT" ]] || return 0
+
+    python3 - "$KATANA_OUTPUT" <<'PY'
+from pathlib import Path
+import json
+import sys
+
+output_path = Path(sys.argv[1])
+if not output_path.exists():
+    raise SystemExit(0)
+
+data = output_path.read_bytes()
+if not data:
+    raise SystemExit(0)
+
+last_newline = data.rfind(b"\n")
+if last_newline >= 0:
+    prefix = data[: last_newline + 1]
+    tail = data[last_newline + 1 :]
+else:
+    prefix = b""
+    tail = data
+
+if not tail:
+    raise SystemExit(0)
+
+try:
+    json.loads(tail.decode("utf-8"))
+except Exception:
+    partial_path = output_path.with_name(output_path.name + ".partial-pre-fallback")
+    partial_path.write_bytes(tail)
+    output_path.write_bytes(prefix)
+else:
+    output_path.write_bytes(data + b"\n")
+PY
+}
+
 activate_plain_katana_fallback() {
     if [[ "$KATANA_FALLBACK_ACTIVATED" == "1" ]]; then
         return 0
@@ -405,15 +443,16 @@ activate_plain_katana_fallback() {
 
     echo "[katana_ingest] Activating plain katana fallback after ${KATANA_RECOVERABLE_ERROR_LINES} recoverable hybrid errors and no successful crawl rows"
     stop_katana >/dev/null 2>&1 || true
+    sanitize_katana_output_for_restart
 
     local old_enable_hybrid="${KATANA_ENABLE_HYBRID:-1}"
     local old_enable_xhr="${KATANA_ENABLE_XHR:-1}"
     local old_enable_headless="${KATANA_ENABLE_HEADLESS:-1}"
     export KATANA_ENABLE_HYBRID=0
-    export KATANA_ENABLE_XHR=0
-    export KATANA_ENABLE_HEADLESS=0
-    : > "$KATANA_OUTPUT"
-    LAST_OFFSET=0
+    export KATANA_ENABLE_XHR="$old_enable_xhr"
+    export KATANA_ENABLE_HEADLESS="$old_enable_headless"
+    LAST_OFFSET="$(wc -c < "$KATANA_OUTPUT" | tr -d '[:space:]')"
+    LAST_OFFSET="${LAST_OFFSET:-0}"
     INGEST_REMAINDER=""
     start_katana "$TARGET" "${EXTRA_FLAGS[@]+"${EXTRA_FLAGS[@]}"}"
     export KATANA_ENABLE_HYBRID="$old_enable_hybrid"
