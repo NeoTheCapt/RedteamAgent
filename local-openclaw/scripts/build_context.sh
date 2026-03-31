@@ -38,9 +38,47 @@ crawler_health_report() {
 
 okx_id="$(jq -r '[ .[] | select(.target=="https://www.okx.com") ] | last.id // empty' "$latest_runs_json")"
 local_id="$(jq -r '[ .[] | select(.target=="http://127.0.0.1:8000") ] | last.id // empty' "$latest_runs_json")"
+fixed_target_state_json="$(jq \
+    --arg okx "https://www.okx.com" \
+    --arg local "http://127.0.0.1:8000" '
+        def active_runs($target): [ .[] | select(.target == $target and (.status == "queued" or .status == "running")) ];
+        def latest_run($target): ([ .[] | select(.target == $target) ] | last // null);
+        {
+          okx: {
+            target: $okx,
+            total_runs: ([ .[] | select(.target == $okx) ] | length),
+            active_runs: (active_runs($okx) | length),
+            latest_run: latest_run($okx)
+          },
+          local: {
+            target: $local,
+            total_runs: ([ .[] | select(.target == $local) ] | length),
+            active_runs: (active_runs($local) | length),
+            latest_run: latest_run($local)
+          },
+          unexpected_active_runs: [
+            .[]
+            | select((.status == "queued" or .status == "running") and (.target != $okx and .target != $local))
+            | {
+                id,
+                target,
+                status,
+                created_at,
+                updated_at,
+                ended_at,
+                stop_reason_code,
+                stop_reason_text
+              }
+          ]
+        }
+    ' "$latest_runs_json")"
 
 {
     echo "# Latest Scan Optimizer Context"
+    echo
+    echo "## Fixed Target State"
+    echo
+    printf '%s\n' "$fixed_target_state_json" | jq '.'
     echo
     echo "## Runs"
     echo

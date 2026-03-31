@@ -13,6 +13,8 @@ from urllib.request import Request, urlopen
 BASE_URL = os.environ.get("ORCH_BASE_URL", "http://127.0.0.1:18000").rstrip("/")
 TOKEN = os.environ.get("ORCH_TOKEN", "")
 PROJECT_ID = os.environ.get("PROJECT_ID", "")
+LOCAL_OPENCLAW_ROOT = Path(__file__).resolve().parent.parent
+LATEST_RUNS_PATH = LOCAL_OPENCLAW_ROOT / "state" / "latest-runs.json"
 
 
 def api_get(path: str, default: Any) -> Any:
@@ -39,6 +41,77 @@ def _tail(path: Path, lines: int = 10) -> str:
         return ""
     with path.open("r", encoding="utf-8", errors="ignore") as handle:
         return "".join(handle.readlines()[-lines:]).rstrip("\n")
+
+
+def _project_run_record(run_id: str) -> dict[str, Any]:
+    if LATEST_RUNS_PATH.exists():
+        try:
+            runs = json.loads(LATEST_RUNS_PATH.read_text(encoding="utf-8"))
+        except Exception:
+            runs = []
+        if isinstance(runs, list):
+            for item in runs:
+                if str((item or {}).get("id") or "") == str(run_id):
+                    return item if isinstance(item, dict) else {}
+
+    direct = api_get(f"/projects/{PROJECT_ID}/runs/{run_id}", {})
+    if isinstance(direct, dict) and direct:
+        return direct
+
+    runs = api_get(f"/projects/{PROJECT_ID}/runs", [])
+    if isinstance(runs, list):
+        for item in runs:
+            if str((item or {}).get("id") or "") == str(run_id):
+                return item if isinstance(item, dict) else {}
+    return {}
+
+
+def _resolve_engagement_dir(run_id: str, summary_target: dict[str, Any]) -> Path:
+    engagement_dir_text = str((summary_target or {}).get("engagement_dir") or "").strip()
+    if engagement_dir_text:
+        candidate = Path(engagement_dir_text)
+        if candidate.exists():
+            return candidate
+
+    run_record = _project_run_record(run_id)
+    engagement_root_text = str(run_record.get("engagement_root") or "").strip()
+    if not engagement_root_text:
+        return Path()
+
+    run_root = Path(engagement_root_text)
+    run_json_path = run_root / "run.json"
+    if run_json_path.exists():
+        try:
+            run_json = json.loads(run_json_path.read_text(encoding="utf-8"))
+        except Exception:
+            run_json = {}
+        run_json_engagement_dir_text = str((run_json or {}).get("engagement_dir") or "").strip()
+        if run_json_engagement_dir_text:
+            candidate = Path(run_json_engagement_dir_text)
+            if candidate.exists():
+                return candidate
+
+    engagements_root = run_root / "workspace" / "engagements"
+    active_marker = engagements_root / ".active"
+    if active_marker.exists():
+        try:
+            active_text = active_marker.read_text(encoding="utf-8", errors="ignore").strip()
+        except Exception:
+            active_text = ""
+        if active_text:
+            candidate = run_root / "workspace" / active_text
+            if candidate.exists():
+                return candidate
+
+    if engagements_root.exists():
+        candidates = sorted(
+            [path for path in engagements_root.iterdir() if path.is_dir()],
+            key=lambda path: path.name,
+        )
+        if candidates:
+            return candidates[-1]
+
+    return Path()
 
 
 def _artifact_snapshot(engagement_dir: Path) -> dict[str, Any]:
@@ -197,8 +270,7 @@ summary = api_get(f"/projects/{PROJECT_ID}/runs/{run_id}/summary", {})
 observed_paths = api_get(f"/projects/{PROJECT_ID}/runs/{run_id}/observed-paths", [])
 
 target = summary.get("target") if isinstance(summary, dict) else {}
-engagement_dir_text = str((target or {}).get("engagement_dir") or "").strip()
-engagement_dir = Path(engagement_dir_text) if engagement_dir_text else Path()
+engagement_dir = _resolve_engagement_dir(run_id, target if isinstance(target, dict) else {})
 artifact = _artifact_snapshot(engagement_dir)
 
 api_total_cases = int(((summary.get("coverage") or {}).get("total_cases") or 0)) if isinstance(summary, dict) else 0
@@ -227,6 +299,9 @@ if katana_output_lines > 0 and api_observed_total == 0:
 artifact["integrity"]["reasons"] = reasons
 
 patched_summary = json.loads(json.dumps(summary)) if isinstance(summary, dict) else {}
+if engagement_dir:
+    patched_summary.setdefault("target", {})
+    patched_summary["target"]["engagement_dir"] = str(engagement_dir)
 patched_observed_paths = observed_paths if isinstance(observed_paths, list) else []
 if fallback_reasons:
     coverage = patched_summary.setdefault("coverage", {})

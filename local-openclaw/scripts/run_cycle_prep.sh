@@ -38,6 +38,19 @@ latest_run_id_for_target() {
     ' "$LATEST_RUNS_JSON"
 }
 
+active_run_count_for_target() {
+    local target="$1"
+    jq -r --arg target "$target" '
+        [ .[] | select(.target == $target and (.status == "queued" or .status == "running")) ] | length
+    ' "$LATEST_RUNS_JSON"
+}
+
+unexpected_active_runs_json() {
+    jq -c --arg okx "$TARGET_OKX" --arg local "$TARGET_LOCAL" '
+        [ .[] | select((.status == "queued" or .status == "running") and (.target != $okx and .target != $local)) ]
+    ' "$LATEST_RUNS_JSON"
+}
+
 verify_live_projection() {
     local run_id="$1"
     local label="$2"
@@ -67,9 +80,30 @@ verify_fixed_target_runs() {
     local needs_rebuild=0
     refresh_runs_json
 
-    local okx_id local_id
+    local okx_id local_id okx_active_count local_active_count unexpected_active_json unexpected_active_count
     okx_id="$(latest_run_id_for_target "$TARGET_OKX")"
     local_id="$(latest_run_id_for_target "$TARGET_LOCAL")"
+    okx_active_count="$(active_run_count_for_target "$TARGET_OKX")"
+    local_active_count="$(active_run_count_for_target "$TARGET_LOCAL")"
+    unexpected_active_json="$(unexpected_active_runs_json)"
+    unexpected_active_count="$(printf '%s\n' "$unexpected_active_json" | jq 'length')"
+
+    if [[ -z "$okx_id" ]]; then
+        echo "[$(timestamp)] fixed-target anomaly: no latest run exists for $TARGET_OKX" >&2
+    fi
+    if [[ -z "$local_id" ]]; then
+        echo "[$(timestamp)] fixed-target anomaly: no latest run exists for $TARGET_LOCAL" >&2
+    fi
+    if [[ "$okx_active_count" != "1" ]]; then
+        echo "[$(timestamp)] fixed-target anomaly: expected exactly 1 active run for $TARGET_OKX but found $okx_active_count" >&2
+    fi
+    if [[ "$local_active_count" != "1" ]]; then
+        echo "[$(timestamp)] fixed-target anomaly: expected exactly 1 active run for $TARGET_LOCAL but found $local_active_count" >&2
+    fi
+    if [[ "$unexpected_active_count" != "0" ]]; then
+        echo "[$(timestamp)] fixed-target anomaly: unexpected active non-fixed-target runs detected:" >&2
+        printf '%s\n' "$unexpected_active_json" | jq '.' >&2
+    fi
 
     verify_live_projection "$okx_id" "okx" || needs_rebuild=1
     verify_live_projection "$local_id" "local" || needs_rebuild=1
