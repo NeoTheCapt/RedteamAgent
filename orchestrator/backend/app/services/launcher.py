@@ -2097,8 +2097,17 @@ def _maybe_auto_resume_run(
 ) -> bool:
     if reason_code not in _AUTO_RESUME_REASON_CODES:
         return False
-    if _active_engagement_dir(run) is None:
+
+    engagement_dir = _active_engagement_dir(run)
+    if engagement_dir is None:
         return False
+
+    phase_name = _canonical_phase_name(phase)
+    scope = _normalize_scope_file(engagement_dir / "scope.json", run=run) or {}
+    scope_phase = _canonical_phase_name(scope.get("current_phase")) if isinstance(scope, dict) else "unknown"
+    if phase_name in {"report", "complete"} or scope_phase in {"report", "complete"}:
+        return False
+
     attempt = _current_auto_resume_count(run)
     if attempt >= _AUTO_RESUME_LIMIT:
         return False
