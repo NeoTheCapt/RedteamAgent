@@ -465,6 +465,58 @@ def test_list_runs_repairs_future_skewed_updated_at_from_live_workflow_activity(
 
 
 
+def test_list_runs_ignores_future_timestamps_embedded_in_process_log_text(monkeypatch):
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+
+    create_run = client.post(
+        f"/projects/{project['id']}/runs",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"target": "https://example.com"},
+    )
+    assert create_run.status_code == 201
+    run = create_run.json()
+    db.update_run_status(run["id"], "running")
+
+    run_root = Path(run["engagement_root"])
+    runtime_dir = run_root / "runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    process_log = runtime_dir / "process.log"
+    process_log.write_text(
+        "Exploit response included paymentDue=2026-04-14T06:09:11.080Z but runtime is still active\n",
+        encoding="utf-8",
+    )
+    recent_activity = datetime.now(UTC).replace(microsecond=0)
+    recent_epoch = recent_activity.timestamp()
+    os.utime(process_log, (recent_epoch, recent_epoch))
+
+    with sqlite3.connect(database_path()) as connection:
+        connection.execute(
+            "UPDATE runs SET updated_at = '2026-03-25 00:00:00' WHERE id = ?",
+            (run["id"],),
+        )
+        connection.commit()
+
+    monkeypatch.setattr("app.services.runs.locate_runtime_pid", lambda _run: 12345)
+    stopped: list[int] = []
+    monkeypatch.setattr("app.services.runs.stop_run_runtime", lambda reconciled_run: stopped.append(reconciled_run.id))
+
+    runs_response = client.get(
+        f"/projects/{project['id']}/runs",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert runs_response.status_code == 200
+    payload = runs_response.json()[0]
+    assert payload["status"] == "running"
+    assert payload["updated_at"] == recent_activity.strftime("%Y-%m-%d %H:%M:%S")
+    assert stopped == []
+
+    metadata = json.loads((run_root / "run.json").read_text(encoding="utf-8"))
+    assert metadata["updated_at"] == payload["updated_at"]
+
+
+
 def test_list_runs_marks_stale_running_process_as_failed():
     client = TestClient(app)
     token = register_and_login(client, "alice")

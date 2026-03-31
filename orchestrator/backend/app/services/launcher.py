@@ -530,6 +530,15 @@ def _iter_runtime_activity_timestamps(payload):
 
 
 _TEXT_LOG_TIMESTAMP_PATTERN = re.compile(r"\b(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)\b")
+_RUNTIME_ACTIVITY_FUTURE_SKEW_SECONDS = 5 * 60
+
+
+def _runtime_activity_candidate_is_valid(candidate: float | None) -> bool:
+    if candidate is None:
+        return False
+    if candidate <= 0:
+        return False
+    return candidate <= time.time() + _RUNTIME_ACTIVITY_FUTURE_SKEW_SECONDS
 
 
 def _latest_process_log_activity_at(path: Path, *, max_lines: int = 400) -> float | None:
@@ -552,6 +561,8 @@ def _latest_process_log_activity_at(path: Path, *, max_lines: int = 400) -> floa
                 payload = None
             if payload is not None:
                 for candidate in _iter_runtime_activity_timestamps(payload):
+                    if not _runtime_activity_candidate_is_valid(candidate):
+                        continue
                     if latest is None or candidate > latest:
                         latest = candidate
                 continue
@@ -560,7 +571,7 @@ def _latest_process_log_activity_at(path: Path, *, max_lines: int = 400) -> floa
         if text_match is None:
             continue
         candidate = _parse_runtime_activity_timestamp(text_match.group(1))
-        if candidate is not None and (latest is None or candidate > latest):
+        if _runtime_activity_candidate_is_valid(candidate) and (latest is None or candidate > latest):
             latest = candidate
 
     if latest is not None:

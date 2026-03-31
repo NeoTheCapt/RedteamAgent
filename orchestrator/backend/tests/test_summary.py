@@ -3,7 +3,7 @@ import os
 import sqlite3
 import threading
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -1165,6 +1165,50 @@ def test_run_summary_syncs_run_metadata_updated_at_to_latest_event_when_newer_th
     run_metadata = json.loads((Path(run["engagement_root"]) / "run.json").read_text(encoding="utf-8"))
     assert response.json()["overview"]["updated_at"] == late_event_at
     assert run_metadata["updated_at"] == late_event_at
+
+
+
+def test_run_summary_repairs_future_skewed_run_updated_at_from_workflow_activity(monkeypatch):
+    from app import db as app_db
+    from app.db import database_path
+
+    monkeypatch.setattr("app.services.run_summary._reconcile_run_status", lambda current_run: current_run)
+
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "https://target.example")
+    active_dir = setup_active_engagement(run)
+    (active_dir / "scope.json").write_text(
+        json.dumps({"hostname": "target.example", "status": "in_progress", "current_phase": "consume_test"}),
+        encoding="utf-8",
+    )
+    (active_dir / "log.md").write_text("# log\nupdated\n", encoding="utf-8")
+    app_db.update_run_status(run["id"], "running")
+
+    recent_activity = datetime.now(UTC).replace(microsecond=0)
+    recent_epoch = recent_activity.timestamp()
+    for path in (active_dir / "scope.json", active_dir / "log.md"):
+        os.utime(path, (recent_epoch, recent_epoch))
+
+    future_skewed = (recent_activity + timedelta(hours=8)).strftime("%Y-%m-%d %H:%M:%S")
+    with sqlite3.connect(database_path()) as connection:
+        connection.execute(
+            "UPDATE runs SET updated_at = ? WHERE id = ?",
+            (future_skewed, run["id"]),
+        )
+        connection.commit()
+
+    response = client.get(
+        f"/projects/{project['id']}/runs/{run['id']}/summary",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+
+    expected_utc = recent_activity.strftime("%Y-%m-%d %H:%M:%S")
+    run_metadata = json.loads((Path(run["engagement_root"]) / "run.json").read_text(encoding="utf-8"))
+    assert response.json()["overview"]["updated_at"] == expected_utc
+    assert run_metadata["updated_at"] == expected_utc
 
 
 
