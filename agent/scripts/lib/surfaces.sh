@@ -33,7 +33,7 @@ surface_validate_type() {
     local surface_type="${1:?surface type required}"
     surface_type="$(surface_canonical_type "$surface_type")"
     case "$surface_type" in
-        auth_entry|account_recovery|object_reference|privileged_write|file_handling|dynamic_render|api_documentation|workflow_token)
+        auth_entry|account_recovery|object_reference|privileged_write|file_handling|dynamic_render|api_documentation|workflow_token|api_param_followup|cors_review)
             return 0
             ;;
         *)

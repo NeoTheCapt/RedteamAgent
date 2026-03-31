@@ -2307,6 +2307,83 @@ def test_run_summary_backfill_accepts_category_and_path_surface_candidates():
     ]
 
 
+def test_run_summary_backfill_accepts_new_surface_taxonomy_entries():
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "https://www.example.com")
+    active_dir = setup_active_engagement(run)
+
+    (active_dir / "scope.json").write_text(
+        json.dumps(
+            {
+                "target": "https://www.example.com",
+                "hostname": "www.example.com",
+                "port": 443,
+                "scope": ["www.example.com", "*.example.com"],
+                "status": "in_progress",
+                "current_phase": "consume_test",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (active_dir / "surfaces.jsonl").write_text("", encoding="utf-8")
+
+    process_log = Path(run["engagement_root"], "runtime", "process.log")
+    process_log.parent.mkdir(parents=True, exist_ok=True)
+    process_log.write_text(
+        json.dumps(
+            {
+                "type": "tool_use",
+                "part": {
+                    "state": {
+                        "output": (
+                            "[vulnerability-analyst] #### Surface Candidates\n"
+                            "[vulnerability-analyst] {\"surface_type\":\"api_param_followup\",\"target\":\"GET https://www.example.com/priapi/v1/dx/market/v2/token/pool/project/list :: chainId\",\"source\":\"vulnerability-analyst\",\"rationale\":\"Endpoint explicitly requires Integer chainId; concrete input missing in current batch\",\"evidence_ref\":\"scans/va-api-batch/summary.json\",\"status\":\"discovered\"}\n"
+                            "[vulnerability-analyst] {\"surface_type\":\"cors_review\",\"target\":\"GET https://www.example.com/v3/users/support/common/list-download-url\",\"source\":\"vulnerability-analyst\",\"rationale\":\"Reflected arbitrary Origin in ACAO on unauthenticated public endpoint; low-impact weak signal only\",\"evidence_ref\":\"scans/va-api-batch/summary.json\",\"status\":\"discovered\"}\n"
+                            "\n"
+                            "[vulnerability-analyst] #### Findings\n"
+                        )
+                    }
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    response = client.get(
+        f"/projects/{project['id']}/runs/{run['id']}/summary",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+
+    payload = response.json()
+    assert payload["coverage"]["total_surfaces"] == 2
+    assert any(item["type"] == "api_param_followup" and item["count"] == 1 for item in payload["coverage"]["surface_types"])
+    assert any(item["type"] == "cors_review" and item["count"] == 1 for item in payload["coverage"]["surface_types"])
+
+    surfaces_rows = [json.loads(line) for line in (active_dir / "surfaces.jsonl").read_text(encoding="utf-8").splitlines() if line.strip()]
+    assert surfaces_rows == [
+        {
+            "surface_type": "api_param_followup",
+            "target": "GET https://www.example.com/priapi/v1/dx/market/v2/token/pool/project/list :: chainId",
+            "source": "vulnerability-analyst",
+            "rationale": "Endpoint explicitly requires Integer chainId; concrete input missing in current batch",
+            "evidence_ref": "scans/va-api-batch/summary.json",
+            "status": "discovered",
+        },
+        {
+            "surface_type": "cors_review",
+            "target": "GET https://www.example.com/v3/users/support/common/list-download-url",
+            "source": "vulnerability-analyst",
+            "rationale": "Reflected arbitrary Origin in ACAO on unauthenticated public endpoint; low-impact weak signal only",
+            "evidence_ref": "scans/va-api-batch/summary.json",
+            "status": "discovered",
+        },
+    ]
+
+
 def test_run_summary_backfill_normalizes_loopback_surface_candidates_without_duplicate_growth():
     client = TestClient(app)
     token = register_and_login(client, "alice")
