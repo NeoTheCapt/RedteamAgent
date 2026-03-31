@@ -747,6 +747,147 @@ def test_running_container_stall_reason_keeps_processing_case_alive_when_active_
 
 
 
+def test_running_container_stall_reason_flags_pending_queue_without_active_runtime_agent_after_dispatch_grace():
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "https://pending-dispatch-gap.example")
+    db.update_run_status(run["id"], "running")
+
+    run_row = db.get_run_by_id(run["id"])
+    assert run_row is not None
+
+    run_root = Path(run["engagement_root"])
+    runtime_dir = run_root / "runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    process_log = runtime_dir / "process.log"
+    process_log.write_text("recent runtime heartbeat\n", encoding="utf-8")
+
+    workspace = run_root / "workspace"
+    engagement_dir = workspace / "engagements" / "2026-03-31-000000-pending-dispatch-gap"
+    engagement_dir.mkdir(parents=True, exist_ok=True)
+    (workspace / "engagements" / ".active").write_text(
+        "engagements/2026-03-31-000000-pending-dispatch-gap\n",
+        encoding="utf-8",
+    )
+    scope_path = engagement_dir / "scope.json"
+    scope_path.write_text(
+        json.dumps(
+            {
+                "status": "in_progress",
+                "current_phase": "consume_test",
+                "phases_completed": ["recon", "collect"],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    with sqlite3.connect(engagement_dir / "cases.db") as connection:
+        connection.execute(
+            "CREATE TABLE cases (id INTEGER PRIMARY KEY AUTOINCREMENT, status TEXT NOT NULL, assigned_agent TEXT)"
+        )
+        connection.execute(
+            "INSERT INTO cases(status, assigned_agent) VALUES ('pending', NULL)"
+        )
+        connection.commit()
+
+    (run_root / "run.json").write_text(
+        json.dumps(
+            {
+                "agents": [
+                    {"agent_name": "report-writer", "status": "completed"},
+                    {"agent_name": "operator", "status": "completed"},
+                ]
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    import os
+
+    old_epoch = datetime.now().timestamp() - 130
+    os.utime(scope_path, (old_epoch, old_epoch))
+    os.utime(engagement_dir / "cases.db", (old_epoch, old_epoch))
+
+    from app.services.launcher import _running_container_stall_reason
+
+    assert _running_container_stall_reason(run_row) == (
+        "consume_test",
+        "queue_stalled",
+        "Pending queue items remained undispatched with no active runtime agent after dispatch grace period elapsed.",
+    )
+
+
+
+def test_running_container_stall_reason_keeps_pending_queue_alive_when_runtime_agent_is_active():
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "https://pending-dispatch-active.example")
+    db.update_run_status(run["id"], "running")
+
+    run_row = db.get_run_by_id(run["id"])
+    assert run_row is not None
+
+    run_root = Path(run["engagement_root"])
+    runtime_dir = run_root / "runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    process_log = runtime_dir / "process.log"
+    process_log.write_text("recent runtime heartbeat\n", encoding="utf-8")
+
+    workspace = run_root / "workspace"
+    engagement_dir = workspace / "engagements" / "2026-03-31-000000-pending-dispatch-active"
+    engagement_dir.mkdir(parents=True, exist_ok=True)
+    (workspace / "engagements" / ".active").write_text(
+        "engagements/2026-03-31-000000-pending-dispatch-active\n",
+        encoding="utf-8",
+    )
+    scope_path = engagement_dir / "scope.json"
+    scope_path.write_text(
+        json.dumps(
+            {
+                "status": "in_progress",
+                "current_phase": "consume_test",
+                "phases_completed": ["recon", "collect"],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    with sqlite3.connect(engagement_dir / "cases.db") as connection:
+        connection.execute(
+            "CREATE TABLE cases (id INTEGER PRIMARY KEY AUTOINCREMENT, status TEXT NOT NULL, assigned_agent TEXT)"
+        )
+        connection.execute(
+            "INSERT INTO cases(status, assigned_agent) VALUES ('pending', NULL)"
+        )
+        connection.commit()
+
+    (run_root / "run.json").write_text(
+        json.dumps(
+            {
+                "agents": [
+                    {"agent_name": "operator", "status": "active"},
+                ]
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    import os
+
+    old_epoch = datetime.now().timestamp() - 130
+    os.utime(scope_path, (old_epoch, old_epoch))
+    os.utime(engagement_dir / "cases.db", (old_epoch, old_epoch))
+
+    from app.services.launcher import _running_container_stall_reason
+
+    assert _running_container_stall_reason(run_row) is None
+
+
+
 def test_running_container_stall_reason_keeps_early_recon_alive_when_workflow_activity_is_recent():
     client = TestClient(app)
     token = register_and_login(client, "alice")

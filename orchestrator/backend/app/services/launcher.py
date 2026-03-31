@@ -82,6 +82,7 @@ _AUTO_RESUME_LIMIT = 3
 
 RUN_STALL_TIMEOUT_SECONDS = 900
 PROCESSING_AGENT_MISMATCH_GRACE_SECONDS = 120
+PENDING_QUEUE_DISPATCH_GRACE_SECONDS = 120
 EARLY_PHASE_STALL_TIMEOUT_SECONDS = 180
 EARLY_PHASE_STALL_PHASES = {"unknown", "recon", "collect"}
 
@@ -696,8 +697,8 @@ def _running_container_stall_reason(run: Run) -> tuple[str, str, str] | None:
     current_phase, total_cases, pending_cases, processing_cases = _load_running_queue_state(engagement_dir)
 
     workflow_activity_at = _latest_running_workflow_activity_at(engagement_dir)
-    if workflow_activity_at is not None:
-        workflow_age = time.time() - workflow_activity_at
+    workflow_age = (time.time() - workflow_activity_at) if workflow_activity_at is not None else None
+    if workflow_age is not None:
         if (
             current_phase not in EARLY_PHASE_STALL_PHASES
             and processing_cases > 0
@@ -721,10 +722,24 @@ def _running_container_stall_reason(run: Run) -> tuple[str, str, str] | None:
             )
 
     runtime_activity_at = _latest_running_runtime_activity_at(run)
+    active_runtime_agents = _active_runtime_metadata_agents(run)
+    if (
+        current_phase not in EARLY_PHASE_STALL_PHASES
+        and pending_cases > 0
+        and processing_cases == 0
+        and not active_runtime_agents
+        and workflow_age is not None
+        and workflow_age >= PENDING_QUEUE_DISPATCH_GRACE_SECONDS
+    ):
+        return (
+            current_phase,
+            "queue_stalled",
+            "Pending queue items remained undispatched with no active runtime agent after dispatch grace period elapsed.",
+        )
+
     if runtime_activity_at is not None:
         runtime_age = time.time() - runtime_activity_at
         processing_agents = _load_running_processing_agents(engagement_dir)
-        active_runtime_agents = _active_runtime_metadata_agents(run)
         if (
             current_phase not in EARLY_PHASE_STALL_PHASES
             and processing_agents
