@@ -191,6 +191,94 @@ def test_locate_runtime_pid_treats_running_container_without_matching_launcher_p
 
 
 
+def test_locate_runtime_pid_ignores_docker_log_followers_when_container_is_gone(monkeypatch):
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "https://missing-runtime.example")
+
+    container_name = f"redteam-orch-run-{run['id']:04d}"
+    metadata_path = Path(run["engagement_root"]) / "runtime" / "process.json"
+    metadata_path.parent.mkdir(parents=True, exist_ok=True)
+    metadata_path.write_text(
+        json.dumps(
+            {
+                "run_id": run["id"],
+                "container_name": container_name,
+                "launcher_pid": 999999,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr("app.services.launcher._container_status", lambda _name: None)
+    monkeypatch.setattr(
+        "app.services.launcher.subprocess.check_output",
+        lambda *_args, **_kwargs: (
+            f"12345 docker logs -f --since 2026-03-31T19:17:32.621Z {container_name} ORCHESTRATOR_RUN_ID={run['id']}"
+        ),
+    )
+
+    from app.services.launcher import locate_runtime_pid
+
+    assert locate_runtime_pid(db.get_run_by_id(run["id"])) is None
+
+
+
+def test_stop_run_runtime_terminates_orphaned_runtime_log_followers(monkeypatch):
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "https://cleanup.example")
+
+    container_name = f"redteam-orch-run-{run['id']:04d}"
+    metadata_path = Path(run["engagement_root"]) / "runtime" / "process.json"
+    metadata_path.parent.mkdir(parents=True, exist_ok=True)
+    metadata_path.write_text(
+        json.dumps(
+            {
+                "run_id": run["id"],
+                "container_name": container_name,
+                "launcher_pid": 999999,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    removed_commands: list[list[str]] = []
+    killed_pids: list[int] = []
+
+    def fake_run(command, **kwargs):
+        removed_commands.append(command)
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("app.services.launcher.subprocess.run", fake_run)
+    monkeypatch.setattr(
+        "app.services.launcher.subprocess.check_output",
+        lambda *_args, **_kwargs: (
+            f"12345 docker logs -f --since 2026-03-31T19:17:32.621Z {container_name} ORCHESTRATOR_RUN_ID={run['id']}\n"
+            "54321 /usr/bin/other-process"
+        ),
+    )
+    monkeypatch.setattr("app.services.launcher.locate_runtime_pid", lambda _run: None)
+
+    def fake_kill(pid: int, sig: int) -> None:
+        if sig != 0:
+            killed_pids.append(pid)
+
+    monkeypatch.setattr("app.services.launcher.os.kill", fake_kill)
+
+    from app.services.launcher import stop_run_runtime
+
+    stop_run_runtime(db.get_run_by_id(run["id"]))
+
+    assert ["docker", "rm", "-f", container_name] in removed_commands
+    assert killed_pids == [12345]
+
+
+
 def test_auto_launch_emits_runtime_heartbeat_when_process_is_still_running(monkeypatch):
     client = TestClient(app)
     token = register_and_login(client, "alice")

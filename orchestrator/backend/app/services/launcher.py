@@ -1842,6 +1842,56 @@ def _container_exit_code(container_name: str) -> int | None:
         return None
 
 
+def _looks_like_runtime_process(command: str, *, container_name: str | None) -> bool:
+    normalized = command.strip()
+    if not normalized:
+        return False
+
+    if " docker logs " in f" {normalized} ":
+        return False
+
+    runtime_markers = (
+        " opencode run --format json /autoengage ",
+        " opencode run --format json /resume ",
+        " docker run ",
+    )
+    if any(marker in f" {normalized} " for marker in runtime_markers):
+        if container_name and container_name in normalized and " docker run " in f" {normalized} ":
+            return True
+        if " opencode run --format json /" in f" {normalized} ":
+            return True
+
+    return False
+
+
+def _runtime_log_follower_pids(container_name: str | None) -> list[int]:
+    if not container_name:
+        return []
+
+    try:
+        output = subprocess.check_output(["ps", "eww", "-axo", "pid=,command="], text=True)
+    except (subprocess.SubprocessError, OSError):
+        return []
+
+    follower_pids: list[int] = []
+    for line in output.splitlines():
+        normalized = line.strip()
+        if not normalized:
+            continue
+        if container_name not in normalized:
+            continue
+        if " docker logs " not in f" {normalized} ":
+            continue
+        pid_text, _, _ = normalized.partition(" ")
+        try:
+            pid = int(pid_text)
+        except ValueError:
+            continue
+        if _pid_alive(pid):
+            follower_pids.append(pid)
+    return follower_pids
+
+
 def locate_runtime_pid(run: Run) -> int | None:
     metadata_path = process_metadata_path_for(run)
     payload: dict[str, object] = {}
@@ -1890,14 +1940,17 @@ def locate_runtime_pid(run: Run) -> int | None:
     for line in output.splitlines():
         if needle not in line:
             continue
-        pid_text, _, _ = line.strip().partition(" ")
+        normalized = line.strip()
+        if not _looks_like_runtime_process(normalized, container_name=container_name):
+            continue
+        pid_text, _, _ = normalized.partition(" ")
         try:
             pid = int(pid_text)
         except ValueError:
             continue
         if _pid_alive(pid):
             process_metadata_path_for(run).write_text(
-                json.dumps({"pid": pid, "run_id": run.id, "command": line.strip()}, indent=2, sort_keys=True) + "\n",
+                json.dumps({"pid": pid, "run_id": run.id, "command": normalized}, indent=2, sort_keys=True) + "\n",
                 encoding="utf-8",
             )
             return pid
@@ -1906,6 +1959,8 @@ def locate_runtime_pid(run: Run) -> int | None:
 
 def stop_run_runtime(run: Run) -> None:
     container_name = _container_name_from_metadata(run)
+    if not container_name:
+        container_name = runtime_container_name(run)
     if container_name:
         subprocess.run(
             ["docker", "rm", "-f", container_name],
@@ -1913,6 +1968,11 @@ def stop_run_runtime(run: Run) -> None:
             stderr=subprocess.DEVNULL,
             check=False,
         )
+        for follower_pid in _runtime_log_follower_pids(container_name):
+            try:
+                os.kill(follower_pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
 
     pid = locate_runtime_pid(run)
     if isinstance(pid, int) and pid > 0:
