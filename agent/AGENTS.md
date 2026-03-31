@@ -85,6 +85,10 @@ Rules:
 | report-writer | Final or interim report | Phase 5 |
 
 Context on every dispatch: agent identity, target URL, current phase, prior findings, specific task.
+When a dispatch references the engagement workspace, copy the exact active `$DIR` path verbatim.
+Never reconstruct, rename, or re-sanitize that path from the hostname (for example do not turn
+`host-docker-internal` back into `host-docker.internal`). If a subagent needs scratch space, place it
+under that exact `$DIR`.
 
 DEDUP: Check log.md before dispatch. Never dispatch same agent for same objective twice.
 PARALLEL: Independent tasks → parallel. Dependent → sequential.
