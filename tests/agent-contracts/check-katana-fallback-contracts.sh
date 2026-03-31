@@ -59,6 +59,7 @@ fi
 if [[ "$uses_xhr" -eq 1 ]]; then
   cat > "$output_file" <<'JSON'
 {"timestamp":"2026-03-31T00:00:01Z","request":{"method":"GET","endpoint":"http://127.0.0.1:8000/"},"error":"cause=\"context deadline exceeded\" chain=\"hybrid: could not get dom\""}
+{"timestamp":"2026-03-31T00:00:01.500Z","request":{"method":"GET","endpoint":"http://127.0.0.1:8000/assets/asset-manifest.json"},"response":{"status_code":200,"headers":{"Content-Type":"application/json"}}}
 {"timestamp":"2026-03-31T00:00:02Z","request":{"method":"GET","endpoint":"http://127.0.0.1:8000/rest/admin/application-configuration"},"error":"hybrid: response is nil"}
 {"timestamp":"2026-03-31T00:00:03Z","request":{"method":"GET","endpoint":"http://127.0.0.1:8000/api/profile"},"error":"cause=\"context deadline exceeded\" chain=\"hybrid: could not get dom\""}
 JSON
@@ -91,11 +92,7 @@ chmod +x "$TMP_DIR/fake-katana.sh"
 KATANA_INGEST_PID="$(cat "$TMP_DIR/katana_ingest.pid")"
 
 for _ in $(seq 1 15); do
-  total_cases="$(sqlite3 "$ENG_DIR/cases.db" 'select count(*) from cases;')"
   if sqlite3 "$ENG_DIR/cases.db" 'select url from cases where url = "http://127.0.0.1:8000/api/fallback-only" limit 1;' | grep -qx 'http://127.0.0.1:8000/api/fallback-only'; then
-    break
-  fi
-  if [[ "${total_cases:-0}" -ge 4 ]]; then
     break
   fi
   sleep 1
