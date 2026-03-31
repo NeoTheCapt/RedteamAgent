@@ -752,10 +752,14 @@ def _running_container_stall_reason(run: Run) -> tuple[str, str, str] | None:
     if runtime_activity_at is not None:
         runtime_age = time.time() - runtime_activity_at
         processing_agents = _load_running_processing_agents(engagement_dir)
+        mismatch_activity_at = runtime_activity_at
+        if workflow_activity_at is not None and workflow_activity_at > mismatch_activity_at:
+            mismatch_activity_at = workflow_activity_at
+        mismatch_age = time.time() - mismatch_activity_at
         if (
             current_phase not in EARLY_PHASE_STALL_PHASES
             and processing_agents
-            and runtime_age >= PROCESSING_AGENT_MISMATCH_GRACE_SECONDS
+            and mismatch_age >= PROCESSING_AGENT_MISMATCH_GRACE_SECONDS
             and processing_agents.isdisjoint(active_runtime_agents)
         ):
             assigned = ", ".join(sorted(processing_agents))

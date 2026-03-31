@@ -122,6 +122,41 @@ maybe_log_progress() {
     fi
 }
 
+resolve_katana_request_source() {
+    local request_json="${1:-}"
+    local source_name tag attribute source_ref url url_path error_text
+
+    source_name="$(printf '%s' "$request_json" | jq -r '.source // "katana"' 2>/dev/null || echo "katana")"
+    if [[ "$source_name" == "katana-xhr" ]]; then
+        printf '%s\n' "$source_name"
+        return 0
+    fi
+
+    tag="$(printf '%s' "$request_json" | jq -r '.tag // empty' 2>/dev/null || true)"
+    attribute="$(printf '%s' "$request_json" | jq -r '.attribute // empty' 2>/dev/null || true)"
+    source_ref="$(printf '%s' "$request_json" | jq -r '.source_ref // empty' 2>/dev/null || true)"
+    url="$(printf '%s' "$request_json" | jq -r '.url // empty' 2>/dev/null || true)"
+    error_text="$(printf '%s' "$request_json" | jq -r '.error // empty' 2>/dev/null || true)"
+
+    if [[ -n "$url" ]]; then
+        url_path="$(extract_url_path "$url")"
+    else
+        url_path=""
+    fi
+
+    if [[ -n "$error_text" ]] \
+        && katana_error_is_recoverable_discovery "$error_text" \
+        && [[ "$tag" == "js" ]] \
+        && [[ "$attribute" == "regex" ]] \
+        && is_katana_javascript_source_ref "$source_ref" \
+        && is_katana_api_like_path "$url_path"; then
+        printf '%s\n' "katana-xhr"
+        return 0
+    fi
+
+    printf '%s\n' "$source_name"
+}
+
 katana_request_counts_as_success() {
     local request_json="${1:-}"
     local url method content_type response_status source_name url_path case_type
@@ -131,7 +166,7 @@ katana_request_counts_as_success() {
         return 1
     fi
 
-    source_name="$(printf '%s' "$request_json" | jq -r '.source // "katana"' 2>/dev/null || echo "katana")"
+    source_name="$(resolve_katana_request_source "$request_json")"
     if [[ "$source_name" == "katana-xhr" ]]; then
         return 0
     fi
@@ -166,10 +201,6 @@ katana_line_counts_as_success() {
     local request_json
 
     [[ -n "$line" ]] || return 1
-
-    if printf '%s' "$line" | jq -e '.error? // empty' >/dev/null 2>&1; then
-        return 1
-    fi
 
     while IFS= read -r request_json; do
         [[ -n "$request_json" ]] || continue
@@ -295,7 +326,7 @@ ingest_katana_line() {
         method=$(printf '%s' "$request_json" | jq -r '.method // "GET"' 2>/dev/null || echo "GET")
         content_type=$(printf '%s' "$request_json" | jq -r '.content_type // ""' 2>/dev/null || true)
         resp_status=$(printf '%s' "$request_json" | jq -r '.response_status // 0' 2>/dev/null || echo "0")
-        ingest_request "$method" "$url" "$content_type" "$resp_status" "$(printf '%s' "$request_json" | jq -r '.source // "katana"' 2>/dev/null || echo "katana")"
+        ingest_request "$method" "$url" "$content_type" "$resp_status" "$(resolve_katana_request_source "$request_json")"
     done < <(
         printf '%s' "$line" | jq -c '
             [
