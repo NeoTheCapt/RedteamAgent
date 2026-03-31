@@ -80,6 +80,38 @@ maybe_log_progress() {
     fi
 }
 
+katana_line_counts_as_success() {
+    local line="${1:-}"
+    local url method content_type url_path case_type xhr_count
+
+    [[ -n "$line" ]] || return 1
+
+    if printf '%s' "$line" | jq -e '.error? // empty' >/dev/null 2>&1; then
+        return 1
+    fi
+
+    xhr_count="$(printf '%s' "$line" | jq -r '(.response.xhr_requests // []) | length' 2>/dev/null || echo 0)"
+    if [[ "$xhr_count" =~ ^[0-9]+$ ]] && (( xhr_count > 0 )); then
+        return 0
+    fi
+
+    url="$(printf '%s' "$line" | jq -r '.request.endpoint // .request.url // .url // empty' 2>/dev/null || true)"
+    [[ -n "$url" ]] || return 1
+    method="$(printf '%s' "$line" | jq -r '.request.method // "GET"' 2>/dev/null || echo "GET")"
+    content_type="$(printf '%s' "$line" | jq -r '.response.headers["content-type"] // .response.headers["Content-Type"] // ""' 2>/dev/null || true)"
+    url_path="$(extract_url_path "$url")"
+    case_type="$(classify_type "$method" "$url_path" "$content_type" "")"
+
+    case "$case_type" in
+        page|api|graphql|form|upload|websocket|unknown)
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
 ingest_request() {
     local method="${1:-GET}"
     local url="${2:-}"
@@ -141,7 +173,7 @@ ingest_katana_line() {
     error_text="$(printf '%s' "$line" | jq -r '.error // empty' 2>/dev/null || true)"
     if [[ -n "$error_text" ]] && katana_error_is_recoverable_discovery "$error_text"; then
         KATANA_RECOVERABLE_ERROR_LINES=$((KATANA_RECOVERABLE_ERROR_LINES + 1))
-    elif [[ -z "$error_text" ]]; then
+    elif katana_line_counts_as_success "$line"; then
         KATANA_SUCCESS_LINES=$((KATANA_SUCCESS_LINES + 1))
         KATANA_LAST_SUCCESS_TS="$(date +%s)"
     fi
