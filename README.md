@@ -27,6 +27,7 @@ An autonomous red team simulation agent that works with **Claude Code**, **OpenC
 **Key Features:**
 - **Multi-CLI support** — works with Claude Code, OpenCode, and Codex out of the box
 - **Autonomous workflow** — 5-phase methodology (Recon → Collect → Test → Exploit+OSINT → Report) runs with minimal user interaction
+- **Orchestrator GUI** — local web UI for projects, live runs, artifacts, timelines, and terminal run metadata
 - **Intelligence collection** — `intel.md` accumulates tech stack, people, domains, credentials from recon through exploitation; OSINT agent enriches with CVE, breach, DNS history, and social data
 - **8 specialized agents** — operator, recon-specialist, source-analyzer, vulnerability-analyst, exploit-developer, fuzzer, osint-analyst, report-writer
 - **Containerized tools** — all pentest tools run in Docker (Kali toolbox, mitmproxy, Katana, optional Metasploit RPC for OpenCode), zero local installation
@@ -167,6 +168,30 @@ autoengage http://your-ctf-target:8080
 
 **Notes**
 - Codex does not support slash commands the same way OpenCode and Claude Code do; use natural-language command invocation when needed.
+
+### Local Orchestrator (Optional)
+
+Use the local web UI when you want to manage multiple workspaces or inspect live runs outside the CLI.
+
+**Start**
+
+```bash
+./orchestrator/run.sh
+# or rebuild the all-in-one image first:
+./orchestrator/run.sh --rebuild
+```
+
+**Stop**
+
+```bash
+./orchestrator/stop.sh
+```
+
+**Notes**
+- Default URL: `http://127.0.0.1:18000`
+- `./orchestrator/run.sh` bootstraps the backend virtualenv, installs frontend dependencies if needed, and builds the frontend before starting.
+- The UI exposes projects, live run status, task/phase timelines, artifacts, and terminal run metadata from the runs API.
+- Recent backend work also auto-recovers incomplete runs after supervisor loss or backend restarts, so the UI is suitable for long-running unattended sessions.
 
 ## Shared Outputs
 
@@ -382,6 +407,7 @@ Agent prompts and commands are maintained **only** in OpenCode format (`.opencod
 | Problem | Solution |
 |---------|----------|
 | Docker images fail to build | `docker system prune -af && cd agent/docker && docker compose build --no-cache` |
+| Docker build fails while fetching Kali packages | Re-run the build. The Dockerfiles pin Kali to the official rotator and retry automatically, but transient mirror/network failures can still require another attempt. |
 | Katana doesn't start | Check: `docker logs redteam-katana` |
 | Agent refuses to test target | Adjust auth in `agent/CLAUDE.md` or `agent/.opencode/instructions/INSTRUCTIONS.md` |
 | Queue shows 0 cases | Run `/status` — check Collect phase was executed |
