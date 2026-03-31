@@ -540,6 +540,61 @@ def test_running_container_stall_reason_keeps_early_collect_alive_when_rw_cases_
 
 
 
+def test_running_container_stall_reason_keeps_early_recon_alive_when_workflow_activity_is_recent():
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "https://recent-recon.example")
+    db.update_run_status(run["id"], "running")
+
+    run_row = db.get_run_by_id(run["id"])
+    assert run_row is not None
+
+    run_root = Path(run["engagement_root"])
+    process_log = run_root / "runtime" / "process.log"
+    process_log.parent.mkdir(parents=True, exist_ok=True)
+    process_log.write_text("recon started\n", encoding="utf-8")
+    old_epoch = datetime.now().timestamp() - 240
+    import os
+    os.utime(process_log, (old_epoch, old_epoch))
+
+    workspace = run_root / "workspace"
+    engagement_dir = workspace / "engagements" / "2026-03-30-000000-recent-recon"
+    engagement_dir.mkdir(parents=True, exist_ok=True)
+    (workspace / "engagements" / ".active").write_text(
+        "engagements/2026-03-30-000000-recent-recon\n",
+        encoding="utf-8",
+    )
+    scope_path = engagement_dir / "scope.json"
+    scope_path.write_text(
+        json.dumps(
+            {
+                "status": "in_progress",
+                "current_phase": "recon",
+                "phases_completed": [],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    recent_epoch = datetime.now().timestamp() - 15
+    os.utime(scope_path, (recent_epoch, recent_epoch))
+    log_path = engagement_dir / "log.md"
+    log_path.write_text("recent source analysis summary\n", encoding="utf-8")
+    os.utime(log_path, (recent_epoch, recent_epoch))
+
+    with sqlite3.connect(engagement_dir / "cases.db") as connection:
+        connection.execute(
+            "CREATE TABLE cases (id INTEGER PRIMARY KEY AUTOINCREMENT, status TEXT NOT NULL)"
+        )
+        connection.commit()
+
+    from app.services.launcher import _running_container_stall_reason
+
+    assert _running_container_stall_reason(run_row) is None
+
+
+
 def test_supervise_container_ignores_replayed_process_log_mtime_when_json_timestamps_are_stale(monkeypatch):
     client = TestClient(app)
     token = register_and_login(client, "alice")

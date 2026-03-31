@@ -1926,29 +1926,27 @@ def test_run_summary_normalizes_loopback_runtime_artifacts_and_redacts_katana_he
     )
     scans_dir = active_dir / "scans"
     scans_dir.mkdir(parents=True, exist_ok=True)
-    (scans_dir / "katana_output.jsonl").write_text(
-        json.dumps(
-            {
-                "request": {"method": "GET", "endpoint": "http://host.docker.internal:8000/"},
-                "response": {
-                    "headers": {"Content-Type": "text/html"},
-                    "xhr_requests": [
-                        {
-                            "method": "GET",
-                            "endpoint": "http://host.docker.internal:8000/rest/admin/application-version",
-                            "headers": {
-                                "Authorization": "Bearer secret-jwt",
-                                "Cookie": "sid=secret-cookie",
-                                "Accept": "application/json",
-                            },
-                        }
-                    ],
-                },
+    original_katana_text = json.dumps(
+        {
+            "request": {"method": "GET", "endpoint": "http://host.docker.internal:8000/"},
+            "response": {
+                "headers": {"Content-Type": "text/html"},
+                "xhr_requests": [
+                    {
+                        "method": "GET",
+                        "endpoint": "http://host.docker.internal:8000/rest/admin/application-version",
+                        "headers": {
+                            "Authorization": "Bearer secret-jwt",
+                            "Cookie": "sid=secret-cookie",
+                            "Accept": "application/json",
+                        },
+                    }
+                ],
             },
-            separators=(",", ":"),
-        ),
-        encoding="utf-8",
+        },
+        separators=(",", ":"),
     )
+    (scans_dir / "katana_output.jsonl").write_text(original_katana_text, encoding="utf-8")
 
     with sqlite3.connect(active_dir / "cases.db") as connection:
         connection.execute(
@@ -1995,13 +1993,14 @@ def test_run_summary_normalizes_loopback_runtime_artifacts_and_redacts_katana_he
     assert "host.docker.internal" not in findings_text
     assert "host.docker.internal" not in report_text
     assert "host.docker.internal" not in surfaces_text
-    assert "host.docker.internal" not in katana_text
-    assert "secret-jwt" not in katana_text
-    assert "secret-cookie" not in katana_text
-    assert '<redacted>' in katana_text
+    assert katana_text == original_katana_text
+    assert "host.docker.internal" in katana_text
+    assert "secret-jwt" in katana_text
+    assert "secret-cookie" in katana_text
+    assert '<redacted>' not in katana_text
 
 
-def test_run_summary_normalizes_malformed_katana_jsonl_streams():
+def test_run_summary_normalizes_malformed_katana_jsonl_streams_for_terminal_runs():
     client = TestClient(app)
     token = register_and_login(client, "alice")
     project = create_project(client, token)
@@ -2067,6 +2066,10 @@ def test_run_summary_normalizes_malformed_katana_jsonl_streams():
     )
     malformed_second = second.replace("Feature-Policy", f"Feature-Policy{chr(0)}").replace("payment 'self'", f"pa{chr(0)}yment 'self'")
     (scans_dir / "katana_output.jsonl").write_text(first + third + "\n" + malformed_second + "\n", encoding="utf-8")
+
+    from app import db as app_db
+
+    app_db.update_run_status(run["id"], "completed")
 
     response = client.get(
         f"/projects/{project['id']}/runs/{run['id']}/summary",
