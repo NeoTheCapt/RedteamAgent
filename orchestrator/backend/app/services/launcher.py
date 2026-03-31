@@ -83,7 +83,11 @@ _AUTO_RESUME_LIMIT = 3
 RUN_STALL_TIMEOUT_SECONDS = 900
 PROCESSING_AGENT_MISMATCH_GRACE_SECONDS = 120
 PENDING_QUEUE_DISPATCH_GRACE_SECONDS = 120
-EARLY_PHASE_STALL_TIMEOUT_SECONDS = 180
+# Real targets can spend several minutes in autonomous initialization/recon before the
+# first queue item or observed path lands. Keep the live launcher watchdog aligned with
+# the API reconciler so we do not fail healthy slow-start recon while subagent dispatch
+# is still warming up.
+EARLY_PHASE_STALL_TIMEOUT_SECONDS = 300
 EARLY_PHASE_STALL_PHASES = {"unknown", "recon", "collect"}
 
 

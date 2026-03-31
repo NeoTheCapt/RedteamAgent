@@ -73,6 +73,48 @@ KATANA_LAST_SUCCESS_TS=0
 KATANA_LAST_OUTPUT_CHANGE_TS=0
 KATANA_RECOVERABLE_ERROR_LINES=0
 KATANA_SUCCESS_LINES=0
+KATANA_INGEST_EXIT_GRACE_SECONDS="${KATANA_INGEST_EXIT_GRACE_SECONDS:-10}"
+
+cleanup_katana_ingest() {
+    if [[ "$KATANA_INGEST_STARTED_KATANA" == "1" ]]; then
+        stop_katana >/dev/null 2>&1 || true
+    fi
+    rm -f "$(pid_file_path "$ENGAGEMENT_DIR/pids" "katana_ingest")"
+}
+trap cleanup_katana_ingest EXIT
+
+katana_runtime_active() {
+    [[ "$KATANA_INGEST_STARTED_KATANA" == "1" ]] || return 1
+
+    if [[ "$(runtime_mode)" == "local" ]]; then
+        pid_is_running "$(_pid_file "katana")"
+        return $?
+    fi
+
+    local container_name
+    container_name="$(_katana_container_name)" || return 1
+    docker ps --format '{{.Names}}' | grep -q "^${container_name}$"
+}
+
+maybe_finish_ingest_loop() {
+    local now elapsed_since_output
+
+    [[ "$KATANA_INGEST_STARTED_KATANA" == "1" ]] || return 1
+    katana_runtime_active && return 1
+
+    now="$(date +%s)"
+    elapsed_since_output=$((now - KATANA_LAST_OUTPUT_CHANGE_TS))
+    if (( elapsed_since_output < KATANA_INGEST_EXIT_GRACE_SECONDS )); then
+        return 1
+    fi
+
+    if [[ -n "$INGEST_REMAINDER" ]]; then
+        ingest_katana_line "$INGEST_REMAINDER"
+        INGEST_REMAINDER=""
+    fi
+
+    return 0
+}
 
 maybe_log_progress() {
     if (( count > 0 && count % 50 == 0 )); then
@@ -379,6 +421,9 @@ else
     while true; do
         read_new_output_bytes "$KATANA_OUTPUT"
         maybe_activate_katana_fallback
+        if maybe_finish_ingest_loop; then
+            break
+        fi
         sleep "$poll_seconds"
     done
 fi
