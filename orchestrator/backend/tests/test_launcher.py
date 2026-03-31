@@ -1414,6 +1414,71 @@ def test_auto_launch_missing_container_auto_resumes_incomplete_runtime(monkeypat
 
 
 
+def test_auto_resume_skips_report_phase_recovery(monkeypatch):
+    client = TestClient(app)
+    token = register_and_login(client, "alice-report-resume")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "https://report-only.example")
+
+    run_root = Path(run["engagement_root"])
+    workspace = run_root / "workspace"
+    engagement_dir = workspace / "engagements" / "2026-03-31-000000-report-stall"
+    engagement_dir.mkdir(parents=True, exist_ok=True)
+    (workspace / "engagements" / ".active").write_text(
+        "engagements/2026-03-31-000000-report-stall\n",
+        encoding="utf-8",
+    )
+    (engagement_dir / "scope.json").write_text(
+        json.dumps(
+            {
+                "status": "in_progress",
+                "current_phase": "report",
+                "phases_completed": ["recon", "collect", "consume_test", "exploit"],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    with sqlite3.connect(engagement_dir / "cases.db") as connection:
+        connection.execute("CREATE TABLE cases (id INTEGER PRIMARY KEY AUTOINCREMENT, status TEXT NOT NULL)")
+        connection.executemany("INSERT INTO cases(status) VALUES (?)", [("done",), ("done",)])
+        connection.commit()
+
+    launched = {"count": 0}
+
+    def fake_launch(*args, **kwargs):
+        launched["count"] += 1
+        raise AssertionError("report phase must not auto-resume")
+
+    monkeypatch.setattr("app.services.launcher._launch_runtime_container", fake_launch)
+
+    from app.services.launcher import _maybe_auto_resume_run
+
+    project_obj = db.get_project_by_id(project["id"])
+    user_obj = db.get_user_by_username("alice-report-resume")
+    run_obj = db.get_run_by_id(run["id"])
+    assert project_obj is not None
+    assert user_obj is not None
+    assert run_obj is not None
+
+    resumed = _maybe_auto_resume_run(
+        project_obj,
+        run_obj,
+        user_obj,
+        phase="report",
+        reason_code="runtime_disappeared",
+        reason_text="report writer disappeared",
+    )
+
+    assert resumed is False
+    assert launched["count"] == 0
+    metadata = json.loads((run_root / "run.json").read_text(encoding="utf-8"))
+    assert metadata.get("auto_resume_count") in (None, 0)
+    events = db.list_events_for_run(run["id"])
+    assert not any(event.event_type == "run.resumed" for event in events)
+
+
+
 def test_auto_launch_missing_container_preserves_completed_artifacts(monkeypatch):
     client = TestClient(app)
     token = register_and_login(client, "alice")
