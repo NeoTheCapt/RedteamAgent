@@ -582,10 +582,9 @@ def _latest_process_log_activity_at(path: Path, *, max_lines: int = 400) -> floa
 def _latest_running_runtime_activity_at(run: Run) -> float | None:
     latest = _latest_process_log_activity_at(process_log_path_for(run))
 
-    process_metadata = _path_mtime(process_metadata_path_for(run))
-    if process_metadata is not None and (latest is None or process_metadata > latest):
-        latest = process_metadata
-
+    # Ignore process.json mtime here. Launcher/recovery code may rewrite metadata
+    # without any new runtime output, and using that timestamp would let a stuck
+    # container look healthy forever.
     opencode_logs_root = opencode_home_root_for(run) / "log"
     if opencode_logs_root.exists():
         for path in opencode_logs_root.glob("*.log"):
