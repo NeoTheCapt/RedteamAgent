@@ -540,6 +540,69 @@ def test_running_container_stall_reason_keeps_early_collect_alive_when_rw_cases_
 
 
 
+def test_running_container_stall_reason_ignores_fresh_process_metadata_mtime():
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "https://stalled-runtime.example")
+    db.update_run_status(run["id"], "running")
+
+    run_row = db.get_run_by_id(run["id"])
+    assert run_row is not None
+
+    run_root = Path(run["engagement_root"])
+    runtime_dir = run_root / "runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    process_log = runtime_dir / "process.log"
+    process_log.write_text("stalled after model call\n", encoding="utf-8")
+    process_metadata = runtime_dir / "process.json"
+    process_metadata.write_text(
+        json.dumps({"run_id": run["id"], "container_name": f"redteam-orch-run-{run['id']:04d}"}) + "\n",
+        encoding="utf-8",
+    )
+
+    workspace = run_root / "workspace"
+    engagement_dir = workspace / "engagements" / "2026-03-31-000000-stalled-runtime"
+    engagement_dir.mkdir(parents=True, exist_ok=True)
+    (workspace / "engagements" / ".active").write_text(
+        "engagements/2026-03-31-000000-stalled-runtime\n",
+        encoding="utf-8",
+    )
+    scope_path = engagement_dir / "scope.json"
+    scope_path.write_text(
+        json.dumps(
+            {
+                "status": "in_progress",
+                "current_phase": "exploit",
+                "phases_completed": ["recon", "collect", "consume_test"],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    with sqlite3.connect(engagement_dir / "cases.db") as connection:
+        connection.execute(
+            "CREATE TABLE cases (id INTEGER PRIMARY KEY AUTOINCREMENT, status TEXT NOT NULL)"
+        )
+        connection.execute("INSERT INTO cases(status) VALUES ('done')")
+        connection.commit()
+
+    old_epoch = datetime.now().timestamp() - 950
+    import os
+    os.utime(process_log, (old_epoch, old_epoch))
+    os.utime(scope_path, (old_epoch, old_epoch))
+    os.utime(engagement_dir / "cases.db", (old_epoch, old_epoch))
+
+    from app.services.launcher import _running_container_stall_reason
+
+    assert _running_container_stall_reason(run_row) == (
+        "exploit",
+        "queue_stalled",
+        "Runtime produced no new output before stall timeout elapsed.",
+    )
+
+
+
 def test_running_container_stall_reason_keeps_early_recon_alive_when_workflow_activity_is_recent():
     client = TestClient(app)
     token = register_and_login(client, "alice")
