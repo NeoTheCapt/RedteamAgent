@@ -65,6 +65,14 @@ touch "$KATANA_OUTPUT"
 count=0
 LAST_OFFSET=0
 INGEST_REMAINDER=""
+KATANA_INGEST_STARTED_KATANA=0
+KATANA_FALLBACK_ACTIVATED=0
+KATANA_FALLBACK_STALL_SECONDS="${KATANA_FALLBACK_STALL_SECONDS:-90}"
+KATANA_FALLBACK_RECOVERABLE_THRESHOLD="${KATANA_FALLBACK_RECOVERABLE_THRESHOLD:-8}"
+KATANA_LAST_SUCCESS_TS=0
+KATANA_LAST_OUTPUT_CHANGE_TS=0
+KATANA_RECOVERABLE_ERROR_LINES=0
+KATANA_SUCCESS_LINES=0
 
 maybe_log_progress() {
     if (( count > 0 && count % 50 == 0 )); then
@@ -126,9 +134,17 @@ ingest_request() {
 
 ingest_katana_line() {
     local line="${1:-}"
-    local url method content_type resp_status request_json
+    local url method content_type resp_status request_json error_text
 
     [[ -n "$line" ]] || return 0
+
+    error_text="$(printf '%s' "$line" | jq -r '.error // empty' 2>/dev/null || true)"
+    if [[ -n "$error_text" ]] && katana_error_is_recoverable_discovery "$error_text"; then
+        KATANA_RECOVERABLE_ERROR_LINES=$((KATANA_RECOVERABLE_ERROR_LINES + 1))
+    elif [[ -z "$error_text" ]]; then
+        KATANA_SUCCESS_LINES=$((KATANA_SUCCESS_LINES + 1))
+        KATANA_LAST_SUCCESS_TS="$(date +%s)"
+    fi
 
     if ! katana_line_should_ingest "$line"; then
         return 0
@@ -198,6 +214,8 @@ read_new_output_bytes() {
         return 0
     fi
 
+    KATANA_LAST_OUTPUT_CHANGE_TS="$(date +%s)"
+
     lines_file="$(mktemp)"
     remainder_file="$(mktemp)"
 
@@ -250,9 +268,66 @@ PY
     rm -f "$lines_file" "$remainder_file"
 }
 
+activate_plain_katana_fallback() {
+    if [[ "$KATANA_FALLBACK_ACTIVATED" == "1" ]]; then
+        return 0
+    fi
+
+    echo "[katana_ingest] Activating plain katana fallback after ${KATANA_RECOVERABLE_ERROR_LINES} recoverable hybrid errors and no successful crawl rows"
+    stop_katana >/dev/null 2>&1 || true
+
+    local old_enable_hybrid="${KATANA_ENABLE_HYBRID:-1}"
+    local old_enable_xhr="${KATANA_ENABLE_XHR:-1}"
+    local old_enable_headless="${KATANA_ENABLE_HEADLESS:-1}"
+    export KATANA_ENABLE_HYBRID=0
+    export KATANA_ENABLE_XHR=0
+    export KATANA_ENABLE_HEADLESS=0
+    : > "$KATANA_OUTPUT"
+    LAST_OFFSET=0
+    INGEST_REMAINDER=""
+    start_katana "$TARGET" "${EXTRA_FLAGS[@]+"${EXTRA_FLAGS[@]}"}"
+    export KATANA_ENABLE_HYBRID="$old_enable_hybrid"
+    export KATANA_ENABLE_XHR="$old_enable_xhr"
+    export KATANA_ENABLE_HEADLESS="$old_enable_headless"
+
+    KATANA_FALLBACK_ACTIVATED=1
+    KATANA_LAST_OUTPUT_CHANGE_TS="$(date +%s)"
+}
+
+maybe_activate_katana_fallback() {
+    local now elapsed_since_output elapsed_since_success
+
+    [[ "${KATANA_FALLBACK_ENABLE:-1}" == "1" ]] || return 0
+    [[ "$KATANA_INGEST_STARTED_KATANA" == "1" ]] || return 0
+    [[ "$KATANA_FALLBACK_ACTIVATED" == "0" ]] || return 0
+    [[ "$KATANA_RECOVERABLE_ERROR_LINES" -ge "$KATANA_FALLBACK_RECOVERABLE_THRESHOLD" ]] || return 0
+    [[ "$KATANA_SUCCESS_LINES" -eq 0 ]] || return 0
+
+    now="$(date +%s)"
+    if [[ "$KATANA_LAST_OUTPUT_CHANGE_TS" -le 0 ]]; then
+        return 0
+    fi
+
+    elapsed_since_output=$((now - KATANA_LAST_OUTPUT_CHANGE_TS))
+    elapsed_since_success=$((now - KATANA_LAST_SUCCESS_TS))
+
+    if (( elapsed_since_output < KATANA_FALLBACK_STALL_SECONDS )); then
+        return 0
+    fi
+
+    if (( elapsed_since_success < KATANA_FALLBACK_STALL_SECONDS )); then
+        return 0
+    fi
+
+    activate_plain_katana_fallback
+}
+
 # --- Start Katana container unless explicitly skipped for re-ingest/verification ---
 if [[ "${KATANA_INGEST_SKIP_START:-0}" != "1" ]]; then
     start_katana "$TARGET" "${EXTRA_FLAGS[@]+"${EXTRA_FLAGS[@]}"}"
+    KATANA_INGEST_STARTED_KATANA=1
+    KATANA_LAST_OUTPUT_CHANGE_TS="$(date +%s)"
+    KATANA_LAST_SUCCESS_TS="$(date +%s)"
 fi
 
 # --- Monitor output and ingest ---
@@ -271,6 +346,7 @@ else
     poll_seconds="${KATANA_INGEST_POLL_SECONDS:-2}"
     while true; do
         read_new_output_bytes "$KATANA_OUTPUT"
+        maybe_activate_katana_fallback
         sleep "$poll_seconds"
     done
 fi
