@@ -23,35 +23,60 @@ if [[ ! -s "$KATANA_OUTPUT" ]]; then
     exit 1
 fi
 
-successful_rows="$(
-    jq -r 'select(((.error // "") | tostring | length) == 0 and (((.request.endpoint // .endpoint // .url // "") | tostring | length) > 0)) | 1' \
-        "$KATANA_OUTPUT" 2>/dev/null | wc -l | tr -d ' '
-)"
+read -r successful_rows recoverable_rows malformed_rows <<<"$(python3 - <<'PY' "$KATANA_OUTPUT"
+import json
+import pathlib
+import sys
 
-recoverable_rows="$(
-    jq -r '
-        select(
-            ((.error // "") | tostring | length) > 0
-            and (((.request.endpoint // .endpoint // .url // "") | tostring | length) > 0)
-            and (
-                ((.error // "") | tostring | contains("hybrid: could not get dom"))
-                or ((.error // "") | tostring | contains("hybrid: response is nil"))
-            )
-        )
-        | 1
-    ' "$KATANA_OUTPUT" 2>/dev/null | wc -l | tr -d ' '
+path = pathlib.Path(sys.argv[1])
+successful = 0
+recoverable = 0
+malformed = 0
+
+for raw_line in path.read_text(encoding='utf-8', errors='replace').splitlines():
+    line = raw_line.strip()
+    if not line:
+        continue
+    try:
+        row = json.loads(line)
+    except json.JSONDecodeError:
+        malformed += 1
+        continue
+
+    endpoint = str(
+        row.get('request', {}).get('endpoint')
+        or row.get('endpoint')
+        or row.get('url')
+        or ''
+    )
+    if not endpoint:
+        continue
+
+    error = str(row.get('error') or '')
+    if not error:
+        successful += 1
+        continue
+
+    if 'hybrid: could not get dom' in error or 'hybrid: response is nil' in error:
+        recoverable += 1
+
+print(successful, recoverable, malformed)
+PY
 )"
 
 if [[ "${successful_rows:-0}" -eq 0 && "${recoverable_rows:-0}" -eq 0 ]]; then
     echo "collection health failed: katana output contains no successful or recoverable discovery rows" >&2
+    if [[ "${malformed_rows:-0}" -gt 0 ]]; then
+        echo "collection health note: ignored $malformed_rows malformed katana output line(s)" >&2
+    fi
     [[ -f "$KATANA_LOG" ]] && tail -50 "$KATANA_LOG" >&2 || true
     tail -20 "$KATANA_OUTPUT" >&2 || true
     exit 1
 fi
 
 if [[ "${successful_rows:-0}" -eq 0 && "${recoverable_rows:-0}" -gt 0 ]]; then
-    echo "collection health: ok (recoverable-only crawl output: $recoverable_rows discovery rows despite render/fetch errors)"
+    echo "collection health: ok (recoverable-only crawl output: $recoverable_rows discovery rows despite render/fetch errors; ignored ${malformed_rows:-0} malformed line(s))"
     exit 0
 fi
 
-echo "collection health: ok"
+echo "collection health: ok (successful=$successful_rows recoverable=$recoverable_rows malformed=${malformed_rows:-0})"
