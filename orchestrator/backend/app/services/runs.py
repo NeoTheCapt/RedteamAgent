@@ -404,19 +404,26 @@ def _reconcile_run_status(run: Run, project: Project | None = None, user: User |
                 stop_run_runtime(failed)
                 return failed
 
-            if (
-                current_phase.replace("_", "-") in EARLY_PHASE_STALL_PHASES
-                and total_cases == 0
-                and log_age >= timedelta(seconds=EARLY_PHASE_STALL_TIMEOUT_SECONDS)
-            ):
-                failed = db.update_run_status(run.id, "failed")
-                _write_run_terminal_reason(
-                    failed,
-                    reason_code="recon_stalled",
-                    reason_text="Runtime stalled in early recon/collect without producing any observed paths.",
-                )
-                stop_run_runtime(failed)
-                return failed
+        early_phase_activity_at = last_activity_at
+        if workflow_activity_at is not None and (
+            early_phase_activity_at is None or workflow_activity_at > early_phase_activity_at
+        ):
+            early_phase_activity_at = workflow_activity_at
+
+        if (
+            current_phase.replace("_", "-") in EARLY_PHASE_STALL_PHASES
+            and total_cases == 0
+            and early_phase_activity_at is not None
+            and (_utc_now_naive() - early_phase_activity_at) >= timedelta(seconds=EARLY_PHASE_STALL_TIMEOUT_SECONDS)
+        ):
+            failed = db.update_run_status(run.id, "failed")
+            _write_run_terminal_reason(
+                failed,
+                reason_code="recon_stalled",
+                reason_text="Runtime stalled in early recon/collect without producing any observed paths.",
+            )
+            stop_run_runtime(failed)
+            return failed
         if run.status == "running":
             run = _sync_run_updated_at_from_activity(run, workflow_activity_at, last_activity_at)
         if run.status != "running":
