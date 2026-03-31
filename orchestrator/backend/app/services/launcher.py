@@ -689,20 +689,26 @@ def _running_container_stall_reason(run: Run) -> tuple[str, str, str] | None:
             )
 
     runtime_activity_at = _latest_running_runtime_activity_at(run)
-    if runtime_activity_at is None:
-        return None
+    if runtime_activity_at is not None:
+        runtime_age = time.time() - runtime_activity_at
+        if runtime_age >= RUN_STALL_TIMEOUT_SECONDS:
+            return (
+                current_phase,
+                "queue_stalled",
+                "Runtime produced no new output before stall timeout elapsed.",
+            )
 
-    runtime_age = time.time() - runtime_activity_at
-    if runtime_age >= RUN_STALL_TIMEOUT_SECONDS:
-        return (
-            current_phase,
-            "queue_stalled",
-            "Runtime produced no new output before stall timeout elapsed.",
-        )
+    early_phase_activity_at = runtime_activity_at
+    if workflow_activity_at is not None and (
+        early_phase_activity_at is None or workflow_activity_at > early_phase_activity_at
+    ):
+        early_phase_activity_at = workflow_activity_at
+
     if (
         current_phase in EARLY_PHASE_STALL_PHASES
         and total_cases == 0
-        and runtime_age >= EARLY_PHASE_STALL_TIMEOUT_SECONDS
+        and early_phase_activity_at is not None
+        and (time.time() - early_phase_activity_at) >= EARLY_PHASE_STALL_TIMEOUT_SECONDS
     ):
         return (
             current_phase,
@@ -1337,8 +1343,8 @@ def normalize_active_scope(run: Run) -> None:
 
     _normalize_text_artifact(engagement_dir / "findings.md", context)
     _normalize_text_artifact(engagement_dir / "report.md", context)
-    _normalize_jsonl_artifact(engagement_dir / "scans" / "katana_output.jsonl", context, redact_headers=True)
     if _should_persist_loopback_rewrite(run):
+        _normalize_jsonl_artifact(engagement_dir / "scans" / "katana_output.jsonl", context, redact_headers=True)
         _normalize_cases_db(engagement_dir / "cases.db", context)
 
 
