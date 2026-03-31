@@ -425,6 +425,9 @@ start_katana() {
         katana_args+=(-xhr -xhr-extraction)
     fi
     if [[ "${KATANA_ENABLE_HEADLESS}" == "1" ]]; then
+        if [[ "${KATANA_ENABLE_HYBRID}" != "1" ]]; then
+            katana_args+=(-hl)
+        fi
         katana_args+=(
             -system-chrome
             -system-chrome-path "$KATANA_CHROME_BIN"

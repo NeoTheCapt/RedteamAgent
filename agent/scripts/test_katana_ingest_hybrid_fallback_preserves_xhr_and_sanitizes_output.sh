@@ -89,7 +89,7 @@ from pathlib import Path
 import sys
 args = Path(sys.argv[1]).read_bytes().split(b'\0')
 args = [a.decode('utf-8') for a in args if a]
-required = {'-xhr', '-xhr-extraction', '-system-chrome', '-headless-options'}
+required = {'-hl', '-xhr', '-xhr-extraction', '-system-chrome', '-headless-options'}
 missing = sorted(required.difference(args))
 if missing:
     raise SystemExit(f"FAIL: fallback args missing expected entries: {missing}\nargs={args}")
@@ -120,4 +120,4 @@ if [[ ! -s "$ENG_DIR/scans/katana_output.jsonl.partial-pre-fallback" ]]; then
   exit 1
 fi
 
-echo "PASS: katana fallback keeps XHR/headless enabled and sanitizes partial output before restart"
+echo "PASS: katana fallback switches to headless mode, keeps XHR enabled, and sanitizes partial output before restart"
