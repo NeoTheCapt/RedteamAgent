@@ -39,20 +39,67 @@ _update_scheduler_env_token() {
 
   ORCH_AUTH_ENV_FILE="$env_file" ORCH_AUTH_NEXT_TOKEN="$next_token" python3 <<'PY'
 import os
+import tempfile
 from pathlib import Path
 
 path = Path(os.environ["ORCH_AUTH_ENV_FILE"])
 next_token = os.environ["ORCH_AUTH_NEXT_TOKEN"]
-lines = path.read_text(encoding="utf-8").splitlines()
+raw_text = path.read_text(encoding="utf-8") if path.exists() else ""
+lines = raw_text.splitlines()
+
+required_order = [
+    "ORCH_TOKEN",
+    "PROJECT_ID",
+    "ORCH_BASE_URL",
+    "TARGET_OKX",
+    "TARGET_LOCAL",
+    "OBSERVATION_SECONDS",
+    "OPENCLAW_BIN",
+    "OPENCLAW_SKILL",
+    "OPENCLAW_TIMEOUT_SECONDS",
+    "REPORT_CHANNEL",
+    "REPORT_TO",
+]
+default_values = {
+    "ORCH_BASE_URL": "http://127.0.0.1:18000",
+    "TARGET_OKX": "https://www.okx.com",
+    "TARGET_LOCAL": "http://127.0.0.1:8000",
+    "OBSERVATION_SECONDS": "300",
+    "OPENCLAW_BIN": "/opt/homebrew/bin/openclaw",
+    "OPENCLAW_SKILL": "scan-optimizer-loop",
+    "OPENCLAW_TIMEOUT_SECONDS": "1800",
+    "REPORT_CHANNEL": "",
+    "REPORT_TO": "",
+}
+required_values = {
+    key: (os.environ.get(key, "") or default_values.get(key, ""))
+    for key in required_order
+}
+required_values["ORCH_TOKEN"] = next_token
+
 updated = False
+seen_keys: set[str] = set()
 for index, line in enumerate(lines):
-    if line.startswith("ORCH_TOKEN="):
-        lines[index] = f"ORCH_TOKEN={next_token}"
+    if line.startswith("#") or "=" not in line:
+        continue
+    key, _sep, _value = line.partition("=")
+    if key in required_values:
+        lines[index] = f"{key}={required_values[key]}"
+        seen_keys.add(key)
         updated = True
-        break
-if not updated:
-    lines.append(f"ORCH_TOKEN={next_token}")
-path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+if not updated and not lines:
+    lines = ["# Auto-repaired scheduler env"]
+
+for key in required_order:
+    if key not in seen_keys and required_values[key] != "":
+        lines.append(f"{key}={required_values[key]}")
+
+content = "\n".join(lines).rstrip("\n") + "\n"
+with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=str(path.parent), delete=False) as handle:
+    handle.write(content)
+    temp_path = Path(handle.name)
+os.replace(temp_path, path)
 PY
 }
 

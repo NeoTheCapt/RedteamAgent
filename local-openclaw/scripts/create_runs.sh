@@ -11,12 +11,12 @@ ORCH_BASE_URL="${ORCH_BASE_URL:-http://127.0.0.1:18000}"
 ORCH_TOKEN="${ORCH_TOKEN:-}"
 PROJECT_ID="${PROJECT_ID:?set PROJECT_ID}"
 
-TARGET_OKX="${TARGET_OKX-https://www.okx.com}"
-TARGET_LOCAL="${TARGET_LOCAL-http://127.0.0.1:8000}"
-FORCE_REPLACE_ACTIVE_RUNS="${FORCE_REPLACE_ACTIVE_RUNS-0}"
+TARGET_OKX="${TARGET_OKX:-https://www.okx.com}"
+TARGET_LOCAL="${TARGET_LOCAL:-http://127.0.0.1:8000}"
+FORCE_REPLACE_ACTIVE_RUNS="${FORCE_REPLACE_ACTIVE_RUNS:-0}"
 # Optional comma-separated subset of fixed targets to manage for this invocation.
 # Accepted values: okx, local, the full target URL, or all.
-TARGET_FILTER_RAW="${TARGET_FILTER-all}"
+TARGET_FILTER_RAW="${TARGET_FILTER:-all}"
 TARGET_FILTER="${TARGET_FILTER_RAW//[[:space:]]/}"
 
 api_get_runs() {
