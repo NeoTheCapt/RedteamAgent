@@ -28,9 +28,22 @@ bash "$SCRIPT" "$eng_dir" >/dev/null
 printf '{"request":{"endpoint":"https://example.test/"},"error":"hybrid: response is nil"}\n' > "$eng_dir/scans/katana_output.jsonl"
 bash "$SCRIPT" "$eng_dir" >/dev/null
 
+cat > "$eng_dir/scans/katana_output.jsonl" <<'EOF'
+{"request":{"endpoint":"https://example.test/ok"}}
+{"request":{"endpoint":"https://example.test/bad"},"error":"hybrid: response is nil"}
+{"request":{"endpoint":"https://example.test/truncated"},"error":"unterminated
+EOF
+bash "$SCRIPT" "$eng_dir" >/dev/null
+
 printf '{"request":{"endpoint":"https://example.test/"},"error":"dial tcp 127.0.0.1:443: connect: connection refused"}\n' > "$eng_dir/scans/katana_output.jsonl"
 if bash "$SCRIPT" "$eng_dir" >/dev/null 2>&1; then
   echo "[FAIL] collection health passed with only non-recoverable katana error rows" >&2
+  exit 1
+fi
+
+printf '{"request":{"endpoint":"https://example.test/truncated"},"error":"unterminated\n' > "$eng_dir/scans/katana_output.jsonl"
+if bash "$SCRIPT" "$eng_dir" >/dev/null 2>&1; then
+  echo "[FAIL] collection health passed with only malformed katana rows" >&2
   exit 1
 fi
 
