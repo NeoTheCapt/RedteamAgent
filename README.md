@@ -24,6 +24,8 @@ An autonomous red team simulation agent that works with **Claude Code**, **OpenC
 
 ![RedTeam Agent demo (fast)](docs/redteam-agent-demo-fast.gif)
 
+![RedTeam Agent GUI screenshot](docs/screenshot-20260331-181406.png)
+
 **Key Features:**
 - **Multi-CLI support** — works with Claude Code, OpenCode, and Codex out of the box
 - **Autonomous workflow** — 5-phase methodology (Recon → Collect → Test → Exploit+OSINT → Report) runs with minimal user interaction
@@ -169,7 +171,7 @@ autoengage http://your-ctf-target:8080
 **Notes**
 - Codex does not support slash commands the same way OpenCode and Claude Code do; use natural-language command invocation when needed.
 
-### Local Orchestrator (Optional)
+### Local Orchestrator GUI (Optional)
 
 Use the local web UI when you want to manage multiple workspaces or inspect live runs outside the CLI.
 
