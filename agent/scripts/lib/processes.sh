@@ -11,10 +11,13 @@ pid_file_path() {
 pid_is_running() {
     local pid_file="$1"
     [ -f "$pid_file" ] || return 1
-    local pid
+    local pid stat
     pid=$(cat "$pid_file" 2>/dev/null || true)
     [ -n "$pid" ] || return 1
-    kill -0 "$pid" 2>/dev/null
+    kill -0 "$pid" 2>/dev/null || return 1
+    stat=$(ps -o stat= -p "$pid" 2>/dev/null | tr -d '[:space:]' || true)
+    [ -n "$stat" ] || return 1
+    [[ "$stat" != Z* ]]
 }
 
 start_managed_process() {

@@ -43,7 +43,10 @@ RUN_STARTUP_GRACE_SECONDS = 90
 # that contract so long-running consume-test work is not failed a full cycle too
 # early.
 RUN_STALL_TIMEOUT_SECONDS = 900
-EARLY_PHASE_STALL_TIMEOUT_SECONDS = 180
+# Real targets can spend several minutes in autonomous initialization/recon before the
+# first queue item or observed path lands. Keep the early watchdog long enough to avoid
+# killing active slow-start recon just as the first subagent/task dispatch begins.
+EARLY_PHASE_STALL_TIMEOUT_SECONDS = 300
 EARLY_PHASE_STALL_PHASES = {"unknown", "recon", "collect"}
 
 
