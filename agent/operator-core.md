@@ -11,7 +11,7 @@ After `/engage` initialization completes, repeat until all attack paths exhauste
 1. **ASSESS STATE** — Read scope.json, log.md, findings.md. Check log.md before ANY action.
 2. **DECIDE NEXT ACTION** — Prioritize by impact (HIGH first). Skip ahead if obvious vulns found.
 3. **FORMULATE PLAN** — Actions, tools, targets, rationale, best subagent.
-4. **PRESENT OR PROCEED** — INTERACTIVE or `/confirm manual`: use NUMBERED choices (single digits) and wait for input. AUTO-CONFIRM (default): auto-proceed after first Phase 1 approval. AUTONOMOUS (`/autoengage`): never wait; announce the next action and continue. In autonomous mode, NEVER emit a standalone status/progress-only text turn while work remains (for example “Continuing...”, “Next I’ll...”, or a queue summary by itself). Any non-terminal text must be paired in the SAME assistant turn with at least one real advancing action (task dispatch, dispatcher update, findings/surface write, phase update, coverage check, or completion check). If no advancing action is ready, write an explicit stop reason log entry and stop using the stop-reason format below.
+4. **PRESENT OR PROCEED** — INTERACTIVE or `/confirm manual`: use NUMBERED choices (single digits) and wait for input. AUTO-CONFIRM (default): auto-proceed after first Phase 1 approval. AUTONOMOUS (`/autoengage` and `/resume`): never wait; announce the next action and continue. In autonomous mode, NEVER emit a standalone status/progress-only text turn while work remains (for example “Continuing...”, “Next I’ll...”, or a queue summary by itself). Any non-terminal text must be paired in the SAME assistant turn with at least one real advancing action (task dispatch, dispatcher update, findings/surface write, phase update, coverage check, or completion check). If no advancing action is ready, write an explicit stop reason log entry and stop using the stop-reason format below.
 5. **DISPATCH** — ALWAYS dispatch to subagent. Do NOT test directly (no curl probes, no payloads). Your job: coordination. Allowed direct: read files, dispatcher.sh, write log/findings.
 6. **RECORD FINDINGS IMMEDIATELY** — Extract findings → append to findings.md → BEFORE next dispatch. If agent reports a discovery without finding format, YOU format it.
 7. **RECORD SURFACES IMMEDIATELY** — If recon/source output `#### Surface Candidates`, append them to `surfaces.jsonl` via `./scripts/append_surface.sh`.
@@ -220,8 +220,15 @@ cat "$ENG_DIR/scope.json"
 ./scripts/dispatcher.sh "$ENG_DIR/cases.db" stats 2>/dev/null
 ```
 
-If status=in_progress: read state, present summary, recover stale cases, resume from correct phase.
+If status=in_progress: read state, present summary, recover stale cases, and continue from the correct phase in the SAME turn.
 cases.db IS the state: pending=not done, done=completed, processing=interrupted.
+
+Resume rules:
+- NEVER stop after only reading `scope.json`, `log.md`, `findings.md`, or queue stats.
+- If `current_phase` is `consume_test`/`consume-test`, immediately run `./scripts/dispatcher.sh "$ENG_DIR/cases.db" reset-stale 10` before the next fetch.
+- Treat any leftover `processing` rows on `/resume` as interrupted work to recover, not evidence that a live subagent is still progressing.
+- After `reset-stale`, either dispatch exactly one concrete next batch in the SAME turn or write an explicit `Run stop` log entry with a stop reason.
+- Do NOT leave `/resume` on a queue summary, `dispatcher.sh ... stats`, or `dispatcher.sh ... fetch ...` without the matching subagent dispatch / case-outcome update in that same turn.
 
 ## Communication
 
