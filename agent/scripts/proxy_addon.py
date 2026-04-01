@@ -58,6 +58,34 @@ _EXT_JS = {".js", ".mjs", ".cjs"}
 _EXT_CSS = {".css"}
 _EXT_PAGE = {".html", ".htm", ".xhtml", ".php", ".asp", ".aspx", ".jsp"}
 _EXT_DATA = {".json", ".xml", ".csv", ".yaml", ".yml"}
+
+
+def _normalize_auth_data(payload: object) -> dict:
+    data = payload if isinstance(payload, dict) else {}
+    cookies = data.get("cookies") if isinstance(data.get("cookies"), dict) else {}
+    headers = data.get("headers") if isinstance(data.get("headers"), dict) else {}
+    tokens = data.get("tokens") if isinstance(data.get("tokens"), dict) else {}
+    discovered = data.get("discovered_credentials") if isinstance(data.get("discovered_credentials"), list) else []
+    validated = data.get("validated_credentials") if isinstance(data.get("validated_credentials"), list) else []
+    legacy = data.get("credentials") if isinstance(data.get("credentials"), list) else []
+
+    merged_legacy: list = []
+    seen: set[str] = set()
+    for item in [*discovered, *validated, *legacy]:
+        marker = json.dumps(item, sort_keys=True, ensure_ascii=False)
+        if marker in seen:
+            continue
+        seen.add(marker)
+        merged_legacy.append(item)
+
+    normalized = dict(data)
+    normalized["cookies"] = cookies
+    normalized["headers"] = headers
+    normalized["tokens"] = tokens
+    normalized["discovered_credentials"] = discovered or legacy
+    normalized["validated_credentials"] = validated
+    normalized["credentials"] = merged_legacy
+    return normalized
 _EXT_IMAGE = {".png", ".jpg", ".jpeg", ".gif", ".ico", ".svg", ".webp", ".bmp"}
 _EXT_VIDEO = {".mp4", ".webm", ".avi", ".mov", ".flv"}
 _EXT_FONT = {".woff", ".woff2", ".ttf", ".eot", ".otf"}
@@ -345,9 +373,11 @@ class CaseCollector:
         if os.path.exists(auth_path):
             try:
                 with open(auth_path, "r") as fh:
-                    auth_data = json.load(fh)
+                    auth_data = _normalize_auth_data(json.load(fh))
             except (json.JSONDecodeError, OSError):
-                auth_data = {}
+                auth_data = _normalize_auth_data({})
+        else:
+            auth_data = _normalize_auth_data({})
 
         updated = False
 
@@ -394,7 +424,7 @@ class CaseCollector:
         if updated:
             try:
                 with open(auth_path, "w") as fh:
-                    json.dump(auth_data, fh, indent=2)
+                    json.dump(_normalize_auth_data(auth_data), fh, indent=2)
                 ctx.log.info("proxy_addon: updated auth.json")
             except OSError as exc:
                 ctx.log.warn(f"proxy_addon: cannot write auth.json — {exc}")

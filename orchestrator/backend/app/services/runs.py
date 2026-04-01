@@ -34,6 +34,7 @@ from .launcher import (
     process_metadata_path_for,
     start_run_runtime,
     stop_run_runtime,
+    _active_runtime_metadata_agents,
 )
 
 ALLOWED_STATUSES = {"queued", "running", "completed", "failed"}
@@ -43,6 +44,8 @@ RUN_STARTUP_GRACE_SECONDS = 90
 # that contract so long-running consume-test work is not failed a full cycle too
 # early.
 RUN_STALL_TIMEOUT_SECONDS = 900
+PROCESSING_AGENT_MISMATCH_GRACE_SECONDS = 120
+PENDING_QUEUE_DISPATCH_GRACE_SECONDS = 120
 # Real targets can spend several minutes in autonomous initialization/recon before the
 # first queue item or observed path lands. Keep the early watchdog long enough to avoid
 # killing active slow-start recon just as the first subagent/task dispatch begins.
@@ -302,6 +305,23 @@ def _load_queue_state(scope_path: Path | None) -> tuple[str, int, int, int, str]
     return (current_phase, total_cases, pending_cases, processing_cases, queue_health)
 
 
+def _load_processing_agents(scope_path: Path | None) -> set[str]:
+    if scope_path is None or not scope_path.exists():
+        return set()
+    cases_db = scope_path.parent / "cases.db"
+    if not cases_db.exists():
+        return set()
+
+    def _reader(connection: sqlite3.Connection) -> list[str]:
+        rows = connection.execute(
+            "SELECT DISTINCT assigned_agent FROM cases WHERE status = 'processing' AND assigned_agent IS NOT NULL AND TRIM(assigned_agent) != ''"
+        ).fetchall()
+        return [str(row[0]) for row in rows if row and row[0]]
+
+    raw_agents = _read_sqlite_with_fallback(cases_db, _reader, [])
+    return {agent for agent in raw_agents if agent}
+
+
 def _format_db_timestamp(value: datetime) -> str:
     return value.replace(microsecond=0).strftime("%Y-%m-%d %H:%M:%S")
 
@@ -394,7 +414,59 @@ def _reconcile_run_status(run: Run, project: Project | None = None, user: User |
                 stop_run_runtime(failed)
                 return failed
 
+        active_runtime_agents = _active_runtime_metadata_agents(run)
+        if (
+            current_phase.replace("_", "-") not in EARLY_PHASE_STALL_PHASES
+            and pending_cases > 0
+            and processing_cases == 0
+            and not active_runtime_agents
+            and workflow_activity_at is not None
+            and (_utc_now_naive() - workflow_activity_at) >= timedelta(seconds=PENDING_QUEUE_DISPATCH_GRACE_SECONDS)
+        ):
+            failed = db.update_run_status(run.id, "failed")
+            _write_run_terminal_reason(
+                failed,
+                reason_code="queue_stalled",
+                reason_text="Pending queue items remained undispatched with no active runtime agent after dispatch grace period elapsed.",
+            )
+            stop_run_runtime(failed)
+            return failed
+
         last_activity_at = _latest_runtime_activity_at(run)
+        processing_agents = _load_processing_agents(scope_path)
+        mismatch_activity_at = last_activity_at
+        if workflow_activity_at is not None and (
+            mismatch_activity_at is None or workflow_activity_at > mismatch_activity_at
+        ):
+            mismatch_activity_at = workflow_activity_at
+        if (
+            current_phase.replace("_", "-") not in EARLY_PHASE_STALL_PHASES
+            and processing_agents
+            and mismatch_activity_at is not None
+            and (_utc_now_naive() - mismatch_activity_at) >= timedelta(seconds=PROCESSING_AGENT_MISMATCH_GRACE_SECONDS)
+            and processing_agents.isdisjoint(active_runtime_agents)
+        ):
+            assigned = ", ".join(sorted(processing_agents))
+            if active_runtime_agents:
+                active = ", ".join(sorted(active_runtime_agents))
+                reason_text = (
+                    f"Processing queue assignments ({assigned}) had no matching active runtime agent "
+                    f"after stall grace period elapsed (active agents: {active})."
+                )
+            else:
+                reason_text = (
+                    f"Processing queue assignments ({assigned}) had no matching active runtime agent "
+                    "after stall grace period elapsed."
+                )
+            failed = db.update_run_status(run.id, "failed")
+            _write_run_terminal_reason(
+                failed,
+                reason_code="queue_stalled",
+                reason_text=reason_text,
+            )
+            stop_run_runtime(failed)
+            return failed
+
         if last_activity_at is not None:
             log_age = _utc_now_naive() - last_activity_at
             if log_age >= timedelta(seconds=RUN_STALL_TIMEOUT_SECONDS):
