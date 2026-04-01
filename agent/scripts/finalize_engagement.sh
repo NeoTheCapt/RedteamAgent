@@ -53,6 +53,10 @@ if [[ -f "$REPORT_FILE" ]]; then
           target_done = 1
           next
       }
+      /^\*\*Status\*\*:/ {
+          print "**Status**: Completed"
+          next
+      }
       { print }
       END {
           if (!date_done) {
