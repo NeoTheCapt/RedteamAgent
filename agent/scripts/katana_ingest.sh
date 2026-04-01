@@ -527,10 +527,11 @@ maybe_activate_katana_fallback() {
     elapsed_since_output=$((now - KATANA_LAST_OUTPUT_CHANGE_TS))
     elapsed_since_success=$((now - KATANA_LAST_SUCCESS_TS))
 
-    if (( elapsed_since_output < KATANA_FALLBACK_STALL_SECONDS )); then
-        return 0
-    fi
-
+    # Recoverable hybrid-error floods can keep appending new rows forever while never
+    # producing a single usable crawl result. In that state, waiting for output silence
+    # prevents the plain headless fallback from ever starting on noisy targets such as
+    # OKX. Once we've crossed the recoverable-error threshold, require a recent success
+    # signal, not a quiet output file.
     if (( elapsed_since_success < KATANA_FALLBACK_STALL_SECONDS )); then
         return 0
     fi
