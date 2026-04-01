@@ -26,14 +26,18 @@ grep -q '"target": "GET /orders/7"' "$ENG_DIR/surfaces.jsonl"
 
 cat <<'EOF' | "$ROOT/agent/scripts/append_surface_jsonl.sh" "$ENG_DIR"
 {"surface_type":"workflow_token","target":"GET /rest/continue-code","source":"source-analyzer","rationale":"legacy producer still emits new while surfacing a concrete continuation token endpoint","status":"new"}
+{"surface_type":"auth_entry","target":"GET /account/login?forward=...","source":"source-analyzer","rationale":"latest fixed-target run emitted follow_up for login-forward auth surface","status":"follow_up"}
 EOF
 
 grep -q '"target": "GET /rest/continue-code"' "$ENG_DIR/surfaces.jsonl"
+grep -q '"target": "GET /account/login?forward=..."' "$ENG_DIR/surfaces.jsonl"
 python3 - <<'PY' "$ENG_DIR/surfaces.jsonl"
 import json, sys
 rows = [json.loads(line) for line in open(sys.argv[1], encoding='utf-8') if line.strip()]
-match = next(row for row in rows if row["target"] == "GET /rest/continue-code")
-assert match["status"] == "discovered", match
+continue_code = next(row for row in rows if row["target"] == "GET /rest/continue-code")
+follow_up = next(row for row in rows if row["target"] == "GET /account/login?forward=...")
+assert continue_code["status"] == "discovered", continue_code
+assert follow_up["status"] == "discovered", follow_up
 PY
 
 cat <<'EOF' | "$ROOT/agent/scripts/append_surface_jsonl.sh" "$ENG_DIR"
