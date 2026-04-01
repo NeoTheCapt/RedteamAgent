@@ -91,6 +91,43 @@ Determine resume point from scope.json `phases_completed` and queue state:
 - No cases.db → start from collect phase (Phase 2)
 - No recon data → start from recon (Phase 1)
 
+If resuming `consume_test`, the fetch/dispatch contract is strict:
+- decide the REAL downstream agent before the fetch
+- NEVER fetch into `resume_operator`, `resume-operator`, or any other placeholder assignee
+- `api|api-spec|form|upload|graphql|websocket` → fetch for `vulnerability-analyst`
+- `page|javascript|stylesheet|data|unknown` → fetch for `source-analyzer`
+- `stylesheet` MUST route to `source-analyzer` in the SAME turn; do not leave stylesheet rows parked in `processing`
+- after the first non-empty fetch, immediately dispatch that matching subagent in the SAME turn; do not fetch a second batch first
+
+Use this exact routing pattern when you need a queue-driven resume snippet:
+
+```bash
+DB="$ENG_DIR/cases.db"
+for spec in \
+  'api-spec vulnerability-analyst' \
+  'api vulnerability-analyst' \
+  'form vulnerability-analyst' \
+  'upload vulnerability-analyst' \
+  'graphql vulnerability-analyst' \
+  'websocket vulnerability-analyst' \
+  'page source-analyzer' \
+  'javascript source-analyzer' \
+  'stylesheet source-analyzer' \
+  'data source-analyzer' \
+  'unknown source-analyzer'
+  do
+    set -- $spec
+    batch_type="$1"
+    batch_agent="$2"
+    out=$(./scripts/dispatcher.sh "$DB" fetch "$batch_type" 10 "$batch_agent" 2>/dev/null)
+    if [ -n "$out" ] && [ "$out" != "[]" ]; then
+      printf 'FETCH_TYPE=%s\nFETCH_AGENT=%s\n' "$batch_type" "$batch_agent"
+      printf '%s\n' "$out" > "$ENG_DIR/tmp/resume_fetch.json"
+      break
+    fi
+  done
+```
+
 In AUTO-CONFIRM mode: announce and proceed immediately.
 In MANUAL mode: present numbered choice for which phase to resume from.
 

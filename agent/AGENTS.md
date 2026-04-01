@@ -265,6 +265,8 @@ Resume rules:
 - NEVER stop after only reading `scope.json`, `log.md`, `findings.md`, or queue stats.
 - If `current_phase` is `consume_test`/`consume-test`, immediately run `./scripts/dispatcher.sh "$ENG_DIR/cases.db" reset-stale 10` before the next fetch.
 - Treat any leftover `processing` rows on `/resume` as interrupted work to recover, not evidence that a live subagent is still progressing.
+- On `/resume`, NEVER fetch into a placeholder agent name such as `resume_operator` / `resume-operator`. Determine the real downstream assignee from the batch type first, then fetch directly into that agent (`vulnerability-analyst` for `api|api-spec|form|upload|graphql|websocket`; `source-analyzer` for `page|javascript|stylesheet|data|unknown`).
+- On `/resume`, `stylesheet` MUST be fetched for `source-analyzer` in the SAME turn as the matching dispatch. Do not leave stylesheet rows sitting in `processing` under a resume placeholder.
 - After `reset-stale`, either dispatch exactly one concrete next batch in the SAME turn or write an explicit `Run stop` log entry with a stop reason.
 - Do NOT leave `/resume` on a queue summary, `dispatcher.sh ... stats`, or `dispatcher.sh ... fetch ...` without the matching subagent dispatch / case-outcome update in that same turn.
 
