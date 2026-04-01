@@ -35,6 +35,8 @@ from .launcher import (
     start_run_runtime,
     stop_run_runtime,
     _active_runtime_metadata_agents,
+    _latest_runtime_metadata_activity_at,
+    _run_metadata_has_current_task,
 )
 
 ALLOWED_STATUSES = {"queued", "running", "completed", "failed"}
@@ -234,9 +236,8 @@ def _latest_runtime_activity_at(run: Run) -> datetime | None:
     return latest
 
 
-def _latest_workflow_activity_at(run: Run, scope_path: Path | None) -> datetime | None:
-    latest = _latest_runtime_activity_at(run)
-
+def _latest_scope_file_activity_at(scope_path: Path | None) -> datetime | None:
+    latest = None
     if scope_path is not None and scope_path.exists():
         for path in (
             scope_path,
@@ -249,6 +250,15 @@ def _latest_workflow_activity_at(run: Run, scope_path: Path | None) -> datetime 
                 continue
             if latest is None or candidate > latest:
                 latest = candidate
+    return latest
+
+
+def _latest_workflow_activity_at(run: Run, scope_path: Path | None) -> datetime | None:
+    latest = _latest_runtime_activity_at(run)
+
+    scope_latest = _latest_scope_file_activity_at(scope_path)
+    if scope_latest is not None and (latest is None or scope_latest > latest):
+        latest = scope_latest
 
     latest_event = db.get_latest_non_heartbeat_event_for_run(run.id)
     event_created_at = _parse_db_timestamp(getattr(latest_event, "created_at", ""))
@@ -429,6 +439,38 @@ def _reconcile_run_status(run: Run, project: Project | None = None, user: User |
                 failed,
                 reason_code="queue_stalled",
                 reason_text="Pending queue items remained undispatched with no active runtime agent after dispatch grace period elapsed.",
+            )
+            stop_run_runtime(failed)
+            return failed
+
+        orphan_activity_at = _latest_scope_file_activity_at(scope_path)
+        metadata_activity_at = _latest_runtime_metadata_activity_at(run)
+        metadata_activity = (
+            _utc_datetime_from_timestamp(metadata_activity_at) if metadata_activity_at is not None else None
+        )
+        if metadata_activity is not None and (
+            orphan_activity_at is None or metadata_activity > orphan_activity_at
+        ):
+            orphan_activity_at = metadata_activity
+        has_current_task = _run_metadata_has_current_task(run)
+        if (
+            current_phase.replace("_", "-") not in EARLY_PHASE_STALL_PHASES
+            and total_cases > 0
+            and pending_cases == 0
+            and processing_cases == 0
+            and not active_runtime_agents
+            and not has_current_task
+            and orphan_activity_at is not None
+            and (_utc_now_naive() - orphan_activity_at) >= timedelta(seconds=RUN_STALL_TIMEOUT_SECONDS)
+        ):
+            failed = db.update_run_status(run.id, "failed")
+            _write_run_terminal_reason(
+                failed,
+                reason_code="queue_stalled",
+                reason_text=(
+                    f"Run remained in {current_phase.replace('_', '-')} with no active runtime agent, "
+                    "current task, or queued work before stall timeout elapsed."
+                ),
             )
             stop_run_runtime(failed)
             return failed
