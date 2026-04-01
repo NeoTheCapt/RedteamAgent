@@ -58,9 +58,20 @@ db_init "$DB_PATH"
 # --- Ensure scans directory exists ---
 mkdir -p "$ENGAGEMENT_DIR/scans"
 
-# --- Output file (Katana writes here, we tail it) ---
+# --- Output files ---
+# Katana writes raw JSONL into a hidden sidecar path so the public artifact can stay
+# normalized/redacted as we ingest each completed row.
 KATANA_OUTPUT="$ENGAGEMENT_DIR/scans/katana_output.jsonl"
-touch "$KATANA_OUTPUT"
+KATANA_RAW_OUTPUT="$ENGAGEMENT_DIR/scans/.katana_output.raw.jsonl"
+touch "$KATANA_OUTPUT" "$KATANA_RAW_OUTPUT"
+
+# Backwards-compatible test/support path: when re-ingesting an existing captured
+# katana_output.jsonl without starting Katana, move that raw fixture into the hidden input
+# path and rebuild the public artifact from sanitized rows.
+if [[ "${KATANA_INGEST_SKIP_START:-0}" == "1" ]] && [[ ! -s "$KATANA_RAW_OUTPUT" ]] && [[ -s "$KATANA_OUTPUT" ]]; then
+    mv "$KATANA_OUTPUT" "$KATANA_RAW_OUTPUT"
+    : > "$KATANA_OUTPUT"
+fi
 
 count=0
 LAST_OFFSET=0
@@ -79,14 +90,16 @@ cleanup_katana_ingest() {
     if [[ "$KATANA_INGEST_STARTED_KATANA" == "1" ]]; then
         stop_katana >/dev/null 2>&1 || true
     fi
-    if [[ -f "$KATANA_OUTPUT" ]]; then
-        read_new_output_bytes "$KATANA_OUTPUT" >/dev/null 2>&1 || true
+    if [[ -f "$KATANA_RAW_OUTPUT" ]]; then
+        read_new_output_bytes "$KATANA_RAW_OUTPUT" >/dev/null 2>&1 || true
         if [[ -n "$INGEST_REMAINDER" ]] && printf '%s' "$INGEST_REMAINDER" | jq -e . >/dev/null 2>&1; then
+            append_sanitized_output_line "$INGEST_REMAINDER" || true
             ingest_katana_line "$INGEST_REMAINDER" || true
         fi
         sanitize_katana_output_tail "partial-final" >/dev/null 2>&1 || true
         INGEST_REMAINDER=""
     fi
+    rm -f "$KATANA_RAW_OUTPUT"
     rm -f "$(pid_file_path "$ENGAGEMENT_DIR/pids" "katana_ingest")"
 }
 trap cleanup_katana_ingest EXIT
@@ -368,6 +381,108 @@ ingest_katana_line() {
     )
 }
 
+append_sanitized_output_line() {
+    local line="${1:-}"
+    [[ -n "$line" ]] || return 0
+
+    python3 - "$TARGET" "$line" "$KATANA_OUTPUT" <<'PY'
+import json
+import sys
+from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
+
+target = sys.argv[1]
+line = sys.argv[2]
+output_path = Path(sys.argv[3])
+
+_LOOPBACK_RUNTIME_HOSTS = {"127.0.0.1", "localhost", "0.0.0.0", "::1"}
+_RUNTIME_HOST_GATEWAY_ALIAS = "host.docker.internal"
+_SENSITIVE_HEADERS = {
+    "authorization",
+    "proxy-authorization",
+    "cookie",
+    "set-cookie",
+    "x-api-key",
+    "x-auth-token",
+    "x-csrf-token",
+    "x-xsrf-token",
+}
+
+
+def loopback_context(target_value: str):
+    try:
+        parsed = urlsplit((target_value or "").strip())
+    except ValueError:
+        return None
+    hostname = (parsed.hostname or "").strip().lower()
+    if parsed.scheme not in {"http", "https"} or hostname not in _LOOPBACK_RUNTIME_HOSTS:
+        return None
+    alias_netloc = _RUNTIME_HOST_GATEWAY_ALIAS
+    if parsed.port is not None:
+        alias_netloc = f"{alias_netloc}:{parsed.port}"
+    return {
+        "target_base": urlunsplit((parsed.scheme, parsed.netloc, "", "", "")),
+        "target_host": parsed.hostname or hostname,
+        "alias_base": urlunsplit((parsed.scheme, alias_netloc, "", "", "")),
+        "alias_host": _RUNTIME_HOST_GATEWAY_ALIAS,
+    }
+
+
+def rewrite_text(value: str, context):
+    if not value or context is None:
+        return value
+    rewritten = value.replace(context["alias_base"], context["target_base"])
+    rewritten = rewritten.replace(f"*.{context['alias_host']}", f"*.{context['target_host']}")
+    rewritten = rewritten.replace(context["alias_host"], context["target_host"])
+    return rewritten
+
+
+def rewrite_value(value, context):
+    if isinstance(value, dict):
+        out = {}
+        for key, item in value.items():
+            if str(key or "").strip().lower() == "headers" and isinstance(item, dict):
+                headers = {}
+                for header_name, header_value in item.items():
+                    if str(header_name or "").strip().lower() in _SENSITIVE_HEADERS:
+                        headers[header_name] = "<redacted>"
+                    else:
+                        headers[header_name] = rewrite_value(header_value, context)
+                out[key] = headers
+            else:
+                out[key] = rewrite_value(item, context)
+        return out
+    if isinstance(value, list):
+        return [rewrite_value(item, context) for item in value]
+    if isinstance(value, str):
+        return rewrite_text(value, context)
+    return value
+
+
+context = loopback_context(target)
+stripped = line.strip()
+if not stripped:
+    raise SystemExit(0)
+if stripped.startswith(("http://", "https://")):
+    sanitized = rewrite_text(stripped, context)
+else:
+    payload = json.loads(line)
+    sanitized = json.dumps(rewrite_value(payload, context), separators=(",", ":"))
+
+last_line = ""
+if output_path.exists():
+    for existing in reversed(output_path.read_text(encoding="utf-8", errors="replace").splitlines()):
+        if existing.strip():
+            last_line = existing
+            break
+if sanitized == last_line:
+    raise SystemExit(0)
+
+with output_path.open("a", encoding="utf-8") as handle:
+    handle.write(sanitized + "\n")
+PY
+}
+
 read_new_output_bytes() {
     local output_file="$1"
     local current_size lines_file remainder_file line
@@ -426,6 +541,7 @@ PY
     LAST_OFFSET="$current_size"
     while IFS= read -r line || [[ -n "$line" ]]; do
         [[ -n "$line" ]] || continue
+        append_sanitized_output_line "$line"
         ingest_katana_line "$line"
     done < "$lines_file"
 
@@ -439,21 +555,22 @@ PY
 }
 
 sanitize_katana_output_tail() {
-    [[ -f "$KATANA_OUTPUT" ]] || return 0
+    [[ -f "$KATANA_RAW_OUTPUT" ]] || return 0
 
     local suffix="${1:-partial-tail}"
 
-    python3 - "$KATANA_OUTPUT" "$suffix" <<'PY'
+    python3 - "$KATANA_RAW_OUTPUT" "$KATANA_OUTPUT" "$suffix" <<'PY'
 from pathlib import Path
 import json
 import sys
 
-output_path = Path(sys.argv[1])
-suffix = sys.argv[2]
-if not output_path.exists():
+raw_path = Path(sys.argv[1])
+public_path = Path(sys.argv[2])
+suffix = sys.argv[3]
+if not raw_path.exists():
     raise SystemExit(0)
 
-data = output_path.read_bytes()
+data = raw_path.read_bytes()
 if not data:
     raise SystemExit(0)
 
@@ -471,11 +588,11 @@ if not tail:
 try:
     json.loads(tail.decode("utf-8"))
 except Exception:
-    partial_path = output_path.with_name(output_path.name + f".{suffix}")
-    partial_path.write_bytes(tail)
-    output_path.write_bytes(prefix)
+    public_partial = public_path.with_name(public_path.name + f".{suffix}")
+    public_partial.write_text(f"[sanitized malformed katana tail omitted: {suffix}]\n", encoding="utf-8")
+    raw_path.write_bytes(prefix)
 else:
-    output_path.write_bytes(prefix + tail + b"\n")
+    raw_path.write_bytes(prefix + tail + b"\n")
 PY
 }
 
@@ -498,7 +615,7 @@ activate_plain_katana_fallback() {
     export KATANA_ENABLE_HYBRID=0
     export KATANA_ENABLE_XHR="$old_enable_xhr"
     export KATANA_ENABLE_HEADLESS="$old_enable_headless"
-    LAST_OFFSET="$(wc -c < "$KATANA_OUTPUT" | tr -d '[:space:]')"
+    LAST_OFFSET="$(wc -c < "$KATANA_RAW_OUTPUT" | tr -d '[:space:]')"
     LAST_OFFSET="${LAST_OFFSET:-0}"
     INGEST_REMAINDER=""
     start_katana "$TARGET" "${EXTRA_FLAGS[@]+"${EXTRA_FLAGS[@]}"}"
@@ -541,6 +658,7 @@ maybe_activate_katana_fallback() {
 
 # --- Start Katana container unless explicitly skipped for re-ingest/verification ---
 if [[ "${KATANA_INGEST_SKIP_START:-0}" != "1" ]]; then
+    export KATANA_OUTPUT_PATH="$KATANA_RAW_OUTPUT"
     start_katana "$TARGET" "${EXTRA_FLAGS[@]+"${EXTRA_FLAGS[@]}"}"
     KATANA_INGEST_STARTED_KATANA=1
     KATANA_LAST_OUTPUT_CHANGE_TS="$(date +%s)"
@@ -548,11 +666,12 @@ if [[ "${KATANA_INGEST_SKIP_START:-0}" != "1" ]]; then
 fi
 
 # --- Monitor output and ingest ---
-echo "[katana_ingest] Monitoring $KATANA_OUTPUT for crawl results..."
+echo "[katana_ingest] Monitoring $KATANA_RAW_OUTPUT for crawl results..."
 
 if [[ "${KATANA_INGEST_ONESHOT:-0}" == "1" ]]; then
-    read_new_output_bytes "$KATANA_OUTPUT"
+    read_new_output_bytes "$KATANA_RAW_OUTPUT"
     if [[ -n "$INGEST_REMAINDER" ]] && printf '%s' "$INGEST_REMAINDER" | jq -e . >/dev/null 2>&1; then
+        append_sanitized_output_line "$INGEST_REMAINDER"
         ingest_katana_line "$INGEST_REMAINDER"
     fi
     sanitize_katana_output_tail "partial-final"
@@ -563,7 +682,7 @@ else
     # until it is completed, instead of re-ingesting the whole file.
     poll_seconds="${KATANA_INGEST_POLL_SECONDS:-2}"
     while true; do
-        read_new_output_bytes "$KATANA_OUTPUT"
+        read_new_output_bytes "$KATANA_RAW_OUTPUT"
         maybe_activate_katana_fallback
         if maybe_finish_ingest_loop; then
             break

@@ -1996,11 +1996,81 @@ def test_run_summary_normalizes_loopback_runtime_artifacts_and_redacts_katana_he
     assert "host.docker.internal" not in findings_text
     assert "host.docker.internal" not in report_text
     assert "host.docker.internal" not in surfaces_text
-    assert katana_text == original_katana_text
-    assert "host.docker.internal" in katana_text
-    assert "secret-jwt" in katana_text
-    assert "secret-cookie" in katana_text
-    assert '<redacted>' not in katana_text
+    assert katana_text != original_katana_text
+    assert "host.docker.internal" not in katana_text
+    assert "secret-jwt" not in katana_text
+    assert "secret-cookie" not in katana_text
+    assert '<redacted>' in katana_text
+
+    katana_rows = [json.loads(line) for line in katana_text.splitlines() if line.strip()]
+    assert katana_rows[0]["request"]["endpoint"] == "http://127.0.0.1:8000/"
+    xhr_headers = katana_rows[0]["response"]["xhr_requests"][0]["headers"]
+    assert xhr_headers["Authorization"] == "<redacted>"
+    assert xhr_headers["Cookie"] == "<redacted>"
+
+
+def test_run_summary_redacts_live_katana_headers_for_non_loopback_runs():
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "https://www.okx.com")
+    active_dir = setup_active_engagement(run)
+
+    (active_dir / "scope.json").write_text(
+        json.dumps(
+            {
+                "target": "https://www.okx.com",
+                "hostname": "www.okx.com",
+                "port": 443,
+                "scope": ["www.okx.com", "*.www.okx.com"],
+                "status": "in_progress",
+                "current_phase": "collect",
+            }
+        ),
+        encoding="utf-8",
+    )
+    scans_dir = active_dir / "scans"
+    scans_dir.mkdir(parents=True, exist_ok=True)
+    original_katana_text = json.dumps(
+        {
+            "request": {"method": "GET", "endpoint": "https://www.okx.com/"},
+            "response": {
+                "status_code": 200,
+                "headers": {"Content-Type": "text/html"},
+                "xhr_requests": [
+                    {
+                        "method": "GET",
+                        "endpoint": "https://www.okx.com/api/v5/account/balance",
+                        "headers": {
+                            "Cookie": "session=secret-cookie",
+                            "X-API-Key": "secret-api-key",
+                            "Accept": "application/json",
+                        },
+                    }
+                ],
+            },
+        },
+        separators=(",", ":"),
+    )
+    (scans_dir / "katana_output.jsonl").write_text(original_katana_text, encoding="utf-8")
+
+    response = client.get(
+        f"/projects/{project['id']}/runs/{run['id']}/summary",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+
+    katana_text = (scans_dir / "katana_output.jsonl").read_text(encoding="utf-8")
+    assert "secret-cookie" not in katana_text
+    assert "secret-api-key" not in katana_text
+    assert "<redacted>" in katana_text
+    assert "https://www.okx.com/api/v5/account/balance" in katana_text
+
+    katana_rows = [json.loads(line) for line in katana_text.splitlines() if line.strip()]
+    xhr_headers = katana_rows[0]["response"]["xhr_requests"][0]["headers"]
+    assert xhr_headers["Cookie"] == "<redacted>"
+    assert xhr_headers["X-API-Key"] == "<redacted>"
+    assert xhr_headers["Accept"] == "application/json"
 
 
 def test_run_summary_normalizes_malformed_katana_jsonl_streams_for_terminal_runs():

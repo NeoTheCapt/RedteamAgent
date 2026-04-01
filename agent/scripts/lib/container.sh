@@ -450,6 +450,7 @@ start_katana() {
             return 1
         fi
         mkdir -p "${ENGAGEMENT_DIR_ABS}/scans" "${ENGAGEMENT_DIR_ABS}/pids"
+        local katana_output_path="${KATANA_OUTPUT_PATH:-${ENGAGEMENT_DIR_ABS}/scans/katana_output.jsonl}"
         local auth_args=()
         local scope_args=()
         while IFS= read -r line; do
@@ -460,7 +461,7 @@ start_katana() {
             [ -n "$line" ] || continue
             scope_args+=("$line")
         done < <(_katana_scope_array)
-        _start_local_process katana "$KATANA_LOCAL_BIN" "${katana_args[@]}" "${scope_args[@]+"${scope_args[@]}"}" "${auth_args[@]+"${auth_args[@]}"}" -elog "${ENGAGEMENT_DIR_ABS}/scans/katana_error.log" -o "${ENGAGEMENT_DIR_ABS}/scans/katana_output.jsonl" "$@"
+        _start_local_process katana "$KATANA_LOCAL_BIN" "${katana_args[@]}" "${scope_args[@]+"${scope_args[@]}"}" "${auth_args[@]+"${auth_args[@]}"}" -elog "${ENGAGEMENT_DIR_ABS}/scans/katana_error.log" -o "$katana_output_path" "$@"
         echo "[katana] Started crawling $target"
         return 0
     fi
@@ -493,6 +494,10 @@ start_katana() {
     done < <(_katana_scope_array)
 
     mkdir -p "${ENGAGEMENT_DIR_ABS}/scans" "${ENGAGEMENT_DIR_ABS}/pids"
+    local katana_output_path="${KATANA_OUTPUT_PATH:-/engagement/scans/katana_output.jsonl}"
+    if [[ -n "${KATANA_OUTPUT_PATH:-}" ]] && [[ "$katana_output_path" == "$ENGAGEMENT_DIR_ABS"/* ]]; then
+        katana_output_path="/engagement/${katana_output_path#${ENGAGEMENT_DIR_ABS}/}"
+    fi
 
     docker run -d --name "$container_name" \
         --network host \
