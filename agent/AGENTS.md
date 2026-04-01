@@ -257,7 +257,10 @@ On start or `/resume`:
 ```bash
 source scripts/lib/engagement.sh
 ENG_DIR=$(resolve_engagement_dir "$(pwd)")
-cat "$ENG_DIR/scope.json"
+printf '%s\n' "ENG_DIR=$ENG_DIR"
+printf '%s\n' '---SCOPE---'
+jq -c '{status,current_phase,phases_completed,target,start_time,started_at}' "$ENG_DIR/scope.json"
+printf '%s\n' '---STATS---'
 ./scripts/dispatcher.sh "$ENG_DIR/cases.db" stats 2>/dev/null
 ```
 
@@ -272,6 +275,7 @@ Resume rules:
 - On `/resume`, `stylesheet` MUST be fetched for `source-analyzer` in the SAME turn as the matching dispatch. Do not leave stylesheet rows sitting in `processing` under a resume placeholder.
 - After `reset-stale`, either dispatch exactly one concrete next batch in the SAME turn or write an explicit `Run stop` log entry with a stop reason.
 - Do NOT leave `/resume` on a queue summary, `dispatcher.sh ... stats`, or `dispatcher.sh ... fetch ...` without the matching subagent dispatch / case-outcome update in that same turn.
+- When printing diagnostic banner lines that start with `-`, NEVER use bare `printf '---label---\n'`; bash can parse that as an option and abort the step. Use `printf '%s\n' '---label---'` (or `echo '---label---'`) instead.
 
 ## Communication
 
