@@ -94,6 +94,16 @@ if ! grep -q 'do not stop after only writing a log entry like `Credential valida
 fi
 pass "operator prompt forbids log-only credential validation stalls"
 
+if ! grep -q 'the SAME turn that decides exploit has started must launch both the osint-analyst task and at least one bounded exploit-developer task' "$OPERATOR_TXT"; then
+  fail "operator prompt does not enforce same-turn parallel exploit dispatch"
+fi
+pass "operator prompt enforces same-turn parallel exploit dispatch"
+
+if ! grep -q 'Do NOT stop after only `Exploit start`, only OSINT triage, or only a todo/log update' "$OPERATOR_TXT"; then
+  fail "operator prompt does not forbid OSINT-only exploit stalls"
+fi
+pass "operator prompt forbids OSINT-only exploit stalls"
+
 if ! grep -q 'If credentials are discovered during consume-test, write them to auth.json and in that SAME turn dispatch a bounded exploit-developer auth-validation task' "$ENGAGE_MD"; then
   fail "engage command is missing same-turn credential validation guidance"
 fi

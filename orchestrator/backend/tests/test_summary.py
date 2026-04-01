@@ -516,6 +516,85 @@ def test_run_summary_current_activity_prefers_scope_phase_for_unknown_task_event
     assert payload["current"]["phase"] == "consume-test"
 
 
+def test_run_summary_overview_updated_at_uses_runtime_activity_when_events_are_stale():
+    client = TestClient(app)
+    token = register_and_login(client, "alice-runtime-activity")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "http://127.0.0.1:8000")
+    active_dir = setup_active_engagement(run)
+    (active_dir / "scope.json").write_text(
+        json.dumps(
+            {
+                "hostname": "127.0.0.1",
+                "status": "in_progress",
+                "phases_completed": ["recon", "collect", "consume_test"],
+                "current_phase": "exploit",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    client.post(
+        f"/projects/{project['id']}/runs/{run['id']}/events",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "event_type": "task.started",
+            "phase": "exploit",
+            "task_name": "exploit-developer",
+            "agent_name": "exploit-developer",
+            "summary": "KeePass vault + upload/admin/continue-code chain",
+        },
+    )
+
+    from app import db
+
+    with db.get_connection() as connection:
+        connection.execute(
+            "UPDATE events SET created_at = ? WHERE run_id = ? AND event_type = 'task.started'",
+            ("2026-04-01 19:51:00", run["id"]),
+        )
+
+    runtime_dir = Path(run["engagement_root"], "runtime")
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    runtime_activity_timestamp_ms = int(time.time() * 1000)
+    old_epoch = runtime_activity_timestamp_ms / 1000 - 300
+    os.utime(active_dir / "scope.json", (old_epoch, old_epoch))
+    (runtime_dir / "process.log").write_text(
+        json.dumps(
+            {
+                "type": "tool_use",
+                "timestamp": runtime_activity_timestamp_ms,
+                "part": {
+                    "tool": "task",
+                    "state": {
+                        "status": "completed",
+                        "input": {
+                            "description": "Run OSINT triage",
+                            "subagent_type": "osint-analyst",
+                            "prompt": "Current phase: exploit\n",
+                        },
+                    },
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    response = client.get(
+        f"/projects/{project['id']}/runs/{run['id']}/summary",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+
+    expected_updated_at = datetime.fromtimestamp(runtime_activity_timestamp_ms / 1000, UTC).replace(
+        tzinfo=None,
+        microsecond=0,
+    ).strftime("%Y-%m-%d %H:%M:%S")
+    assert payload["overview"]["updated_at"] == expected_updated_at
+
+
 def test_run_summary_keeps_late_source_analyzer_log_projection_in_consume_test():
     client = TestClient(app)
     token = register_and_login(client, "alice")
