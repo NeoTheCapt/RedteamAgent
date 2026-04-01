@@ -992,6 +992,12 @@ def _normalize_report_completion_artifact(path: Path, *, header_date: str) -> No
             if line != normalized:
                 lines[index] = normalized
                 changed = True
+            continue
+        if line.startswith("**Status**:"):
+            normalized = "**Status**: Completed"
+            if line != normalized:
+                lines[index] = normalized
+                changed = True
 
     if not date_found:
         insert_at = 1 if lines and lines[0].startswith("#") else 0
