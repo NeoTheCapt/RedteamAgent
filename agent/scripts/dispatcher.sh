@@ -59,6 +59,13 @@ case "$ACTION" in
       exit 1
     fi
 
+    IN_FLIGHT_FOR_AGENT=$(sql "SELECT COUNT(*) FROM cases WHERE status='processing' AND assigned_agent='${AGENT}';")
+    if [[ "${IN_FLIGHT_FOR_AGENT:-0}" =~ ^[0-9]+$ ]] && (( IN_FLIGHT_FOR_AGENT > 0 )); then
+      echo "[]"
+      echo "Refusing fetch for ${AGENT}: ${IN_FLIGHT_FOR_AGENT} case(s) already processing" >&2
+      exit 0
+    fi
+
     sqlite3 "$DB" ".timeout 5000" -json "
       UPDATE cases
       SET status = 'processing',
