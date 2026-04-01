@@ -2575,3 +2575,92 @@ def test_auto_launch_allows_third_resume_attempt(monkeypatch):
     assert metadata["auto_resume_count"] == 2
     events = db.list_events_for_run(run["id"])
     assert len([event for event in events if event.event_type == "run.resumed"]) == 2
+
+
+
+def test_auto_resume_resets_budget_after_queue_progress(monkeypatch):
+    from app.services import launcher
+
+    client = TestClient(app)
+    token = register_and_login(client, "alice-resume-progress")
+    project = create_project(client, token)
+
+    object.__setattr__(settings, "auto_launch_runs", False)
+    try:
+        run = create_run(client, token, project["id"], "https://progress-resume.example")
+    finally:
+        object.__setattr__(settings, "auto_launch_runs", False)
+
+    latest = db.get_run_by_id(run["id"])
+    assert latest is not None
+    project_model = db.get_project_by_id(project["id"])
+    assert project_model is not None
+    user_model = db.get_user_by_id(project_model.user_id)
+    assert user_model is not None
+
+    workspace = Path(latest.engagement_root) / "workspace"
+    engagement_dir = workspace / "engagements" / "2026-03-30-010000-example-progress-resume"
+    engagement_dir.mkdir(parents=True, exist_ok=True)
+    (workspace / "engagements" / ".active").write_text(
+        "engagements/2026-03-30-010000-example-progress-resume\n",
+        encoding="utf-8",
+    )
+    (engagement_dir / "scope.json").write_text(
+        json.dumps(
+            {
+                "status": "in_progress",
+                "current_phase": "consume_test",
+                "phases_completed": ["recon", "collect"],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    cases_db = engagement_dir / "cases.db"
+    with sqlite3.connect(cases_db) as connection:
+        connection.execute("CREATE TABLE cases (id INTEGER PRIMARY KEY AUTOINCREMENT, status TEXT NOT NULL)")
+        connection.executemany(
+            "INSERT INTO cases(status) VALUES (?)",
+            [("done",), ("pending",), ("pending",)],
+        )
+        connection.commit()
+
+    monkeypatch.setattr("app.services.launcher._launch_runtime_container", lambda *args, **kwargs: None)
+    monkeypatch.setattr("app.services.launcher._start_container_supervisor", lambda *args, **kwargs: True)
+
+    assert launcher._maybe_auto_resume_run(
+        project_model,
+        latest,
+        user_model,
+        phase="consume-test",
+        reason_code="engagement_incomplete",
+        reason_text="queue still has pending work",
+    )
+
+    metadata = json.loads((Path(latest.engagement_root) / "run.json").read_text(encoding="utf-8"))
+    assert metadata["auto_resume_count"] == 1
+    assert metadata["auto_resume_progress"] == 1
+
+    with sqlite3.connect(cases_db) as connection:
+        connection.execute("DELETE FROM cases")
+        connection.executemany(
+            "INSERT INTO cases(status) VALUES (?)",
+            [("done",), ("done",), ("pending",)],
+        )
+        connection.commit()
+
+    refreshed = db.get_run_by_id(run["id"])
+    assert refreshed is not None
+    assert launcher._maybe_auto_resume_run(
+        project_model,
+        refreshed,
+        user_model,
+        phase="consume-test",
+        reason_code="engagement_incomplete",
+        reason_text="queue still has pending work",
+    )
+
+    metadata = json.loads((Path(latest.engagement_root) / "run.json").read_text(encoding="utf-8"))
+    assert metadata["auto_resume_count"] == 1
+    assert metadata["auto_resume_progress"] == 2

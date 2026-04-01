@@ -1751,8 +1751,34 @@ def _current_auto_resume_count(run: Run) -> int:
         return 0
 
 
+def _current_auto_resume_progress(run: Run) -> int | None:
+    value = _read_run_metadata(run).get("auto_resume_progress")
+    if value in (None, ""):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _set_auto_resume_count(run: Run, count: int) -> None:
     _update_run_metadata(run, auto_resume_count=max(0, int(count)))
+
+
+def _current_queue_resolution_count(run: Run) -> int | None:
+    engagement_dir = _active_engagement_dir(run)
+    if engagement_dir is None:
+        return None
+    _, total_cases, pending_cases, processing_cases = _load_running_queue_state(engagement_dir)
+    if total_cases <= 0:
+        return None
+    return max(0, total_cases - pending_cases - processing_cases)
+
+
+def _set_auto_resume_progress(run: Run, resolved_count: int | None) -> None:
+    if resolved_count is None:
+        return
+    _update_run_metadata(run, auto_resume_progress=max(0, int(resolved_count)))
 
 
 def _init_only_exit(run: Run) -> bool:
@@ -2187,11 +2213,21 @@ def _maybe_auto_resume_run(
         return False
 
     attempt = _current_auto_resume_count(run)
+    resolved_count = _current_queue_resolution_count(run)
+    last_resolved_count = _current_auto_resume_progress(run)
+    if (
+        resolved_count is not None
+        and last_resolved_count is not None
+        and resolved_count > last_resolved_count
+    ):
+        attempt = 0
+
     if attempt >= _AUTO_RESUME_LIMIT:
         return False
 
     next_attempt = attempt + 1
     _set_auto_resume_count(run, next_attempt)
+    _set_auto_resume_progress(run, resolved_count)
     _append_runtime_event(
         run,
         "run.resumed",
@@ -2411,6 +2447,7 @@ def start_run_runtime(project: Project, run: Run, user: User) -> Run:
     prepare_run_runtime(project, run)
     process_log_path_for(run).parent.mkdir(parents=True, exist_ok=True)
     _set_auto_resume_count(run, 0)
+    _update_run_metadata(run, auto_resume_progress=None)
     log_handle = open(process_log_path_for(run), "ab")
 
     try:
