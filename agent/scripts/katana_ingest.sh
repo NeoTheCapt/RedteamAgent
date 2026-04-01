@@ -387,6 +387,7 @@ append_sanitized_output_line() {
 
     python3 - "$TARGET" "$line" "$KATANA_OUTPUT" <<'PY'
 import json
+import re
 import sys
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
@@ -407,6 +408,11 @@ _SENSITIVE_HEADERS = {
     "x-csrf-token",
     "x-xsrf-token",
 }
+_NOISY_ENDPOINT_PATTERNS = (
+    re.compile(r"/\.well-known/[^/?#]+/[0-9]{2,5}/\.well-known/[^/?#]+", re.IGNORECASE),
+    re.compile(r"['\"]\.concat\(", re.IGNORECASE),
+    re.compile(r"/\.concat\(", re.IGNORECASE),
+)
 
 
 def loopback_context(target_value: str):
@@ -459,6 +465,49 @@ def rewrite_value(value, context):
     return value
 
 
+def endpoint_is_noise(value):
+    if not isinstance(value, str):
+        return False
+    candidate = value.strip()
+    if not candidate:
+        return False
+    try:
+        parsed = urlsplit(candidate)
+        path = parsed.path or candidate
+    except ValueError:
+        path = candidate
+    return any(pattern.search(path) for pattern in _NOISY_ENDPOINT_PATTERNS)
+
+
+def filter_payload_noise(payload):
+    if not isinstance(payload, dict):
+        return payload
+
+    request = payload.get("request")
+    request_endpoint = None
+    if isinstance(request, dict):
+        request_endpoint = request.get("endpoint") or request.get("url")
+    if request_endpoint is None:
+        request_endpoint = payload.get("url")
+    if endpoint_is_noise(request_endpoint):
+        return None
+
+    response = payload.get("response")
+    if isinstance(response, dict) and isinstance(response.get("xhr_requests"), list):
+        filtered_xhrs = []
+        for xhr in response["xhr_requests"]:
+            if not isinstance(xhr, dict):
+                filtered_xhrs.append(xhr)
+                continue
+            endpoint = xhr.get("endpoint") or xhr.get("url")
+            if endpoint_is_noise(endpoint):
+                continue
+            filtered_xhrs.append(xhr)
+        response["xhr_requests"] = filtered_xhrs
+
+    return payload
+
+
 context = loopback_context(target)
 stripped = line.strip()
 if not stripped:
@@ -471,7 +520,10 @@ else:
     except json.JSONDecodeError:
         print("[katana_ingest] Skipping malformed katana JSON row during public artifact sanitization", file=sys.stderr)
         raise SystemExit(0)
-    sanitized = json.dumps(rewrite_value(payload, context), separators=(",", ":"))
+    sanitized_payload = filter_payload_noise(rewrite_value(payload, context))
+    if sanitized_payload is None:
+        raise SystemExit(0)
+    sanitized = json.dumps(sanitized_payload, separators=(",", ":"))
 
 last_line = ""
 if output_path.exists():
