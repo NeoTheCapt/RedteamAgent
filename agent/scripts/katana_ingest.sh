@@ -466,7 +466,11 @@ if not stripped:
 if stripped.startswith(("http://", "https://")):
     sanitized = rewrite_text(stripped, context)
 else:
-    payload = json.loads(line)
+    try:
+        payload = json.loads(stripped)
+    except json.JSONDecodeError:
+        print("[katana_ingest] Skipping malformed katana JSON row during public artifact sanitization", file=sys.stderr)
+        raise SystemExit(0)
     sanitized = json.dumps(rewrite_value(payload, context), separators=(",", ":"))
 
 last_line = ""
