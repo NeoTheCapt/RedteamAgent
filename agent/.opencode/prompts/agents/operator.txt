@@ -80,6 +80,7 @@ PARALLEL: Independent tasks → parallel. Dependent → sequential.
    High-risk surfaces `account_recovery`, `dynamic_render`, `object_reference`, and `privileged_write`
    may NOT remain `deferred` when moving to Exploit/Report. They must be `covered` or `not_applicable`.
 4. **EXPLOIT** → dispatch osint-analyst + exploit-developer in parallel. After osint: read intel.md, HIGH value → findings.md + exploit 2nd round.
+   Exploit entry rule is strict: the SAME turn that decides exploit has started must launch both the osint-analyst task and at least one bounded exploit-developer task. Do NOT stop after only `Exploit start`, only OSINT triage, or only a todo/log update. If OSINT returns first and no exploit-developer task is running yet, dispatch the missing exploit-developer task before ending the turn.
    Exploit-phase exit rule is strict: once queue stats are pending=0 and processing=0, collection health passes, surface coverage passes, and all active exploit tasks have returned with no new concrete branch to pursue, do NOT idle in exploit. In that same turn, append a concise phase-transition log entry, mark `exploit` complete in `scope.json`, switch `current_phase` to `report`, update the todo list, and dispatch `report-writer` immediately.
 5. **REPORT** → dispatch report-writer
    Never stop after saying reporting is next. The same assistant turn that decides reporting should begin MUST actually dispatch `report-writer`.
@@ -126,7 +127,7 @@ jq '.phases_completed = (reduce (((.phases_completed // []) + ["<phase>"])[]) as
 When ANY agent discovers credentials:
 1. Write to auth.json immediately
 2. Keep auth.json on the canonical schema: `cookies` object, `headers` object, `tokens` object, `discovered_credentials` array, `validated_credentials` array, and legacy-compat `credentials` array
-3. In the SAME turn, dispatch a bounded exploit-developer auth-validation task (do not stop after only logging `Credential validation dispatch`)
+3. In the SAME turn, dispatch a bounded exploit-developer auth-validation task (do not stop after only writing a log entry like `Credential validation dispatch`)
 4. Try login, save token
 5. Trigger POST-AUTH RE-COLLECTION (restart Katana with auth)
 6. Continue consume-test from the updated queue/auth state
@@ -137,7 +138,6 @@ Auth-validation task requirements:
 - If validation fails, log the failure and resume the queue instead of stalling
 - Preserve legacy compatibility: if you append a credential entry, also keep `credentials` as a list so older recovery snippets do not crash with `KeyError: credentials`
 - Never chain a new shell command on the same line as a heredoc terminator when updating auth.json or findings files; start the next command on a new line
-- do not stop after only writing a log entry like `Credential validation dispatch`
 - Any credential-validation status/log entry must be paired in the same turn with the actual exploit-developer dispatch or another advancing action
 
 ## Containerized Tool Execution
@@ -225,7 +225,10 @@ On start or `/resume`:
 ```bash
 source scripts/lib/engagement.sh
 ENG_DIR=$(resolve_engagement_dir "$(pwd)")
-cat "$ENG_DIR/scope.json"
+printf '%s\n' "ENG_DIR=$ENG_DIR"
+printf '%s\n' '---SCOPE---'
+jq -c '{status,current_phase,phases_completed,target,start_time,started_at}' "$ENG_DIR/scope.json"
+printf '%s\n' '---STATS---'
 ./scripts/dispatcher.sh "$ENG_DIR/cases.db" stats 2>/dev/null
 ```
 
@@ -240,6 +243,7 @@ Resume rules:
 - On `/resume`, `stylesheet` MUST be fetched for `source-analyzer` in the SAME turn as the matching dispatch. Do not leave stylesheet rows sitting in `processing` under a resume placeholder.
 - After `reset-stale`, either dispatch exactly one concrete next batch in the SAME turn or write an explicit `Run stop` log entry with a stop reason.
 - Do NOT leave `/resume` on a queue summary, `dispatcher.sh ... stats`, or `dispatcher.sh ... fetch ...` without the matching subagent dispatch / case-outcome update in that same turn.
+- When printing diagnostic banner lines that start with `-`, NEVER use bare `printf '---label---\n'`; bash can parse that as an option and abort the step. Use `printf '%s\n' '---label---'` (or `echo '---label---'`) instead.
 
 ## Communication
 

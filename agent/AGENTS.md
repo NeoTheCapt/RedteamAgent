@@ -70,7 +70,7 @@ Rules:
 - Do not delegate `/engage` initialization to the task tool or any general subagent.
 - Before initialization completes, do not read `scope.json`, `log.md`, `findings.md`, `intel.md`, `auth.json`, or `cases.db`.
 - Use the bash block from `.opencode/commands/engage.md` directly. Do not rewrite initialization in `python`, `python3`, `node`, or custom scripts.
-- The core loop starts only after initialization completes successfully.
+- The core loop starts only after /engage initialization completes successfully.
 
 ## Subagent Dispatch
 
@@ -113,6 +113,7 @@ PARALLEL: Independent tasks → parallel. Dependent → sequential.
    High-risk surfaces `account_recovery`, `dynamic_render`, `object_reference`, and `privileged_write`
    may NOT remain `deferred` when moving to Exploit/Report. They must be `covered` or `not_applicable`.
 4. **EXPLOIT** → dispatch osint-analyst + exploit-developer in parallel. After osint: read intel.md, HIGH value → findings.md + exploit 2nd round.
+   Exploit entry rule is strict: the SAME turn that decides exploit has started must launch both the osint-analyst task and at least one bounded exploit-developer task. Do NOT stop after only `Exploit start`, only OSINT triage, or only a todo/log update. If OSINT returns first and no exploit-developer task is running yet, dispatch the missing exploit-developer task before ending the turn.
    Exploit-phase exit rule is strict: once queue stats are pending=0 and processing=0, collection health passes, surface coverage passes, and all active exploit tasks have returned with no new concrete branch to pursue, do NOT idle in exploit. In that same turn, append a concise phase-transition log entry, mark `exploit` complete in `scope.json`, switch `current_phase` to `report`, update the todo list, and dispatch `report-writer` immediately.
 5. **REPORT** → dispatch report-writer
    Never stop after saying reporting is next. The same assistant turn that decides reporting should begin MUST actually dispatch `report-writer`.
@@ -159,7 +160,7 @@ jq '.phases_completed = (reduce (((.phases_completed // []) + ["<phase>"])[]) as
 When ANY agent discovers credentials:
 1. Write to auth.json immediately
 2. Keep auth.json on the canonical schema: `cookies` object, `headers` object, `tokens` object, `discovered_credentials` array, `validated_credentials` array, and legacy-compat `credentials` array
-3. In the SAME turn, dispatch a bounded exploit-developer auth-validation task (do not stop after only logging `Credential validation dispatch`)
+3. In the SAME turn, dispatch a bounded exploit-developer auth-validation task (do not stop after only writing a log entry like `Credential validation dispatch`)
 4. Try login, save token
 5. Trigger POST-AUTH RE-COLLECTION (restart Katana with auth)
 6. Continue consume-test from the updated queue/auth state

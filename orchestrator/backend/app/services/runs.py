@@ -235,7 +235,8 @@ def _latest_runtime_activity_at(run: Run) -> datetime | None:
 
 
 def _latest_workflow_activity_at(run: Run, scope_path: Path | None) -> datetime | None:
-    latest = None
+    latest = _latest_runtime_activity_at(run)
+
     if scope_path is not None and scope_path.exists():
         for path in (
             scope_path,
