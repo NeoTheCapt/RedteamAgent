@@ -117,4 +117,17 @@ after_count=$(wc -l < "$ENG_DIR/surfaces.jsonl")
 grep -q '"target": "POST /rest/user/reset-password and GET /rest/user/security-question?email=..."' "$ENG_DIR/surfaces.jsonl"
 ! grep -q 'security-question?email=<email>' "$ENG_DIR/surfaces.jsonl"
 
+before_count=$(wc -l < "$ENG_DIR/surfaces.jsonl")
+cat <<'EOF' | "$ROOT/agent/scripts/append_surface_jsonl.sh" "$ENG_DIR"
+{"surface_type":"auth_entry","target":"GET /account/login?forward=<encoded-url>","source":"source-analyzer","rationale":"login-forward flow is still a valid auth surface even when the forward value is unknown","status":"discovered"}
+{"surface_type":"object_reference","target":"GET /v3/users/local-config/settings?uuid=<profile.uuid>","source":"source-analyzer","rationale":"bundle ties local-config reads to a uuid query value that may vary per profile","status":"discovered"}
+{"surface_type":"object_reference","target":"GET /orders/<orderId>","source":"source-analyzer","rationale":"path placeholder remains too vague and should still be rejected","status":"discovered"}
+EOF
+
+after_count=$(wc -l < "$ENG_DIR/surfaces.jsonl")
+[[ "$after_count" -eq $((before_count + 2)) ]]
+grep -q '"target": "GET /account/login?forward=..."' "$ENG_DIR/surfaces.jsonl"
+grep -q '"target": "GET /v3/users/local-config/settings?uuid=..."' "$ENG_DIR/surfaces.jsonl"
+! grep -q '"target": "GET /orders/<orderId>"' "$ENG_DIR/surfaces.jsonl"
+
 echo "surface jsonl contracts: ok"

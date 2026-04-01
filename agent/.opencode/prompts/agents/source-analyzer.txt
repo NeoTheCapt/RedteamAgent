@@ -170,6 +170,11 @@ Plus any secrets/tokens for findings.md.
     emit it under `#### Surface Candidates`. Allowed `surface_type` values:
     `auth_entry`, `account_recovery`, `object_reference`, `privileged_write`, `file_handling`,
     `dynamic_render`, `api_documentation`, `workflow_token`.
+    Surface targets must stay importable: do not use unresolved angle-bracket/template placeholders
+    such as `<encoded-url>` or `<profile.uuid>`. If only a query value is unknown, replace just the
+    value with `...` (for example `GET /account/login?forward=...` or
+    `GET /v3/users/local-config/settings?uuid=...`). If the path itself is unresolved, describe the
+    flow in plain language instead of emitting a templated route.
 13. SECRET STORAGE: If a credential, token, seed phrase, API key, or setup secret is needed for
     later use, store the full value in `intel-secrets.json` via:
     `./scripts/store_intel_secret.sh "$DIR" <ref> <type> <full-value> <source> "<notes>"`
