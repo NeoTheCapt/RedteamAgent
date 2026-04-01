@@ -604,12 +604,12 @@ def _effective_current_phase(
     if _is_terminal_run_status(run_status):
         return scope_phase
 
-    if _queue_requires_consume_test(scope, events, pending_cases, processing_cases):
-        return "consume-test"
-
     active_task_phase = _latest_active_task_phase(events, scope_phase)
     if active_task_phase != "unknown":
         return active_task_phase
+
+    if _queue_requires_consume_test(scope, events, pending_cases, processing_cases):
+        return "consume-test"
 
     latest_task_phase = next(
         (
@@ -674,7 +674,9 @@ def _build_phase_cards(scope: dict, events: list, agents: list[dict], run_status
 
     cards: list[dict] = []
     for phase in PHASE_ORDER:
-        if not terminal and phase == effective_current_phase:
+        if not terminal and active_agents_by_phase.get(phase, 0) > 0:
+            state = "active"
+        elif not terminal and phase == effective_current_phase:
             state = "active"
         elif phase in completed:
             state = "completed"
@@ -703,6 +705,7 @@ def _resolved_event_phase(event, scope_phase: str) -> str:
         if (
             event_type != "task.completed"
             and scope_phase != "unknown"
+            and explicit_phase in {"recon", "collect"}
             and _phase_index(explicit_phase) < _phase_index(scope_phase)
         ):
             return scope_phase
