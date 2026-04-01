@@ -25,6 +25,18 @@ grep -q '"surface_type": "object_reference"' "$ENG_DIR/surfaces.jsonl"
 grep -q '"target": "GET /orders/7"' "$ENG_DIR/surfaces.jsonl"
 
 cat <<'EOF' | "$ROOT/agent/scripts/append_surface_jsonl.sh" "$ENG_DIR"
+{"surface_type":"workflow_token","target":"GET /rest/continue-code","source":"source-analyzer","rationale":"legacy producer still emits new while surfacing a concrete continuation token endpoint","status":"new"}
+EOF
+
+grep -q '"target": "GET /rest/continue-code"' "$ENG_DIR/surfaces.jsonl"
+python3 - <<'PY' "$ENG_DIR/surfaces.jsonl"
+import json, sys
+rows = [json.loads(line) for line in open(sys.argv[1], encoding='utf-8') if line.strip()]
+match = next(row for row in rows if row["target"] == "GET /rest/continue-code")
+assert match["status"] == "discovered", match
+PY
+
+cat <<'EOF' | "$ROOT/agent/scripts/append_surface_jsonl.sh" "$ENG_DIR"
 {"category":"auth-workflow","path":"*/account/login-pwd/forget, */account/oauth","source":"source-analyzer","reason":"robots discloses recovery and auth-flow route families","priority":"medium"}
 {"surface_type":"identity_verification","target":"*/kyc$, */kyb/","source":"source-analyzer","rationale":"robots discloses onboarding and verification routes","status":"discovered"}
 {"surface_type":"p2p_trading","target":"*/p2p/order, */p2p/dispute","source":"source-analyzer","rationale":"robots reveals transaction and dispute workflow families","status":"discovered"}
