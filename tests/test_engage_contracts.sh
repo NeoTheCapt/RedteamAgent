@@ -34,6 +34,11 @@ if grep -Eq 'katana_ingest\.sh "\$DIR" &' "$ENGAGE_MD"; then
 fi
 pass "background producer startup detaches stdio"
 
+if grep -q '/tmp/katana_start\.' "$ENGAGE_MD"; then
+  fail "engage command still redirects katana helper output into /tmp"
+fi
+pass "engage command keeps katana helper temp output inside the workspace"
+
 if ! grep -q "katana_ingest_pid=\$!" "$ENGAGE_MD"; then
   fail "engage command is missing explicit safe katana PID capture guidance"
 fi
