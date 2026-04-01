@@ -58,3 +58,12 @@ def test_backend_serves_frontend_build_when_present(isolate_data_dir):
     assert "orchestrator" in root_response.text
     assert asset_response.status_code == 200
     assert "console.log('ok')" in asset_response.text
+
+
+def test_frontend_uses_absolute_asset_base():
+    repo_root = Path(__file__).resolve().parents[3]
+    vite_config = repo_root / "orchestrator" / "frontend" / "vite.config.ts"
+    content = vite_config.read_text(encoding="utf-8")
+
+    assert 'base: "/"' in content
+    assert 'base: "./"' not in content
