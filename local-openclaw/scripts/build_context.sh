@@ -7,9 +7,9 @@ STATE_DIR="$ROOT_DIR/state"
 # shellcheck disable=SC1091
 source "$ROOT_DIR/scripts/lib/orchestrator_auth.sh"
 
-ORCH_BASE_URL="${ORCH_BASE_URL:-http://127.0.0.1:18000}"
-ORCH_TOKEN="${ORCH_TOKEN:-}"
-PROJECT_ID="${PROJECT_ID:?set PROJECT_ID}"
+export ORCH_BASE_URL="${ORCH_BASE_URL:-http://127.0.0.1:18000}"
+export ORCH_TOKEN="${ORCH_TOKEN:-}"
+export PROJECT_ID="${PROJECT_ID:?set PROJECT_ID}"
 
 mkdir -p "$STATE_DIR"
 
