@@ -160,7 +160,7 @@ case "$ACTION" in
       [[ -z "$COOKIE_PARAMS" ]] && COOKIE_PARAMS="{}"
       [[ -z "$HEADERS" ]] && HEADERS="{}"
       [[ -z "$RESPONSE_HEADERS" ]] && RESPONSE_HEADERS="{}"
-      [[ -z "$PARAMS_KEY_SIG" ]] && PARAMS_KEY_SIG="$(generate_params_sig "$QUERY_PARAMS" "$BODY_PARAMS")"
+      [[ -z "$PARAMS_KEY_SIG" ]] && PARAMS_KEY_SIG="$(generate_params_sig "$QUERY_PARAMS" "$BODY_PARAMS" "$URL")"
 
       if [[ -z "$URL" || -z "$URL_PATH" ]]; then
         echo "ERROR: requeue line missing usable url/url_path" >&2

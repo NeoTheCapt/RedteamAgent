@@ -167,7 +167,7 @@ while IFS= read -r endpoint; do
     case_type=$(classify_type "$method" "$url_path" "" "")
 
     # Generate dedup signature
-    params_sig=$(generate_params_sig "$query_params" "$body_params")
+    params_sig=$(generate_params_sig "$query_params" "$body_params" "$url_with_query")
 
     # Insert into DB
     db_insert_case "$DB_PATH" \

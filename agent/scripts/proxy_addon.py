@@ -281,7 +281,7 @@ class CaseCollector:
 
     # -- dedup signature ----------------------------------------------------
 
-    def _generate_sig(self, query_json: str | None, body_json: str | None) -> str:
+    def _generate_sig(self, query_json: str | None, body_json: str | None, url: str | None) -> str:
         keys: list[str] = []
         if query_json:
             try:
@@ -297,7 +297,12 @@ class CaseCollector:
                     keys.extend(b.keys())
             except json.JSONDecodeError:
                 pass
-        return hashlib.md5(",".join(sorted(set(keys))).encode()).hexdigest()
+        parsed = urlparse(url or "")
+        origin = ""
+        if parsed.scheme and parsed.netloc:
+            origin = f"{parsed.scheme.lower()}://{parsed.netloc.lower()}"
+        material = f"{origin}|{','.join(sorted(set(keys)))}"
+        return hashlib.md5(material.encode()).hexdigest()
 
     # -- body save policy ---------------------------------------------------
 
@@ -516,7 +521,7 @@ class CaseCollector:
 
         # Dedup signature
         params_key_sig = self._generate_sig(
-            params.get("query_params"), params.get("body_params")
+            params.get("query_params"), params.get("body_params"), req.pretty_url
         )
 
         # Status

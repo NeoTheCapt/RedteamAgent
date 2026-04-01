@@ -130,7 +130,7 @@ while IFS= read -r line; do
     fi
 
     # Generate dedup signature
-    params_sig=$(generate_params_sig "$query_params" "$body_params")
+    params_sig=$(generate_params_sig "$query_params" "$body_params" "$url")
 
     if ! should_enqueue_case "$SOURCE" "$case_type" "$method" "$url" "$url_path"; then
         continue
