@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 APPEND_SCRIPT="$ROOT_DIR/agent/scripts/append_surface.sh"
 CHECK_SCRIPT="$ROOT_DIR/agent/scripts/check_surface_coverage.sh"
+RECONCILE_SCRIPT="$ROOT_DIR/agent/scripts/reconcile_surface_coverage.sh"
 
 fail() {
   echo "FAIL: $*" >&2
@@ -120,13 +121,71 @@ test_coverage_check_fails_on_unresolved_discovered() {
   rm -rf "$dir"
 }
 
+test_reconcile_marks_advisory_surfaces_not_applicable_and_queues_concrete_followups() {
+  local dir out
+  dir=$(make_engagement_dir)
+
+  cat >"$dir/scope.json" <<'EOF'
+{
+  "target": "https://www.okx.com",
+  "hostname": "www.okx.com",
+  "port": 443,
+  "scope": ["www.okx.com", "*.www.okx.com"],
+  "status": "in_progress",
+  "current_phase": "consume_test"
+}
+EOF
+
+  cat >"$dir/findings.md" <<'EOF'
+# Findings
+EOF
+
+  python3 - <<'PY' "$dir/cases.db"
+import sqlite3, sys
+conn = sqlite3.connect(sys.argv[1])
+conn.execute("CREATE TABLE cases (method TEXT, url TEXT, url_path TEXT, query_params TEXT, type TEXT, status TEXT)")
+conn.commit()
+conn.close()
+PY
+
+  cat >"$dir/surfaces.jsonl" <<'EOF'
+{"surface_type":"auth_entry","target":"GET https://my.okx.com/en-sg/account/login","source":"source-analyzer","rationale":"out-of-scope auth host","status":"discovered"}
+{"surface_type":"workflow_token","target":"Client cookie names: token, im-token, ok-ses-id, _tk","source":"source-analyzer","rationale":"advisory cookie names only","status":"discovered"}
+{"surface_type":"file_handling","target":"GET /en-sg/download","source":"source-analyzer","rationale":"download center route","status":"discovered"}
+{"surface_type":"privileged_write","target":"POST https://www.okx.com/priapi/v5/balance/reset","source":"source-analyzer","rationale":"balance reset write flow","status":"discovered"}
+EOF
+
+  out=$(mktemp "${TMPDIR:-/tmp}/surface-reconcile.XXXXXX")
+  "$RECONCILE_SCRIPT" "$dir" >"$out"
+  rg 'auto-resolved 2 surface\(s\)' "$out" >/dev/null || fail "expected advisory/out-of-scope surfaces to auto-resolve"
+  rg 'queued 2 concrete follow-up case\(s\)' "$out" >/dev/null || fail "expected concrete follow-up cases to be queued"
+
+  python3 - <<'PY' "$dir/surfaces.jsonl" "$dir/scans/surface-coverage-followups.jsonl"
+import json, sys
+surfaces = [json.loads(line) for line in open(sys.argv[1], encoding='utf-8') if line.strip()]
+followups = [json.loads(line) for line in open(sys.argv[2], encoding='utf-8') if line.strip()]
+rows = {row['target']: row for row in surfaces}
+assert rows['GET https://my.okx.com/en-sg/account/login']['status'] == 'not_applicable', rows
+assert rows['Client cookie names: token, im-token, ok-ses-id, _tk']['status'] == 'not_applicable', rows
+assert rows['GET /en-sg/download']['status'] == 'discovered', rows
+assert rows['POST https://www.okx.com/priapi/v5/balance/reset']['status'] == 'discovered', rows
+assert any(item['url'] == 'https://www.okx.com/en-sg/download' and item['type'] == 'page' for item in followups), followups
+assert any(item['url'] == 'https://www.okx.com/priapi/v5/balance/reset' and item['type'] == 'api' and item['method'] == 'POST' for item in followups), followups
+PY
+
+  rm -f "$out"
+  rm -rf "$dir"
+}
+
 main() {
   need_script "$APPEND_SCRIPT"
   need_script "$CHECK_SCRIPT"
+  need_script "$RECONCILE_SCRIPT"
   test_append_and_dedup_update
   test_status_update_to_covered
   test_candidate_status_normalizes_to_discovered
   test_coverage_check_fails_on_unresolved_discovered
+  test_reconcile_marks_advisory_surfaces_not_applicable_and_queues_concrete_followups
   echo "surface contracts: ok"
 }
 

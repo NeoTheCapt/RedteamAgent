@@ -37,6 +37,12 @@ validated_creds = bool(auth.get("validated_credentials"))
 base_target = scope.get("target", "")
 parsed_target = urlparse(base_target)
 base_root = urlunparse((parsed_target.scheme or "http", parsed_target.netloc, "", "", "", ""))
+allowed_scope_entries = []
+for item in [scope.get("hostname"), *(scope.get("scope") or [])]:
+    item = str(item or "").strip().lower()
+    if item:
+        allowed_scope_entries.append(item)
+allowed_scope_entries = sorted(set(allowed_scope_entries))
 
 rows = []
 if surfaces_file.exists():
@@ -126,6 +132,71 @@ def case_exists(method: str, path: str) -> bool:
     return (method, clean_path) in all_case_keys
 
 
+def host_in_scope(host: str | None) -> bool:
+    value = (host or "").strip().lower().strip("[]")
+    if not value:
+        return False
+    if value in {"127.0.0.1", "localhost", "0.0.0.0", "::1", "host.docker.internal"}:
+        return True
+    for allowed in allowed_scope_entries:
+        if value == allowed:
+            return True
+        if allowed.startswith("*."):
+            wildcard = allowed[2:]
+            if value == wildcard or value.endswith(f".{wildcard}"):
+                return True
+    return False
+
+
+def parse_target_request(target: str):
+    target = normalize_target(target)
+    if not target:
+        return None, None, None, None
+    parts = target.split(" ", 1)
+    if len(parts) == 2 and parts[0].upper() in {"GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"}:
+        method = parts[0].upper()
+        rest = parts[1].strip()
+    else:
+        method = None
+        rest = target
+
+    if rest.startswith(("http://", "https://")):
+        parsed = urlparse(rest)
+        path = parsed.path or "/"
+        if parsed.query:
+            path = f"{path}?{parsed.query}"
+        return method or "GET", path, rest, (parsed.hostname or "").lower()
+
+    if method:
+        return method, rest, None, None
+
+    return None, None, None, None
+
+
+def target_is_nonrequestable(target: str, path: str | None) -> bool:
+    value = normalize_target(target)
+    check = f"{value} {path or ''}".lower()
+    markers = [
+        "...",
+        "<",
+        ">",
+        "{",
+        "}",
+        " -> ",
+        " and ",
+        " or ",
+        " | ",
+        "client cookie names:",
+        "frontend routes ",
+        "spa routes ",
+    ]
+    if any(marker in check for marker in markers):
+        return True
+    if "*" in (path or "") or "*" in value:
+        return True
+    return False
+
+
 def finding_mentions(*needles: str) -> bool:
     return any((needle or "").lower() in findings_text for needle in needles)
 
@@ -135,16 +206,32 @@ def followup_type(method: str, path: str) -> str:
         return "upload"
     if method != "GET":
         return "api"
-    if path.startswith("/api") or path.startswith("/rest") or path.startswith("/b2b"):
+    api_prefixes = (
+        "/api",
+        "/rest",
+        "/b2b",
+        "/priapi",
+        "/v1/",
+        "/v2/",
+        "/v3/",
+        "/v4/",
+        "/v5/",
+        "/v6/",
+    )
+    if path.startswith(api_prefixes):
         return "api"
     return "page"
 
 
-def build_followup(method: str, path: str, target: str):
+def build_followup(method: str, path: str, target: str, absolute_url: str | None = None):
     clean_path, query = split_path_query(path)
-    full_url = f"{base_root}{clean_path}"
-    if query:
-        full_url = f"{full_url}?{query}"
+    if absolute_url:
+        parsed = urlparse(absolute_url)
+        full_url = urlunparse((parsed.scheme, parsed.netloc, clean_path, "", query, ""))
+    else:
+        full_url = f"{base_root}{clean_path}"
+        if query:
+            full_url = f"{full_url}?{query}"
     item = {
         "method": method,
         "url": full_url,
@@ -173,7 +260,7 @@ for row in rows:
     if status != "discovered" or not target:
         continue
 
-    method, path = extract_first_method_and_path(target)
+    method, path, absolute_url, absolute_host = parse_target_request(target)
     decision = None
     reason = None
 
@@ -183,6 +270,15 @@ for row in rows:
     elif surface_type == "dynamic_render" and target.startswith("SPA routes ") and (("GET", "/main.js") in done_case_keys or ("GET", "/") in done_case_keys):
         decision = "covered"
         reason = "source analysis already reviewed the SPA bundle that disclosed these client-side routes"
+    elif absolute_host and not host_in_scope(absolute_host):
+        decision = "not_applicable"
+        reason = f"surface references out-of-scope host {absolute_host}"
+    elif not method or not path:
+        decision = "not_applicable"
+        reason = "surface is advisory metadata without a concrete requestable target"
+    elif target_is_nonrequestable(target, path):
+        decision = "not_applicable"
+        reason = "surface target is abstract or multi-step and cannot be exercised as one bounded request"
     elif target == "POST /rest/user/login" and (validated_creds or finding_mentions("post /rest/user/login", "validated admin jwt", "hardcoded client-side test credentials allow authenticated admin access")):
         decision = "covered"
         reason = "login surface was validated during credential replay and admin JWT acquisition"
@@ -208,6 +304,12 @@ for row in rows:
             "evidence_ref": "scans/surface-coverage-followups.jsonl" if decision == "covered" else "scope.json",
             "status": decision,
         })
+        continue
+
+    if method and path and not case_exists(method, path) and (method, path) not in seen_followups:
+        followups.append(build_followup(method, path, target, absolute_url))
+        seen_followups.add((method, path))
+        remaining.append(f"{surface_type} | {target}")
         continue
 
     candidate_followups = {
