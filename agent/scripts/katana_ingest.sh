@@ -297,7 +297,7 @@ ingest_request() {
     query_params=$(extract_query_params "$url")
     path_params=$(extract_path_params "$url_path")
     case_type=$(classify_type "$method" "$url_path" "$content_type" "")
-    params_sig=$(generate_params_sig "$query_params" "$body_params")
+    params_sig=$(generate_params_sig "$query_params" "$body_params" "$url")
 
     if ! inserted="$(db_insert_case "$DB_PATH" \
         "$method" "$url" "$url_path" \
