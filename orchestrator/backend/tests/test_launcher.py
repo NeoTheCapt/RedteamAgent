@@ -1949,7 +1949,8 @@ def test_normalize_active_scope_marks_completed_report_and_log_headers(monkeypat
     (engagement_dir / "report.md").write_text(
         "# Penetration Test Report: https://example.com\n"
         "**Date**: 2026-03-29 — In Progress\n"
-        "**Target**: https://example.com  **Scope**: example.com, *.example.com  **Status**: In Progress\n",
+        "**Target**: https://example.com  **Scope**: example.com, *.example.com  **Status**: In Progress\n"
+        "**Status**: In Progress (testing queue completed; report phase active)\n",
         encoding="utf-8",
     )
     (engagement_dir / "surfaces.jsonl").write_text("", encoding="utf-8")
@@ -1989,6 +1990,7 @@ def test_normalize_active_scope_marks_completed_report_and_log_headers(monkeypat
     assert "- **Status**: Completed" in log_text
     assert "**Date**: 2026-03-30 — Completed" in report_text
     assert "**Status**: Completed" in report_text
+    assert "In Progress" not in report_text
 
 
 def test_auto_launch_marks_completed_only_when_engagement_is_finalized(monkeypatch):
