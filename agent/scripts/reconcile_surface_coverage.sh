@@ -33,7 +33,8 @@ scope = json.loads((eng_dir / "scope.json").read_text())
 surfaces_file = eng_dir / "surfaces.jsonl"
 findings_text = (eng_dir / "findings.md").read_text(encoding="utf-8").lower() if (eng_dir / "findings.md").exists() else ""
 auth = json.loads((eng_dir / "auth.json").read_text()) if (eng_dir / "auth.json").exists() else {}
-validated_creds = bool(auth.get("validated_credentials"))
+legacy_credentials = auth.get("credentials") if isinstance(auth.get("credentials"), list) else []
+validated_creds = bool(auth.get("validated_credentials") or legacy_credentials)
 base_target = scope.get("target", "")
 parsed_target = urlparse(base_target)
 base_root = urlunparse((parsed_target.scheme or "http", parsed_target.netloc, "", "", "", ""))

@@ -66,6 +66,42 @@ _CONTAINER_STATUS_LOOKUP_UNAVAILABLE = "__lookup_unavailable__"
 
 _LOOPBACK_RUNTIME_HOSTS = {"127.0.0.1", "localhost", "0.0.0.0", "::1"}
 _RUNTIME_HOST_GATEWAY_ALIAS = "host.docker.internal"
+
+
+def _normalize_auth_payload(raw: str) -> str:
+    payload: dict[str, object]
+    try:
+        parsed = json.loads(raw) if raw.strip() else {}
+    except json.JSONDecodeError:
+        parsed = {}
+    payload = parsed if isinstance(parsed, dict) else {}
+
+    cookies = payload.get("cookies") if isinstance(payload.get("cookies"), dict) else {}
+    headers = payload.get("headers") if isinstance(payload.get("headers"), dict) else {}
+    tokens = payload.get("tokens") if isinstance(payload.get("tokens"), dict) else {}
+    discovered = payload.get("discovered_credentials") if isinstance(payload.get("discovered_credentials"), list) else []
+    validated = payload.get("validated_credentials") if isinstance(payload.get("validated_credentials"), list) else []
+    legacy = payload.get("credentials") if isinstance(payload.get("credentials"), list) else []
+
+    merged_legacy: list[object] = []
+    seen: set[str] = set()
+    for item in [*discovered, *validated, *legacy]:
+        marker = json.dumps(item, sort_keys=True, ensure_ascii=False)
+        if marker in seen:
+            continue
+        seen.add(marker)
+        merged_legacy.append(item)
+
+    normalized = dict(payload)
+    normalized["cookies"] = cookies
+    normalized["headers"] = headers
+    normalized["tokens"] = tokens
+    normalized["discovered_credentials"] = discovered or legacy
+    normalized["validated_credentials"] = validated
+    normalized["credentials"] = merged_legacy
+    return json.dumps(normalized, separators=(",", ":"), ensure_ascii=False)
+
+
 _AUTO_RESUME_REASON_CODES = {
     "engagement_incomplete",
     "incomplete_stop",
@@ -1581,7 +1617,8 @@ def prepare_run_runtime(project: Project, run: Run) -> None:
     seed_root_for(run).mkdir(parents=True, exist_ok=True)
 
     if project.auth_json.strip():
-        (seed_root_for(run) / "auth.json").write_text(project.auth_json + "\n", encoding="utf-8")
+        normalized_auth = _normalize_auth_payload(project.auth_json)
+        (seed_root_for(run) / "auth.json").write_text(normalized_auth + "\n", encoding="utf-8")
     elif (seed_root_for(run) / "auth.json").exists():
         (seed_root_for(run) / "auth.json").unlink()
 

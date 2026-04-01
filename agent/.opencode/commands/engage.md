@@ -115,7 +115,16 @@ printf "[]\n" > "$DIR/intel-secrets.json"
 if [ -f ".redteam-seed/auth.json" ]; then
   cp ".redteam-seed/auth.json" "$DIR/auth.json"
 else
-  echo "{}" > "$DIR/auth.json"
+  cat > "$DIR/auth.json" << EOF
+{
+  "cookies": {},
+  "headers": {},
+  "tokens": {},
+  "discovered_credentials": [],
+  "validated_credentials": [],
+  "credentials": []
+}
+EOF
 fi
 
 sqlite3 "$DIR/cases.db" < scripts/schema.sql

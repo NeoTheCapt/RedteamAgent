@@ -2224,8 +2224,40 @@ def test_prepare_run_runtime_writes_auth_seed_and_env_seed():
 
     run = create_run(client, token, project["id"], "https://seeded.example")
     run_root = Path(run["engagement_root"])
-    assert json.loads((run_root / "seed" / "auth.json").read_text(encoding="utf-8"))["headers"]["Authorization"] == "Bearer abc"
+    auth_seed = json.loads((run_root / "seed" / "auth.json").read_text(encoding="utf-8"))
+    assert auth_seed["headers"]["Authorization"] == "Bearer abc"
+    assert auth_seed["cookies"] == {}
+    assert auth_seed["tokens"] == {}
+    assert auth_seed["discovered_credentials"] == []
+    assert auth_seed["validated_credentials"] == []
+    assert auth_seed["credentials"] == []
     assert json.loads((run_root / "seed" / "env.json").read_text(encoding="utf-8"))["HTTP_PROXY"] == "http://proxy:8080"
+
+
+def test_prepare_run_runtime_normalizes_legacy_auth_seed_credentials():
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project_response = client.post(
+        "/projects",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "name": "LegacyAuthSeed",
+            "auth_json": '{"credentials":[{"type":"password","username":"demo","password":"secret"}],"headers":{"Authorization":"Bearer abc"}}',
+        },
+    )
+    assert project_response.status_code == 201
+    project = project_response.json()
+
+    run = create_run(client, token, project["id"], "https://legacy-seed.example")
+    auth_seed = json.loads(Path(run["engagement_root"], "seed", "auth.json").read_text(encoding="utf-8"))
+    assert auth_seed["headers"]["Authorization"] == "Bearer abc"
+    assert auth_seed["discovered_credentials"] == [
+        {"type": "password", "username": "demo", "password": "secret"}
+    ]
+    assert auth_seed["validated_credentials"] == []
+    assert auth_seed["credentials"] == [
+        {"type": "password", "username": "demo", "password": "secret"}
+    ]
 
 
 def test_init_only_zero_exit_is_marked_failed(monkeypatch):
