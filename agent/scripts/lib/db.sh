@@ -8,6 +8,56 @@ _db_escape() {
     printf '%s' "$1" | sed "s/'/''/g"
 }
 
+_db_is_transient_error() {
+    local message="${1:-}"
+    [[ "$message" == *"database is locked"* ]] \
+        || [[ "$message" == *"database schema is locked"* ]] \
+        || [[ "$message" == *"database table is locked"* ]] \
+        || [[ "$message" == *"database is busy"* ]] \
+        || [[ "$message" == *"database table is busy"* ]]
+}
+
+_db_sqlite_with_retry() {
+    local format="$1"
+    local db_path="$2"
+    local input_sql="$3"
+    local max_attempts="${DB_RETRY_ATTEMPTS:-4}"
+    local retry_sleep="${DB_RETRY_SLEEP_SECONDS:-1}"
+    local attempt=1
+    local stdout_file stderr_file stderr_text
+
+    while true; do
+        stdout_file="$(mktemp)"
+        stderr_file="$(mktemp)"
+
+        if [[ "$format" == "json" ]]; then
+            if printf '.timeout 5000\n%s\n' "$input_sql" | sqlite3 -json "$db_path" >"$stdout_file" 2>"$stderr_file"; then
+                cat "$stdout_file"
+                rm -f "$stdout_file" "$stderr_file"
+                return 0
+            fi
+        else
+            if printf '.timeout 5000\n%s\n' "$input_sql" | sqlite3 "$db_path" >"$stdout_file" 2>"$stderr_file"; then
+                cat "$stdout_file"
+                rm -f "$stdout_file" "$stderr_file"
+                return 0
+            fi
+        fi
+
+        stderr_text="$(cat "$stderr_file")"
+        rm -f "$stdout_file" "$stderr_file"
+
+        if _db_is_transient_error "$stderr_text" && (( attempt < max_attempts )); then
+            sleep "$retry_sleep"
+            attempt=$((attempt + 1))
+            continue
+        fi
+
+        [[ -n "$stderr_text" ]] && printf '%s\n' "$stderr_text" >&2
+        return 1
+    done
+}
+
 # db_init <db_path>
 # Verify database exists; ensure WAL mode and busy_timeout are set.
 db_init() {
@@ -23,7 +73,7 @@ db_init() {
         return 1
     fi
 
-    sqlite3 "$db_path" "PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;" >/dev/null
+    _db_sqlite_with_retry text "$db_path" "PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;" >/dev/null
 }
 
 # db_query <db_path> <sql>
@@ -37,7 +87,7 @@ db_query() {
         return 1
     fi
 
-    printf '.timeout 5000\n%s\n' "$sql" | sqlite3 -json "$db_path"
+    _db_sqlite_with_retry json "$db_path" "$sql"
 }
 
 # db_exec <db_path> <sql>
@@ -51,7 +101,7 @@ db_exec() {
         return 1
     fi
 
-    printf '.timeout 5000\n%s\n' "$sql" | sqlite3 "$db_path"
+    _db_sqlite_with_retry text "$db_path" "$sql"
 }
 
 # db_insert_case <db_path> <method> <url> <url_path> <query_params> <body_params>
@@ -147,5 +197,6 @@ db_insert_case() {
     '${e_type}', '${e_source}', '${status}', '${e_params_key_sig}'
 );"
 
-    printf '.timeout 5000\n%s\nSELECT changes();\n' "$sql" | sqlite3 "$db_path"
+    _db_sqlite_with_retry text "$db_path" "$sql
+SELECT changes();"
 }

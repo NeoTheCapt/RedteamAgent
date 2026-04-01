@@ -44,4 +44,15 @@ else
 fi
 katana_ingest_pid=$!
 printf '%s\n' "$katana_ingest_pid" > "$PID_FILE"
+
+registration_grace_seconds="${KATANA_INGEST_REGISTRATION_GRACE_SECONDS:-1}"
+sleep "$registration_grace_seconds"
+
+if ! kill -0 "$katana_ingest_pid" 2>/dev/null; then
+    wait "$katana_ingest_pid" 2>/dev/null || true
+    rm -f "$PID_FILE"
+    echo "ERROR: katana_ingest.sh exited before background registration completed" >&2
+    exit 1
+fi
+
 printf '%s\n' "$katana_ingest_pid"
