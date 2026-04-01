@@ -53,11 +53,11 @@ normalize_surface_type() {
             printf '%s\n' "auth_entry"
             return 0
             ;;
-        business_logic|logic_flow|stateful_flow|race_condition)
+        business_logic|logic_flow|stateful_flow|race_condition|authenticated_admin_api|authenticated_api)
             printf '%s\n' "privileged_write"
             return 0
             ;;
-        update_distribution)
+        update_distribution|distribution_artifact)
             printf '%s\n' "file_handling"
             return 0
             ;;
@@ -65,8 +65,12 @@ normalize_surface_type() {
             printf '%s\n' "cors_review"
             return 0
             ;;
-        opaque_post_contract|opaque_post_body|body_contract|schema_followup)
+        opaque_post_contract|opaque_post_body|body_contract|schema_followup|reflected_input)
             printf '%s\n' "api_param_followup"
+            return 0
+            ;;
+        admin_session)
+            printf '%s\n' "workflow_token"
             return 0
             ;;
         "")

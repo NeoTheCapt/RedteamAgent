@@ -14,23 +14,32 @@ surface_canonical_type() {
     local surface_type="${1:?surface type required}"
     surface_type="$(printf '%s' "$surface_type" | tr '[:upper:]' '[:lower:]' | tr '-' '_')"
     case "$surface_type" in
-        spa_route|spa|client_route|client_side_route|frontend_route)
+        spa_route|spa|client_route|client_side_route|frontend_route|p2p_trading|web3_assets|preview_or_internal_content|asset_distribution|cdn_asset_host|cdn_host|download_host|object_storage|storage_bucket)
             printf '%s\n' "dynamic_render"
             ;;
-        auth|authentication|login|register|mfa|oauth|oauth_flow|auth_surface)
+        auth|authentication|login|register|mfa|oauth|oauth_flow|auth_surface|identity_verification)
             printf '%s\n' "auth_entry"
             ;;
-        business_logic|logic_flow|stateful_flow|race_condition)
+        auth_workflow)
+            printf '%s\n' "account_recovery"
+            ;;
+        business_logic|logic_flow|stateful_flow|race_condition|authenticated_admin_api|authenticated_api)
             printf '%s\n' "privileged_write"
             ;;
-        update_distribution)
+        update_distribution|distribution_artifact|file|upload)
             printf '%s\n' "file_handling"
             ;;
         cors_surface)
             printf '%s\n' "cors_review"
             ;;
-        opaque_post_contract|opaque_post_body|body_contract|schema_followup)
+        opaque_post_contract|opaque_post_body|body_contract|schema_followup|reflected_input)
             printf '%s\n' "api_param_followup"
+            ;;
+        api_docs|swagger|openapi)
+            printf '%s\n' "api_documentation"
+            ;;
+        admin_session)
+            printf '%s\n' "workflow_token"
             ;;
         *)
             printf '%s\n' "$surface_type"
