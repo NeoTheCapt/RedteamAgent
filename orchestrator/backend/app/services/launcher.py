@@ -1114,10 +1114,13 @@ _SURFACE_TYPE_ALIASES = {
     "mfa": "auth_entry",
     "oauth": "auth_entry",
     "oauth_flow": "auth_entry",
+    "auth_surface": "auth_entry",
     "business_logic": "privileged_write",
     "logic_flow": "privileged_write",
     "stateful_flow": "privileged_write",
     "race_condition": "privileged_write",
+    "update_distribution": "file_handling",
+    "cors_surface": "cors_review",
 }
 
 
