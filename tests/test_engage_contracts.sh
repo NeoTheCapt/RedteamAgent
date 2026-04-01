@@ -94,6 +94,21 @@ if ! grep -q 'If credentials are discovered during consume-test, write them to a
 fi
 pass "engage command requires same-turn credential validation"
 
+if ! grep -q '"discovered_credentials": \[\]' "$ENGAGE_MD" || ! grep -q '"validated_credentials": \[\]' "$ENGAGE_MD" || ! grep -q '"credentials": \[\]' "$ENGAGE_MD"; then
+  fail "engage command is missing the canonical auth.json seed schema"
+fi
+pass "engage command seeds auth.json with the canonical compatibility schema"
+
+if ! grep -q 'legacy-compat `credentials` array' "$OPERATOR_TXT"; then
+  fail "operator prompt is missing legacy auth.json compatibility guidance"
+fi
+pass "operator prompt documents the auth.json compatibility schema"
+
+if ! grep -q 'KeyError: credentials' "$OPERATOR_TXT"; then
+  fail "operator prompt is missing the explicit legacy-credentials crash guard"
+fi
+pass "operator prompt warns against auth.json credentials key regressions"
+
 if ! grep -q 'authorized lab mirrors resolved inside the harness' "$OPERATOR_TXT"; then
   fail "operator prompt is missing explicit branded-target lab-mirror authorization guidance"
 fi

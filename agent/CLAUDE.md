@@ -145,15 +145,18 @@ jq '.phases_completed = (reduce (((.phases_completed // []) + ["<phase>"])[]) as
 
 When ANY agent discovers credentials:
 1. Write to auth.json immediately
-2. In the SAME turn, dispatch a bounded exploit-developer auth-validation task (do not stop after only logging `Credential validation dispatch`)
-3. Try login, save token
-4. Trigger POST-AUTH RE-COLLECTION (restart Katana with auth)
-5. Continue consume-test from the updated queue/auth state
+2. Keep auth.json on the canonical schema: `cookies` object, `headers` object, `tokens` object, `discovered_credentials` array, `validated_credentials` array, and legacy-compat `credentials` array
+3. In the SAME turn, dispatch a bounded exploit-developer auth-validation task (do not stop after only logging `Credential validation dispatch`)
+4. Try login, save token
+5. Trigger POST-AUTH RE-COLLECTION (restart Katana with auth)
+6. Continue consume-test from the updated queue/auth state
 
 Auth-validation task requirements:
 - Use exploit-developer for the login/JWT acquisition attempt
 - Keep the task narrow: validate exactly the discovered credential(s), acquire session material if successful, and test one immediate authenticated foothold
 - If validation fails, log the failure and resume the queue instead of stalling
+- Preserve legacy compatibility: if you append a credential entry, also keep `credentials` as a list so older recovery snippets do not crash with `KeyError: credentials`
+- Never chain a new shell command on the same line as a heredoc terminator when updating auth.json or findings files; start the next command on a new line
 - Any credential-validation status/log entry must be paired in the same turn with the actual exploit-developer dispatch or another advancing action
 
 ## Containerized Tool Execution
