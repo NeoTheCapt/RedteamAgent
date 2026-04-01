@@ -149,12 +149,14 @@ For later temp files that should preserve literal Markdown/JSON/JSONL content, p
 Never pass raw JSONL directly to `append_surface.sh`. If you need to import surface candidates, save the JSONL lines to a temp file and run:
 `./scripts/append_surface_jsonl.sh "$DIR" < "$TMP_JSONL"`
 
-## Step 3: Environment Check (Docker)
+## Step 3: Environment Check (Runtime Prerequisites)
 
-All pentest tools run in Docker containers. Check prerequisites:
+Check prerequisites for the active runtime mode:
 
 ```bash
 source scripts/lib/container.sh
+
+RUNTIME_MODE=$(runtime_mode)
 
 echo ""
 echo "=== Docker Check ==="
@@ -166,7 +168,11 @@ check_images
 
 echo ""
 echo "=== Local Tools ==="
-for tool in curl jq sqlite3 docker; do
+tools=(curl jq sqlite3)
+if [ "$RUNTIME_MODE" != "local" ]; then
+  tools+=(docker)
+fi
+for tool in "${tools[@]}"; do
   if which "$tool" >/dev/null 2>&1; then
     echo "[OK] $tool"
   else
@@ -175,11 +181,13 @@ for tool in curl jq sqlite3 docker; do
 done
 ```
 
-If images are missing, tell the user:
+If images are missing in Docker runtime, tell the user:
 "Docker images not built yet. Run: `cd docker && docker compose build`"
 Wait for user to confirm images are built before proceeding.
 
-If Docker is not installed, the engagement CANNOT proceed. Tell the user to install Docker first.
+If `runtime_mode` is `local`, do NOT stop just because the `docker` CLI is absent. Local runtime already treats `check_docker` and `check_images` success as sufficient, and only `curl`, `jq`, and `sqlite3` are mandatory in that mode.
+
+If Docker runtime is active and Docker is not installed, the engagement CANNOT proceed. Tell the user to install Docker first.
 
 ## Step 4: Configure Authentication
 
