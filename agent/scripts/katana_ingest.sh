@@ -79,6 +79,14 @@ cleanup_katana_ingest() {
     if [[ "$KATANA_INGEST_STARTED_KATANA" == "1" ]]; then
         stop_katana >/dev/null 2>&1 || true
     fi
+    if [[ -f "$KATANA_OUTPUT" ]]; then
+        read_new_output_bytes "$KATANA_OUTPUT" >/dev/null 2>&1 || true
+        if [[ -n "$INGEST_REMAINDER" ]] && printf '%s' "$INGEST_REMAINDER" | jq -e . >/dev/null 2>&1; then
+            ingest_katana_line "$INGEST_REMAINDER" || true
+        fi
+        sanitize_katana_output_tail "partial-final" >/dev/null 2>&1 || true
+        INGEST_REMAINDER=""
+    fi
     rm -f "$(pid_file_path "$ENGAGEMENT_DIR/pids" "katana_ingest")"
 }
 trap cleanup_katana_ingest EXIT
@@ -108,10 +116,11 @@ maybe_finish_ingest_loop() {
         return 1
     fi
 
-    if [[ -n "$INGEST_REMAINDER" ]]; then
+    if [[ -n "$INGEST_REMAINDER" ]] && printf '%s' "$INGEST_REMAINDER" | jq -e . >/dev/null 2>&1; then
         ingest_katana_line "$INGEST_REMAINDER"
-        INGEST_REMAINDER=""
     fi
+    sanitize_katana_output_tail "partial-final"
+    INGEST_REMAINDER=""
 
     return 0
 }
@@ -429,15 +438,18 @@ PY
     rm -f "$lines_file" "$remainder_file"
 }
 
-sanitize_katana_output_for_restart() {
+sanitize_katana_output_tail() {
     [[ -f "$KATANA_OUTPUT" ]] || return 0
 
-    python3 - "$KATANA_OUTPUT" <<'PY'
+    local suffix="${1:-partial-tail}"
+
+    python3 - "$KATANA_OUTPUT" "$suffix" <<'PY'
 from pathlib import Path
 import json
 import sys
 
 output_path = Path(sys.argv[1])
+suffix = sys.argv[2]
 if not output_path.exists():
     raise SystemExit(0)
 
@@ -459,12 +471,16 @@ if not tail:
 try:
     json.loads(tail.decode("utf-8"))
 except Exception:
-    partial_path = output_path.with_name(output_path.name + ".partial-pre-fallback")
+    partial_path = output_path.with_name(output_path.name + f".{suffix}")
     partial_path.write_bytes(tail)
     output_path.write_bytes(prefix)
 else:
-    output_path.write_bytes(data + b"\n")
+    output_path.write_bytes(prefix + tail + b"\n")
 PY
+}
+
+sanitize_katana_output_for_restart() {
+    sanitize_katana_output_tail "partial-pre-fallback"
 }
 
 activate_plain_katana_fallback() {
@@ -535,10 +551,11 @@ echo "[katana_ingest] Monitoring $KATANA_OUTPUT for crawl results..."
 
 if [[ "${KATANA_INGEST_ONESHOT:-0}" == "1" ]]; then
     read_new_output_bytes "$KATANA_OUTPUT"
-    if [[ -n "$INGEST_REMAINDER" ]]; then
+    if [[ -n "$INGEST_REMAINDER" ]] && printf '%s' "$INGEST_REMAINDER" | jq -e . >/dev/null 2>&1; then
         ingest_katana_line "$INGEST_REMAINDER"
-        INGEST_REMAINDER=""
     fi
+    sanitize_katana_output_tail "partial-final"
+    INGEST_REMAINDER=""
 else
     # Katana may leave the newest JSON row unterminated for long stretches. Read only the
     # newly appended bytes on each size change and carry an unfinished trailing row forward
