@@ -543,6 +543,12 @@ read_new_output_bytes() {
     local output_file="$1"
     local current_size lines_file remainder_file line
 
+    if [[ ! -f "$output_file" ]]; then
+        LAST_OFFSET=0
+        INGEST_REMAINDER=""
+        return 0
+    fi
+
     current_size="$(wc -c < "$output_file" | tr -d '[:space:]')"
     current_size="${current_size:-0}"
 
@@ -671,8 +677,12 @@ activate_plain_katana_fallback() {
     export KATANA_ENABLE_HYBRID=0
     export KATANA_ENABLE_XHR="$old_enable_xhr"
     export KATANA_ENABLE_HEADLESS="$old_enable_headless"
-    LAST_OFFSET="$(wc -c < "$KATANA_RAW_OUTPUT" | tr -d '[:space:]')"
-    LAST_OFFSET="${LAST_OFFSET:-0}"
+    if [[ -f "$KATANA_RAW_OUTPUT" ]]; then
+        LAST_OFFSET="$(wc -c < "$KATANA_RAW_OUTPUT" | tr -d '[:space:]')"
+        LAST_OFFSET="${LAST_OFFSET:-0}"
+    else
+        LAST_OFFSET=0
+    fi
     INGEST_REMAINDER=""
     start_katana "$TARGET" "${EXTRA_FLAGS[@]+"${EXTRA_FLAGS[@]}"}"
     export KATANA_ENABLE_HYBRID="$old_enable_hybrid"
