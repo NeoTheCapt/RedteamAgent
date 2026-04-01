@@ -175,6 +175,13 @@ case "$ACTION" in
         continue
       fi
 
+      REQUEUE_STATUS="pending"
+      case "$TYPE" in
+        image|video|font|archive)
+          REQUEUE_STATUS="skipped"
+          ;;
+      esac
+
       # Escape single quotes for SQLite
       METHOD="${METHOD//\'/\'\'}"
       URL="${URL//\'/\'\'}"
@@ -204,7 +211,7 @@ case "$ACTION" in
           '${QUERY_PARAMS}', '${BODY_PARAMS}', '${PATH_PARAMS}', '${COOKIE_PARAMS}',
           '${HEADERS}', '${BODY}', '${CONTENT_TYPE}', ${CONTENT_LENGTH},
           ${RESPONSE_STATUS}, '${RESPONSE_HEADERS}', ${RESPONSE_SIZE}, '${RESPONSE_SNIPPET}',
-          '${TYPE}', '${SOURCE}', 'pending', '${PARAMS_KEY_SIG}',
+          '${TYPE}', '${SOURCE}', '${REQUEUE_STATUS}', '${PARAMS_KEY_SIG}',
           NULL, NULL
         )
         ON CONFLICT(method, url_path, params_key_sig) DO UPDATE SET
@@ -223,7 +230,10 @@ case "$ACTION" in
           response_snippet = excluded.response_snippet,
           type = excluded.type,
           source = excluded.source,
-          status = 'pending',
+          status = CASE
+            WHEN excluded.type IN ('image', 'video', 'font', 'archive') THEN 'skipped'
+            ELSE 'pending'
+          END,
           assigned_agent = NULL,
           consumed_at = NULL
         WHERE cases.type = 'unknown'
