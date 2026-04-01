@@ -81,6 +81,27 @@ extract_url_path() {
   echo "$url"
 }
 
+# extract_url_origin <url>
+# Extract lowercased scheme://host[:port] from a URL for cross-origin dedup.
+# Returns empty string for relative URLs.
+extract_url_origin() {
+  local url="$1"
+
+  case "$url" in
+    *://*) ;;
+    *) echo ""; return 0 ;;
+  esac
+
+  python3 - "$url" <<'PY'
+import sys
+from urllib.parse import urlsplit
+u = urlsplit(sys.argv[1])
+scheme = (u.scheme or '').lower()
+netloc = (u.netloc or '').lower()
+print(f"{scheme}://{netloc}" if scheme and netloc else "")
+PY
+}
+
 # extract_path_params <path>
 # Identify dynamic URL segments using heuristics.
 # Returns JSON like {"seg_N":"value"} for each detected dynamic segment.
@@ -131,25 +152,32 @@ extract_cookie_params() {
   '
 }
 
-# generate_params_sig <query_params_json> <body_params_json>
-# Generate a dedup signature: md5 hash of sorted parameter KEY names.
-# Two requests with the same parameter names (but different values) produce the same signature.
+# generate_params_sig <query_params_json> <body_params_json> [url]
+# Generate a dedup signature: md5 hash of lowercased origin + sorted parameter KEY names.
+# Requests on different origins/ports must not collapse into the same queue entry.
 generate_params_sig() {
   local query_json="${1:-"{}"}"
   local body_json="${2:-"{}"}"
+  local url="${3:-}"
+  local origin
+  origin="$(extract_url_origin "$url")"
 
-  # Merge keys from both JSON objects, sort, and join
-  local sorted_keys
-  sorted_keys=$(printf '%s\n%s' "$query_json" "$body_json" | jq -rs '
-    (.[0] | keys) + (.[1] | keys) | unique | join(",")
+  # Merge keys from both JSON objects, sort, and join with the request origin.
+  local dedup_material
+  dedup_material=$(printf '%s\n%s\n%s' "$query_json" "$body_json" "$origin" | jq -Rs '
+    split("\n") as $parts
+    | ($parts[0] | fromjson? // {}) as $q
+    | ($parts[1] | fromjson? // {}) as $b
+    | ($parts[2] // "") as $origin
+    | [$origin, ((($q | keys) + ($b | keys)) | unique | join(","))] | join("|")
   ')
 
   # Hash with md5 (macOS) or md5sum (Linux)
   local hash
   if command -v md5 >/dev/null 2>&1; then
-    hash=$(printf '%s' "$sorted_keys" | md5)
+    hash=$(printf '%s' "$dedup_material" | md5)
   elif command -v md5sum >/dev/null 2>&1; then
-    hash=$(printf '%s' "$sorted_keys" | md5sum | awk '{print $1}')
+    hash=$(printf '%s' "$dedup_material" | md5sum | awk '{print $1}')
   else
     echo "ERROR: no md5 tool found" >&2
     return 1
