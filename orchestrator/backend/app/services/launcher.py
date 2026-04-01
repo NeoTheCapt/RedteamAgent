@@ -1029,9 +1029,12 @@ def _normalize_jsonl_artifact(path: Path, context: dict[str, str] | None, *, red
         payloads = _decode_json_stream(sanitized)
         if payloads is None:
             rewritten_line = _rewrite_loopback_text(sanitized, context)
-            if rewritten_line != line:
+            if re.match(r"^https?://", stripped):
+                if rewritten_line != line:
+                    changed = True
+                rewritten_lines.append(rewritten_line)
+            else:
                 changed = True
-            rewritten_lines.append(rewritten_line)
             continue
 
         if len(payloads) != 1 or sanitized != line:

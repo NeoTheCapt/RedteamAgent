@@ -2099,6 +2099,74 @@ def test_run_summary_normalizes_malformed_katana_jsonl_streams_for_terminal_runs
 
 
 
+def test_run_summary_drops_irrecoverable_malformed_katana_jsonl_lines_for_terminal_runs():
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "http://127.0.0.1:8000")
+    active_dir = setup_active_engagement(run)
+
+    (active_dir / "scope.json").write_text(
+        json.dumps(
+            {
+                "target": "http://host.docker.internal:8000",
+                "hostname": "host.docker.internal",
+                "port": 8000,
+                "scope": ["host.docker.internal", "*.host.docker.internal"],
+                "status": "in_progress",
+                "current_phase": "consume_test",
+            }
+        ),
+        encoding="utf-8",
+    )
+    scans_dir = active_dir / "scans"
+    scans_dir.mkdir(parents=True, exist_ok=True)
+
+    first = json.dumps(
+        {
+            "request": {"method": "GET", "endpoint": "http://host.docker.internal:8000/"},
+            "response": {"status_code": 200, "headers": {"Content-Type": "text/html"}},
+        },
+        separators=(",", ":"),
+    )
+    second = json.dumps(
+        {
+            "request": {"method": "GET", "endpoint": "http://host.docker.internal:8000/rest/user/login"},
+            "response": {"status_code": 200, "headers": {"Content-Type": "application/json"}},
+        },
+        separators=(",", ":"),
+    )
+    malformed = '{"request":{"method":"GET","endpoint":"http://host.docker.internal:8000/rest/continue-code","attribu//127.0.0.1:8000/main.jdocker.internal:8000/main.js"},"response":{"status_co'
+    suffix_fragment = ':37 GMT"},"content_length":821}}'
+    (scans_dir / "katana_output.jsonl").write_text(
+        first + "\n" + malformed + "\n" + second + "\n" + suffix_fragment + "\n",
+        encoding="utf-8",
+    )
+
+    from app import db as app_db
+
+    app_db.update_run_status(run["id"], "completed")
+
+    response = client.get(
+        f"/projects/{project['id']}/runs/{run['id']}/summary",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+
+    normalized = (scans_dir / "katana_output.jsonl").read_text(encoding="utf-8")
+    assert "host.docker.internal" not in normalized
+    assert "attribu//127.0.0.1:8000/main.jdocker.internal:8000/main.js" not in normalized
+    assert ':37 GMT"},"content_length":821}}' not in normalized
+
+    rows = [json.loads(line) for line in normalized.splitlines() if line.strip()]
+    assert len(rows) == 2
+    assert [row["request"]["endpoint"] for row in rows] == [
+        "http://127.0.0.1:8000/",
+        "http://127.0.0.1:8000/rest/user/login",
+    ]
+
+
+
 def test_run_summary_backfills_surface_candidates_from_process_log_without_duplicates():
     client = TestClient(app)
     token = register_and_login(client, "alice")
