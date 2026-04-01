@@ -740,6 +740,24 @@ def _active_runtime_metadata_agents(run: Run) -> set[str]:
     return active_agents
 
 
+def _run_metadata_has_current_task(run: Run) -> bool:
+    payload = _read_run_metadata(run)
+    current_task_name = str(payload.get("current_task_name") or "").strip()
+    current_agent_name = str(payload.get("current_agent_name") or "").strip()
+    return bool(current_task_name or current_agent_name)
+
+
+def _latest_runtime_metadata_activity_at(run: Run) -> float | None:
+    payload = _read_run_metadata(run)
+    latest = None
+    for candidate in _iter_runtime_activity_timestamps(payload):
+        if not _runtime_activity_candidate_is_valid(candidate):
+            continue
+        if latest is None or candidate > latest:
+            latest = candidate
+    return latest
+
+
 def _running_container_stall_reason(run: Run) -> tuple[str, str, str] | None:
     engagement_dir = _active_engagement_dir(run)
     current_phase, total_cases, pending_cases, processing_cases = _load_running_queue_state(engagement_dir)
@@ -770,7 +788,9 @@ def _running_container_stall_reason(run: Run) -> tuple[str, str, str] | None:
             )
 
     runtime_activity_at = _latest_running_runtime_activity_at(run)
+    metadata_activity_at = _latest_runtime_metadata_activity_at(run)
     active_runtime_agents = _active_runtime_metadata_agents(run)
+    has_current_task = _run_metadata_has_current_task(run)
     if (
         current_phase not in EARLY_PHASE_STALL_PHASES
         and pending_cases > 0
@@ -783,6 +803,27 @@ def _running_container_stall_reason(run: Run) -> tuple[str, str, str] | None:
             current_phase,
             "queue_stalled",
             "Pending queue items remained undispatched with no active runtime agent after dispatch grace period elapsed.",
+        )
+
+    orphan_activity_at = metadata_activity_at
+    if workflow_activity_at is not None and (
+        orphan_activity_at is None or workflow_activity_at > orphan_activity_at
+    ):
+        orphan_activity_at = workflow_activity_at
+    if (
+        current_phase not in EARLY_PHASE_STALL_PHASES
+        and total_cases > 0
+        and pending_cases == 0
+        and processing_cases == 0
+        and not active_runtime_agents
+        and not has_current_task
+        and orphan_activity_at is not None
+        and (time.time() - orphan_activity_at) >= RUN_STALL_TIMEOUT_SECONDS
+    ):
+        return (
+            current_phase,
+            "queue_stalled",
+            f"Run remained in {current_phase.replace('_', '-')} with no active runtime agent, current task, or queued work before stall timeout elapsed.",
         )
 
     if runtime_activity_at is not None:

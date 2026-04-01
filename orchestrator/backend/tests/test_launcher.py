@@ -1140,6 +1140,104 @@ def test_running_container_stall_reason_keeps_pending_queue_alive_when_runtime_a
 
 
 
+def test_running_container_stall_reason_flags_orphaned_report_phase_without_current_task_or_active_agent():
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "https://orphaned-report.example")
+    db.update_run_status(run["id"], "running")
+
+    run_row = db.get_run_by_id(run["id"])
+    assert run_row is not None
+
+    run_root = Path(run["engagement_root"])
+    runtime_dir = run_root / "runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    process_log = runtime_dir / "process.log"
+    process_log.write_text("stale runtime output\n", encoding="utf-8")
+
+    opencode_log = run_root / "opencode-home" / "log" / "2026-03-31T000000.log"
+    opencode_log.parent.mkdir(parents=True, exist_ok=True)
+    opencode_log.write_text(
+        "INFO  2026-03-31T00:00:05 +0ms service=bus type=message.part.updated publishing\n",
+        encoding="utf-8",
+    )
+    opencode_log.touch()
+
+    workspace = run_root / "workspace"
+    engagement_dir = workspace / "engagements" / "2026-03-31-000000-orphaned-report"
+    engagement_dir.mkdir(parents=True, exist_ok=True)
+    (workspace / "engagements" / ".active").write_text(
+        "engagements/2026-03-31-000000-orphaned-report\n",
+        encoding="utf-8",
+    )
+    scope_path = engagement_dir / "scope.json"
+    scope_path.write_text(
+        json.dumps(
+            {
+                "status": "in_progress",
+                "current_phase": "report",
+                "phases_completed": ["recon", "collect", "consume_test", "exploit"],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    log_path = engagement_dir / "log.md"
+    log_path.write_text("stale report phase\n", encoding="utf-8")
+    with sqlite3.connect(engagement_dir / "cases.db") as connection:
+        connection.execute(
+            "CREATE TABLE cases (id INTEGER PRIMARY KEY AUTOINCREMENT, status TEXT NOT NULL)"
+        )
+        connection.execute("INSERT INTO cases(status) VALUES ('done')")
+        connection.commit()
+
+    (run_root / "run.json").write_text(
+        json.dumps(
+            {
+                "current_phase": "report",
+                "current_task_name": None,
+                "current_agent_name": None,
+                "agents": [
+                    {
+                        "agent_name": "operator",
+                        "phase": "report",
+                        "status": "completed",
+                        "task_name": "todowrite",
+                        "updated_at": "2026-03-31 00:00:40",
+                    },
+                    {
+                        "agent_name": "report-writer",
+                        "phase": "report",
+                        "status": "idle",
+                        "task_name": "",
+                        "updated_at": "",
+                    },
+                ],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    import os
+
+    old_epoch = datetime.now().timestamp() - 950
+    os.utime(process_log, (old_epoch, old_epoch))
+    os.utime(scope_path, (old_epoch, old_epoch))
+    os.utime(log_path, (old_epoch, old_epoch))
+    os.utime(engagement_dir / "cases.db", (old_epoch, old_epoch))
+
+    from app.services.launcher import _running_container_stall_reason
+
+    assert _running_container_stall_reason(run_row) == (
+        "report",
+        "queue_stalled",
+        "Run remained in report with no active runtime agent, current task, or queued work before stall timeout elapsed.",
+    )
+
+
+
 def test_running_container_stall_reason_keeps_early_recon_alive_when_workflow_activity_is_recent():
     client = TestClient(app)
     token = register_and_login(client, "alice")
