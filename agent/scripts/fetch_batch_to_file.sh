@@ -28,6 +28,13 @@ trap 'rm -f "$stderr_file"' EXIT
 
 "$DISPATCHER" "$DB_PATH" fetch "$BATCH_TYPE" "$BATCH_LIMIT" "$BATCH_AGENT" >"$OUT_FILE" 2>"$stderr_file"
 
+# sqlite3 -json UPDATE ... RETURNING emits an empty file (not "[]") when no rows
+# match. Treat that as a valid empty batch so the operator can continue scanning
+# batch types without surfacing a spurious helper failure.
+if [[ ! -s "$OUT_FILE" ]]; then
+    printf '[]\n' >"$OUT_FILE"
+fi
+
 if ! jq -e type "$OUT_FILE" >/dev/null 2>&1; then
     echo "dispatcher produced invalid JSON for batch fetch" >&2
     cat "$OUT_FILE" >&2 || true
