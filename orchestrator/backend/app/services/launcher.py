@@ -1010,8 +1010,14 @@ def _decode_json_stream(value: str) -> list[object] | None:
     return payloads
 
 
-def _normalize_jsonl_artifact(path: Path, context: dict[str, str] | None, *, redact_headers: bool = False) -> None:
-    if context is None or not path.exists():
+def _normalize_jsonl_artifact(
+    path: Path,
+    context: dict[str, str] | None,
+    *,
+    redact_headers: bool = False,
+    preserve_malformed: bool = False,
+) -> None:
+    if not path.exists() or (context is None and not redact_headers):
         return
 
     original = path.read_text(encoding="utf-8", errors="replace")
@@ -1029,12 +1035,17 @@ def _normalize_jsonl_artifact(path: Path, context: dict[str, str] | None, *, red
         payloads = _decode_json_stream(sanitized)
         if payloads is None:
             rewritten_line = _rewrite_loopback_text(sanitized, context)
-            if re.match(r"^https?://", stripped):
+            if preserve_malformed:
                 if rewritten_line != line:
                     changed = True
                 rewritten_lines.append(rewritten_line)
             else:
-                changed = True
+                if re.match(r"^https?://", stripped):
+                    if rewritten_line != line:
+                        changed = True
+                    rewritten_lines.append(rewritten_line)
+                else:
+                    changed = True
             continue
 
         if len(payloads) != 1 or sanitized != line:
@@ -1434,13 +1445,18 @@ def normalize_active_scope(run: Run) -> None:
     _normalize_completion_artifacts(engagement_dir, scope)
     _backfill_surfaces_from_process_log(run, engagement_dir)
     _dedupe_surface_jsonl(engagement_dir / "surfaces.jsonl", context)
+    _normalize_jsonl_artifact(
+        engagement_dir / "scans" / "katana_output.jsonl",
+        context,
+        redact_headers=True,
+        preserve_malformed=not _should_persist_loopback_rewrite(run),
+    )
     if context is None:
         return
 
     _normalize_text_artifact(engagement_dir / "findings.md", context)
     _normalize_text_artifact(engagement_dir / "report.md", context)
     if _should_persist_loopback_rewrite(run):
-        _normalize_jsonl_artifact(engagement_dir / "scans" / "katana_output.jsonl", context, redact_headers=True)
         _normalize_cases_db(engagement_dir / "cases.db", context)
 
 
