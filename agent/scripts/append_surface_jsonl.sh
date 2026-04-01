@@ -49,12 +49,20 @@ normalize_surface_type() {
             printf '%s\n' "dynamic_render"
             return 0
             ;;
-        auth|authentication|login|register|mfa|oauth|oauth_flow)
+        auth|authentication|login|register|mfa|oauth|oauth_flow|auth_surface)
             printf '%s\n' "auth_entry"
             return 0
             ;;
         business_logic|logic_flow|stateful_flow|race_condition)
             printf '%s\n' "privileged_write"
+            return 0
+            ;;
+        update_distribution)
+            printf '%s\n' "file_handling"
+            return 0
+            ;;
+        cors_surface)
+            printf '%s\n' "cors_review"
             return 0
             ;;
         "")
