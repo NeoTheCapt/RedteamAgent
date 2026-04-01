@@ -29,6 +29,7 @@ Each iteration:
    source-analyzer: page, javascript, stylesheet, data, unknown
 
    ./scripts/dispatcher.sh $DB fetch <type> 10 <agent_name>
+   - choose the REAL downstream assignee before fetching; never park a batch under `resume_operator`, `resume-operator`, or any other placeholder assignee
    - every non-empty fetch MUST be followed by exactly one matching subagent dispatch in the SAME turn
    - never fetch a second batch until the first batch's `### Case Outcomes` have been recorded with `done` / `requeue` / `error`
    - never leave fetched rows in `processing` without a corresponding live subagent task
