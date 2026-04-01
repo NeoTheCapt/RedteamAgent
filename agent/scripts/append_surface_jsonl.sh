@@ -65,6 +65,10 @@ normalize_surface_type() {
             printf '%s\n' "cors_review"
             return 0
             ;;
+        opaque_post_contract|opaque_post_body|body_contract|schema_followup)
+            printf '%s\n' "api_param_followup"
+            return 0
+            ;;
         "")
             return 1
             ;;

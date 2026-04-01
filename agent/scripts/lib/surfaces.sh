@@ -29,6 +29,9 @@ surface_canonical_type() {
         cors_surface)
             printf '%s\n' "cors_review"
             ;;
+        opaque_post_contract|opaque_post_body|body_contract|schema_followup)
+            printf '%s\n' "api_param_followup"
+            ;;
         *)
             printf '%s\n' "$surface_type"
             ;;

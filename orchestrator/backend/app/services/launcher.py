@@ -1171,6 +1171,10 @@ _SURFACE_TYPE_ALIASES = {
     "race_condition": "privileged_write",
     "update_distribution": "file_handling",
     "cors_surface": "cors_review",
+    "opaque_post_contract": "api_param_followup",
+    "opaque_post_body": "api_param_followup",
+    "body_contract": "api_param_followup",
+    "schema_followup": "api_param_followup",
 }
 
 
