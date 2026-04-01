@@ -235,6 +235,9 @@ Start the pipeline regardless of auth choice (skip or configured):
    Never inline the background launch + PID-file redirect yourself. Do not write one-liners like:
    `DIR="..." && ./scripts/katana_ingest.sh "$DIR" ... & katana_ingest_pid=$!; printf ... > "$DIR/pids/katana_ingest.pid"`
    because bash/zsh can evaluate the redirect with an empty `$DIR` and write into `/pids/...`.
+   If you want to capture helper output, keep the temp files inside the engagement workspace, for example:
+   `KATANA_START_OUT="$DIR/scans/katana_start.out"; KATANA_START_ERR="$DIR/scans/katana_start.err"; ./scripts/start_katana_ingest_background.sh "$DIR" >"$KATANA_START_OUT" 2>"$KATANA_START_ERR" || { cat "$KATANA_START_ERR"; exit 1; }; cat "$KATANA_START_OUT"`
+   Never redirect katana helper output into `/tmp` or any other path outside the workspace. OpenCode treats those as external-directory writes and will reject the command before recon starts.
    Never launch `katana` directly from bash. Only `./scripts/start_katana_ingest_background.sh`, `./scripts/katana_ingest.sh`, or `start_katana` may start crawling.
    (Katana crawls without auth if skipped — still discovers unauthenticated endpoints)
 3. ALL subsequent phases (Recon → Collect → Consume & Test → Exploit → Report) proceed normally
