@@ -69,7 +69,7 @@ normalize_surface_type() {
             printf '%s\n' "api_param_followup"
             return 0
             ;;
-        admin_session)
+        admin_session|jwt|jwt_token|bearer_token|session_token)
             printf '%s\n' "workflow_token"
             return 0
             ;;
