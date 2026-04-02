@@ -583,12 +583,14 @@ def _iter_runtime_activity_timestamps(payload):
 
 
 _TEXT_LOG_TIMESTAMP_PATTERN = re.compile(r"\b(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)\b")
+_TEXT_LOG_TIMESTAMP_HAS_TZ_PATTERN = re.compile(r"(?:Z|[+-]\d{2}:?\d{2})$")
 _FETCH_BATCH_BLOCK_PATTERN = re.compile(r"(?ms)^BATCH_FILE=.*?(?=^BATCH_FILE=|\Z)")
 _FETCH_BATCH_COUNT_PATTERN = re.compile(r"(?m)^BATCH_COUNT=(\d+)\s*$")
 _FETCH_BATCH_AGENT_PATTERN = re.compile(r"(?m)^BATCH_AGENT=([^\n]+)\s*$")
 _FETCH_BATCH_TYPE_PATTERN = re.compile(r"(?m)^BATCH_TYPE=([^\n]+)\s*$")
 _FETCH_BATCH_IDS_PATTERN = re.compile(r"(?m)^BATCH_IDS=([^\n]+)\s*$")
 _SUBAGENT_SESSION_TITLE_PATTERN = re.compile(r"title=.*?\(@(?P<agent>[A-Za-z0-9_-]+) subagent\)")
+_SUBAGENT_STREAM_PATTERN = re.compile(r"service=llm\b.*?\bagent=(?P<agent>[A-Za-z0-9_-]+)\b.*?\bmode=subagent\b")
 _INLINE_SESSION_CREATED_AT_PATTERN = re.compile(r'"created":\s*(\d{10,13})')
 _RUNTIME_ACTIVITY_FUTURE_SKEW_SECONDS = 5 * 60
 
@@ -669,7 +671,7 @@ def _latest_nonempty_fetch_from_output(candidate_output: str) -> dict[str, objec
 
 
 
-def _opencode_logs_show_subagent_launch(
+def _opencode_logs_show_subagent_activity(
     log_root: Path,
     *,
     agent_name: str,
@@ -688,23 +690,40 @@ def _opencode_logs_show_subagent_launch(
 
         for raw_line in lines:
             stripped = raw_line.strip()
-            if "title=" not in stripped or "subagent" not in stripped or "created" not in stripped:
+            if not stripped:
                 continue
-            match = _SUBAGENT_SESSION_TITLE_PATTERN.search(stripped)
-            if match is None or match.group("agent") != agent_name:
-                continue
+
             candidate = None
-            created_match = _INLINE_SESSION_CREATED_AT_PATTERN.search(stripped)
-            if created_match is not None:
-                try:
-                    raw_created = int(created_match.group(1))
-                except ValueError:
-                    raw_created = 0
-                if raw_created > 0:
-                    candidate = raw_created / 1000 if raw_created >= 10**12 else float(raw_created)
+            matched_agent = ""
+
+            if "title=" in stripped and "subagent" in stripped and "created" in stripped:
+                match = _SUBAGENT_SESSION_TITLE_PATTERN.search(stripped)
+                if match is None:
+                    continue
+                matched_agent = match.group("agent")
+                created_match = _INLINE_SESSION_CREATED_AT_PATTERN.search(stripped)
+                if created_match is not None:
+                    try:
+                        raw_created = int(created_match.group(1))
+                    except ValueError:
+                        raw_created = 0
+                    if raw_created > 0:
+                        candidate = raw_created / 1000 if raw_created >= 10**12 else float(raw_created)
+            elif "service=llm" in stripped and "mode=subagent" in stripped:
+                match = _SUBAGENT_STREAM_PATTERN.search(stripped)
+                if match is None:
+                    continue
+                matched_agent = match.group("agent")
+
+            if matched_agent != agent_name:
+                continue
+
             if candidate is None:
                 timestamp_match = _TEXT_LOG_TIMESTAMP_PATTERN.search(stripped)
-                candidate = _parse_runtime_activity_timestamp(timestamp_match.group(1)) if timestamp_match else None
+                if timestamp_match is not None:
+                    raw_timestamp = timestamp_match.group(1)
+                    if _TEXT_LOG_TIMESTAMP_HAS_TZ_PATTERN.search(raw_timestamp):
+                        candidate = _parse_runtime_activity_timestamp(raw_timestamp)
             if candidate is not None and candidate < since_at:
                 continue
             return True
@@ -783,7 +802,7 @@ def _latest_undispatched_batch_fetch(
     if (
         latest_fetch is not None
         and opencode_logs_root is not None
-        and _opencode_logs_show_subagent_launch(
+        and _opencode_logs_show_subagent_activity(
             opencode_logs_root,
             agent_name=str(latest_fetch.get("agent") or "").strip(),
             since_at=float(latest_fetch.get("timestamp") or 0.0),
