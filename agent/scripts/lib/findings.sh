@@ -258,8 +258,33 @@ def title_similarity(left: str, right: str) -> float:
     return difflib.SequenceMatcher(a=left, b=right).ratio()
 
 
+def normalize_type_signature(value: str) -> str:
+    if not value:
+        return ""
+
+    normalized = normalize_space(value)
+    normalized = re.sub(r"[`'\"()\[\]{}]+", " ", normalized)
+
+    synonym_patterns = {
+        r"\bvalidat(?:e|es|ed|ing|ion|ions)\b": "verify",
+        r"\bverif(?:y|ies|ied|ying|ication|ications)\b": "verify",
+        r"\bbypasses\b": "bypass",
+    }
+    for pattern, replacement in synonym_patterns.items():
+        normalized = re.sub(pattern, replacement, normalized)
+
+    tokens = [
+        token
+        for token in re.findall(r"[a-z0-9]+", normalized)
+        if len(token) > 1 and token not in {"issue", "issues", "attack", "attacks"}
+    ]
+    if not tokens:
+        return ""
+    return " ".join(tokens)
+
+
 def type_bucket(value: str) -> str:
-    return normalize_space(value.split("/", 1)[0]) if value else ""
+    return normalize_type_signature(value)
 
 
 def route_overlap(left: dict, right: dict) -> bool:
