@@ -31,7 +31,8 @@ KATANA_INGEST_ONESHOT=1 \
 "$ROOT/agent/scripts/katana_ingest.sh" "$ENG_DIR" > "$ENG_DIR/scans/katana_ingest.log" 2>&1
 
 count_script="$(sqlite3 "$ENG_DIR/cases.db" "SELECT COUNT(*) FROM cases WHERE url = 'https://www.example.com/cdn/assets/okfe/example-nav/vendor/index.c83d5de1.js' AND source = 'katana';")"
-count_xhr="$(sqlite3 "$ENG_DIR/cases.db" "SELECT COUNT(*) FROM cases WHERE url = 'https://www.example.com/priapi/v1/dx/market/v2/watchlist/token/group/create' AND source = 'katana-xhr';")"
+count_api_as_katana="$(sqlite3 "$ENG_DIR/cases.db" "SELECT COUNT(*) FROM cases WHERE url = 'https://www.example.com/priapi/v1/dx/market/v2/watchlist/token/group/create' AND source = 'katana';")"
+count_api_as_xhr="$(sqlite3 "$ENG_DIR/cases.db" "SELECT COUNT(*) FROM cases WHERE url = 'https://www.example.com/priapi/v1/dx/market/v2/watchlist/token/group/create' AND source = 'katana-xhr';")"
 
 if [[ "$count_script" != "1" ]]; then
   echo "FAIL: expected recoverable script-src discovery to stay katana, got $count_script" >&2
@@ -39,10 +40,16 @@ if [[ "$count_script" != "1" ]]; then
   exit 1
 fi
 
-if [[ "$count_xhr" != "1" ]]; then
-  echo "FAIL: expected recoverable js-regex API discovery to land as katana-xhr, got $count_xhr" >&2
+if [[ "$count_api_as_katana" != "1" ]]; then
+  echo "FAIL: expected recoverable js-regex API discovery to remain katana until a real XHR is captured, got $count_api_as_katana" >&2
   sqlite3 "$ENG_DIR/cases.db" "SELECT source, url FROM cases ORDER BY id;" >&2
   exit 1
 fi
 
-echo "PASS: recoverable js-regex hybrid discoveries land as katana-xhr without relabeling ordinary katana asset rows"
+if [[ "$count_api_as_xhr" != "0" ]]; then
+  echo "FAIL: expected recoverable js-regex API discovery not to masquerade as katana-xhr, got $count_api_as_xhr" >&2
+  sqlite3 "$ENG_DIR/cases.db" "SELECT source, url FROM cases ORDER BY id;" >&2
+  exit 1
+fi
+
+echo "PASS: recoverable js-regex hybrid discoveries stay katana and no longer inflate katana-xhr source counts"

@@ -115,6 +115,13 @@ if [[ "$count_xhr" != "1" ]]; then
   exit 1
 fi
 
+pre_fallback_xhr="$(sqlite3 "$ENG_DIR/cases.db" "SELECT COUNT(*) FROM cases WHERE url LIKE 'https://www.example.com/priapi/v1/dx/test/%' AND source = 'katana-xhr';")"
+if [[ "$pre_fallback_xhr" != "0" ]]; then
+  echo "FAIL: expected recoverable pre-fallback js-regex rows not to inflate katana-xhr counts, got $pre_fallback_xhr" >&2
+  sqlite3 "$ENG_DIR/cases.db" "SELECT source, url FROM cases ORDER BY id;" >&2
+  exit 1
+fi
+
 if [[ ! -s "$ENG_DIR/scans/katana_output.jsonl.partial-pre-fallback" ]]; then
   echo "FAIL: expected invalid pre-fallback tail to be preserved separately" >&2
   exit 1
