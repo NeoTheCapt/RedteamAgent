@@ -52,9 +52,9 @@ KATANA_NAME="$(_katana_container_name)"
 docker ps --format "{{.Names}} ({{.Status}})" --filter "name=^${PROXY_NAME}$" --filter "name=^${KATANA_NAME}$" 2>/dev/null || echo "None running"
 ```
 
-## Step 3: Reset Stale Cases
+## Step 3: Recover Interrupted Queue State
 
-Cases stuck in "processing" from the interrupted session need to be returned to the queue:
+Cases stuck in `processing` from the interrupted session are interrupted work, not proof that a live subagent is still making progress.
 
 ```bash
 if [ -f "$ENG_DIR/cases.db" ]; then
@@ -64,31 +64,38 @@ else
 fi
 ```
 
+If `consume_test` resume is still blocked by leftover `processing` rows for the real downstream agent, log the recovery and force-reset them immediately before the next fetch:
+
+```bash
+./scripts/append_log_entry.sh "$ENG_DIR" operator "Resume recovery" "force-reset interrupted batch" "Recovered interrupted consume_test work on /resume after fetch was blocked by leftover processing rows"
+./scripts/dispatcher.sh "$ENG_DIR/cases.db" reset-stale 0
+```
+
+Do not stop after this recovery step. Continue straight into the next real fetch/dispatch action in the SAME turn.
+
 ## Step 4: Restart Producers (if needed)
 
 ```bash
 source scripts/lib/container.sh
 export ENGAGEMENT_DIR="$ENG_DIR"
-TARGET=$(jq -r '.target' "$ENG_DIR/scope.json")
 
-# Stop any leftover containers first
+# Stop any leftover crawler process/container first.
 stop_katana 2>/dev/null
 
-# Restart Katana if there's a previous output file (was running before)
-if [ -f "$ENG_DIR/scans/katana_output.jsonl" ]; then
+# Restart Katana only through the supported helper when prior crawl state exists.
+if [ -f "$ENG_DIR/scans/katana_output.jsonl" ] || [ -f "$ENG_DIR/katana_output.jsonl" ]; then
     ./scripts/start_katana_ingest_background.sh "$ENG_DIR"
 fi
 ```
 
-## Step 5: Present Summary and Resume
+## Step 5: Resume Immediately From Real State
 
-Present a brief summary to the user, then resume from where we left off.
+Do NOT present a summary and stop. Read state, recover stale work, and continue from the correct phase in the SAME turn.
 
-Determine resume point from scope.json `phases_completed` and queue state:
-- Queue has pending cases → resume consumption loop (Phase 3)
-- All cases done but no exploit phase → proceed to exploit (Phase 4)
-- Everything done → proceed to report (Phase 5)
-- No cases.db → start from collect phase (Phase 2)
+Determine resume point from `scope.json`, `cases.db`, and queue state:
+- Queue has pending or interrupted cases → resume consumption loop (Phase 3)
+- All cases done but exploit/report incomplete → proceed to the next incomplete phase
+- No `cases.db` → start from collect phase (Phase 2)
 - No recon data → start from recon (Phase 1)
 
 If resuming `consume_test`, the fetch/dispatch contract is strict:
@@ -97,12 +104,17 @@ If resuming `consume_test`, the fetch/dispatch contract is strict:
 - `api|api-spec|form|upload|graphql|websocket` → fetch for `vulnerability-analyst`
 - `page|javascript|stylesheet|data|unknown` → fetch for `source-analyzer`
 - `stylesheet` MUST route to `source-analyzer` in the SAME turn; do not leave stylesheet rows parked in `processing`
-- after the first non-empty fetch, immediately dispatch that matching subagent in the SAME turn; do not fetch a second batch first
+- fetch through `./scripts/fetch_batch_to_file.sh`; keep the full batch JSON on disk and only use the compact `BATCH_*` metadata in model context
+- after the first non-empty fetch, immediately dispatch the matching subagent in the SAME turn; do not fetch a second batch first
+- NEVER end `/resume` on queue stats, a fetched batch, or a recovery note without the matching `task(...)` dispatch / case-outcome update in that SAME turn
+- if no advancing action is ready, write an explicit `Run stop` log entry with a stop reason instead of drifting into a status-only turn
 
 Use this exact routing pattern when you need a queue-driven resume snippet:
 
 ```bash
 DB="$ENG_DIR/cases.db"
+BATCH_FILE="$ENG_DIR/scans/resume-batch.json"
+: > "$BATCH_FILE"
 for spec in \
   'api-spec vulnerability-analyst' \
   'api vulnerability-analyst' \
@@ -119,17 +131,17 @@ for spec in \
     set -- $spec
     batch_type="$1"
     batch_agent="$2"
-    out=$(./scripts/dispatcher.sh "$DB" fetch "$batch_type" 10 "$batch_agent" 2>/dev/null)
-    if [ -n "$out" ] && [ "$out" != "[]" ]; then
-      printf 'FETCH_TYPE=%s\nFETCH_AGENT=%s\n' "$batch_type" "$batch_agent"
-      printf '%s\n' "$out" > "$ENG_DIR/tmp/resume_fetch.json"
+    : > "$BATCH_FILE"
+    ./scripts/fetch_batch_to_file.sh "$DB" "$batch_type" 10 "$batch_agent" "$BATCH_FILE"
+    if [ -s "$BATCH_FILE" ]; then
+      printf 'FETCH_TYPE=%s\nFETCH_AGENT=%s\nFETCH_PATH=%s\n' "$batch_type" "$batch_agent" "$BATCH_FILE"
       break
     fi
   done
 ```
 
 In AUTO-CONFIRM mode: announce and proceed immediately.
-In MANUAL mode: present numbered choice for which phase to resume from.
+In MANUAL mode: present numbered choice only when a real phase choice is still needed.
 
 ## User Arguments
 
