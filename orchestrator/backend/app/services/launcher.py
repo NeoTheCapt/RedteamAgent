@@ -441,6 +441,17 @@ def _normalize_scope_file(scope_path: Path, *, run: Run | None = None) -> dict[s
             payload["phases_completed"] = normalized
             changed = True
 
+    if status_name == "complete" and not str(payload.get("end_time") or "").strip():
+        ended_at = str(getattr(run, "updated_at", "") or "").strip()
+        if ended_at:
+            try:
+                parsed_end_time = datetime.strptime(ended_at, "%Y-%m-%d %H:%M:%S").replace(tzinfo=UTC)
+            except ValueError:
+                parsed_end_time = None
+            if parsed_end_time is not None:
+                payload["end_time"] = parsed_end_time.isoformat(timespec="seconds").replace("+00:00", "Z")
+                changed = True
+
     disk_payload = payload
     context = _loopback_display_context(run)
     returned_payload = _rewrite_artifact_value(payload, context)
@@ -1008,7 +1019,20 @@ def _normalize_log_completion_artifact(path: Path) -> None:
         path.write_text(rewritten, encoding="utf-8")
 
 
-def _normalize_report_completion_artifact(path: Path, *, header_date: str) -> None:
+def _replace_report_scope_snapshot(text: str, scope: dict[str, object] | None) -> str:
+    if not isinstance(scope, dict):
+        return text
+    serialized_scope = json.dumps(scope, indent=2)
+    return re.sub(
+        r"(### C\. Full scope\.json\s*```json\n)(.*?)(\n```)",
+        lambda match: f"{match.group(1)}{serialized_scope}{match.group(3)}",
+        text,
+        count=1,
+        flags=re.DOTALL,
+    )
+
+
+def _normalize_report_completion_artifact(path: Path, *, header_date: str, scope: dict[str, object] | None) -> None:
     if not path.exists():
         return
     original = path.read_text(encoding="utf-8", errors="replace")
@@ -1045,10 +1069,11 @@ def _normalize_report_completion_artifact(path: Path, *, header_date: str) -> No
         lines.insert(insert_at, f"**Date**: {header_date} — Completed")
         changed = True
 
-    if not changed:
+    rewritten = "\n".join(lines)
+    rewritten = _replace_report_scope_snapshot(rewritten, scope)
+    if rewritten == original and not changed:
         return
 
-    rewritten = "\n".join(lines)
     if trailing_newline:
         rewritten += "\n"
     path.write_text(rewritten, encoding="utf-8")
@@ -1061,7 +1086,7 @@ def _normalize_completion_artifacts(engagement_dir: Path, scope: dict[str, objec
         return
     header_date = _engagement_header_date(scope)
     _normalize_log_completion_artifact(engagement_dir / "log.md")
-    _normalize_report_completion_artifact(engagement_dir / "report.md", header_date=header_date)
+    _normalize_report_completion_artifact(engagement_dir / "report.md", header_date=header_date, scope=scope)
 
 
 _JSONL_DISALLOWED_CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
@@ -1541,6 +1566,7 @@ def normalize_active_scope(run: Run) -> None:
     if context is None:
         return
 
+    _normalize_text_artifact(engagement_dir / "log.md", context)
     _normalize_text_artifact(engagement_dir / "findings.md", context)
     _normalize_text_artifact(engagement_dir / "report.md", context)
     if _should_persist_loopback_rewrite(run):

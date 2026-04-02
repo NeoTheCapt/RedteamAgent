@@ -2088,6 +2088,10 @@ def test_run_summary_normalizes_loopback_runtime_artifacts_and_redacts_katana_he
         "# Penetration Test Report: http://host.docker.internal:8000\n",
         encoding="utf-8",
     )
+    (active_dir / "log.md").write_text(
+        "# Engagement Log\n\n- **Target**: http://host.docker.internal:8000\n",
+        encoding="utf-8",
+    )
     (active_dir / "surfaces.jsonl").write_text(
         '{"surface_type":"dynamic_render","target":"GET http://host.docker.internal:8000/rest/admin","source":"source-analyzer","rationale":"local runtime alias leaked"}\n',
         encoding="utf-8",
@@ -2155,11 +2159,13 @@ def test_run_summary_normalizes_loopback_runtime_artifacts_and_redacts_katana_he
 
     findings_text = (active_dir / "findings.md").read_text(encoding="utf-8")
     report_text = (active_dir / "report.md").read_text(encoding="utf-8")
+    log_text = (active_dir / "log.md").read_text(encoding="utf-8")
     surfaces_text = (active_dir / "surfaces.jsonl").read_text(encoding="utf-8")
     katana_text = (scans_dir / "katana_output.jsonl").read_text(encoding="utf-8")
 
     assert "host.docker.internal" not in findings_text
     assert "host.docker.internal" not in report_text
+    assert "host.docker.internal" not in log_text
     assert "host.docker.internal" not in surfaces_text
     assert katana_text != original_katana_text
     assert "host.docker.internal" not in katana_text
