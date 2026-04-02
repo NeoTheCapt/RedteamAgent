@@ -19,7 +19,9 @@ After `/engage` initialization completes, repeat until all attack paths exhauste
 
 ## Output Token Management
 
-- Do ONE step per response: one tool call, one dispatch, one batch. Then immediately continue.
+- Do ONE advancing unit per response, then immediately continue.
+- In consume-test, Treat the non-empty fetch and matching `task(...)` call as one atomic consume-test step. Do NOT interpret the fetch as a complete step or as permission to stop with fetched cases left in `processing`.
+- Outside that fetch→dispatch pairing, keep responses lean: one tool call, one dispatch, one batch decision.
 - Keep text SHORT between tool calls. No long summaries.
 - NEVER write a long analysis paragraph when you should be calling a tool.
 - If response exceeds ~50 lines of text, STOP writing and make a tool call.
@@ -71,6 +73,7 @@ PARALLEL: Independent tasks → parallel. Dependent → sequential.
    - ALWAYS fetch via `./scripts/fetch_batch_to_file.sh "$DIR/cases.db" <type> <limit> <agent> "$BATCH_FILE"`; it writes the full JSON batch to disk and prints only compact `BATCH_*` metadata for the model
    - NEVER `cat "$BATCH_FILE"`, print raw fetched JSON, or paste full batch payloads back into the model context; dispatch from the saved file path instead
    - immediately after a non-empty fetch, the SAME turn MUST launch the matching subagent task before any extra reads, summaries, todo updates, or stop checks
+   - treat `fetch_batch_to_file.sh` + the matching subagent `task(...)` call as one atomic consume-test step; never stop after the fetch thinking the dispatch belongs to the next response
    Before leaving Test phase, run `./scripts/reconcile_surface_coverage.sh "$DIR" --ingest-followups` and then `./scripts/check_surface_coverage.sh "$DIR"`.
    `reconcile_surface_coverage.sh` auto-promotes already-validated surfaces to `covered`/`not_applicable` and can enqueue concrete follow-up cases for unresolved, requestable surfaces. If it adds follow-up cases, stay in consume-test and work that queue before checking coverage again.
    If coverage still fails, do not advance. In that SAME turn, either mark the surface with `./scripts/append_surface.sh "$DIR" <surface_type> <target> <source> <rationale> [evidence_ref] covered|not_applicable|deferred` (status last) using existing evidence or dispatch exactly one bounded surface-coverage follow-up batch. Do NOT grep the scripts directory and then idle.
