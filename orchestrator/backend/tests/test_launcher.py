@@ -1,6 +1,6 @@
 import io
 import json
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 import subprocess
@@ -1089,6 +1089,107 @@ def test_running_container_stall_reason_flags_undispatched_follow_on_fetch_even_
         "queue_stalled",
         "Fetched non-empty page batch for source-analyzer (ids: 1,23,62,73) but no matching task dispatch followed before stall grace period elapsed.",
     )
+
+
+
+def test_running_container_stall_reason_accepts_subagent_launch_from_opencode_logs_when_process_log_misses_task_dispatch():
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "https://resume-opencode-log.example")
+    db.update_run_status(run["id"], "running")
+
+    run_row = db.get_run_by_id(run["id"])
+    assert run_row is not None
+
+    run_root = Path(run["engagement_root"])
+    runtime_dir = run_root / "runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    process_log = runtime_dir / "process.log"
+    fetch_epoch = datetime.now().timestamp() - 130
+    fetch_timestamp_ms = int(fetch_epoch * 1000)
+    process_log.write_text(
+        json.dumps(
+            {
+                "type": "tool_use",
+                "timestamp": fetch_timestamp_ms,
+                "part": {
+                    "tool": "bash",
+                    "state": {
+                        "output": "BATCH_FILE=/workspace/engagements/demo/scans/resume_api_batch_recovered_1775109860.json\nBATCH_TYPE=api\nBATCH_AGENT=vulnerability-analyst\nBATCH_COUNT=8\nBATCH_IDS=148,149,150,151,211,212,217,219\n"
+                    },
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    opencode_log_dir = run_root / "opencode-home" / "log"
+    opencode_log_dir.mkdir(parents=True, exist_ok=True)
+    opencode_log = opencode_log_dir / "2026-04-02T060329.log"
+    launched_at = datetime.fromtimestamp(fetch_epoch + 10, tz=UTC).strftime("%Y-%m-%dT%H:%M:%S")
+    launched_at_ms = int((fetch_epoch + 10) * 1000)
+    opencode_log.write_text(
+        f"INFO  {launched_at} +0ms service=session id=ses_resume slug=tidy-garden version=1.3.7 projectID=global directory=/workspace parentID=ses_operator title=Resume API triage (@vulnerability-analyst subagent) permission=[{{\"permission\":\"todowrite\",\"pattern\":\"*\",\"action\":\"deny\"}},{{\"permission\":\"task\",\"pattern\":\"*\",\"action\":\"deny\"}}] time={{\"created\":{launched_at_ms},\"updated\":{launched_at_ms}}} created\n",
+        encoding="utf-8",
+    )
+
+    workspace = run_root / "workspace"
+    engagement_dir = workspace / "engagements" / "2026-03-31-000000-resume-opencode-log"
+    engagement_dir.mkdir(parents=True, exist_ok=True)
+    (workspace / "engagements" / ".active").write_text(
+        "engagements/2026-03-31-000000-resume-opencode-log\n",
+        encoding="utf-8",
+    )
+    scope_path = engagement_dir / "scope.json"
+    scope_path.write_text(
+        json.dumps(
+            {
+                "status": "in_progress",
+                "current_phase": "consume_test",
+                "phases_completed": ["recon", "collect"],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    log_path = engagement_dir / "log.md"
+    log_path.write_text("## [00:00] API triage resumed — operator\n", encoding="utf-8")
+    with sqlite3.connect(engagement_dir / "cases.db") as connection:
+        connection.execute(
+            "CREATE TABLE cases (id INTEGER PRIMARY KEY AUTOINCREMENT, status TEXT NOT NULL, assigned_agent TEXT)"
+        )
+        connection.execute(
+            "INSERT INTO cases(id, status, assigned_agent) VALUES (148, 'processing', 'vulnerability-analyst')"
+        )
+        connection.commit()
+
+    (run_root / "run.json").write_text(
+        json.dumps(
+            {
+                "agents": [
+                    {"agent_name": "operator", "status": "active", "updated_at": "2026-03-31 00:00:00"},
+                ]
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    import os
+
+    old_epoch = datetime.now().timestamp() - 130
+    fresh_epoch = datetime.now().timestamp() - 5
+    os.utime(process_log, (old_epoch, old_epoch))
+    os.utime(opencode_log, (fresh_epoch, fresh_epoch))
+    os.utime(scope_path, (old_epoch, old_epoch))
+    os.utime(engagement_dir / "cases.db", (old_epoch, old_epoch))
+    os.utime(log_path, (fresh_epoch, fresh_epoch))
+
+    from app.services.launcher import _running_container_stall_reason
+
+    assert _running_container_stall_reason(run_row) is None
 
 
 
