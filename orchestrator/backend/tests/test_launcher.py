@@ -1362,6 +1362,31 @@ def test_running_container_stall_reason_accepts_subagent_llm_activity_from_openc
 
 
 
+def test_parse_runtime_activity_timestamp_treats_naive_iso_strings_as_utc(monkeypatch):
+    import os
+    import time
+
+    from app.services.launcher import _parse_runtime_activity_timestamp
+
+    original_tz = os.environ.get("TZ")
+    monkeypatch.setenv("TZ", "Asia/Singapore")
+    if hasattr(time, "tzset"):
+        time.tzset()
+    try:
+        naive_value = _parse_runtime_activity_timestamp("2026-04-02T08:30:37")
+        utc_value = _parse_runtime_activity_timestamp("2026-04-02T08:30:37Z")
+    finally:
+        if original_tz is None:
+            monkeypatch.delenv("TZ", raising=False)
+        else:
+            monkeypatch.setenv("TZ", original_tz)
+        if hasattr(time, "tzset"):
+            time.tzset()
+
+    assert naive_value == utc_value
+
+
+
 def test_running_container_stall_reason_prefers_latest_non_empty_fetch_in_multi_fetch_output():
     client = TestClient(app)
     token = register_and_login(client, "alice")

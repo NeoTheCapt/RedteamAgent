@@ -558,15 +558,21 @@ def _parse_runtime_activity_timestamp(value: object) -> float | None:
 
     for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%SZ"):
         try:
-            return datetime.strptime(text, fmt).timestamp()
+            parsed = datetime.strptime(text, fmt)
         except ValueError:
             continue
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=UTC)
+        return parsed.timestamp()
 
     try:
         normalized = text.replace("Z", "+00:00")
-        return datetime.fromisoformat(normalized).timestamp()
+        parsed = datetime.fromisoformat(normalized)
     except ValueError:
         return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.timestamp()
 
 
 def _iter_runtime_activity_timestamps(payload):
