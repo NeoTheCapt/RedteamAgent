@@ -35,6 +35,7 @@ from .launcher import (
     process_metadata_path_for,
     start_run_runtime,
     stop_run_runtime,
+    _active_runtime_agents,
     _active_runtime_metadata_agents,
     _latest_runtime_metadata_activity_at,
     _run_metadata_has_current_task,
@@ -426,9 +427,12 @@ def _reconcile_run_status(run: Run, project: Project | None = None, user: User |
                 stop_run_runtime(failed)
                 return failed
 
-        active_runtime_agents = _active_runtime_metadata_agents(run)
+        active_runtime_agents = _active_runtime_agents(run)
         processing_agents = _load_processing_agents(scope_path)
-        orphaned_fetch = _latest_undispatched_batch_fetch(process_log_path_for(run))
+        orphaned_fetch = _latest_undispatched_batch_fetch(
+            process_log_path_for(run),
+            opencode_logs_root=opencode_home_root_for(run) / "log",
+        )
         if (
             current_phase.replace("_", "-") not in EARLY_PHASE_STALL_PHASES
             and pending_cases > 0
