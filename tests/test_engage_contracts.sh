@@ -109,6 +109,16 @@ if ! grep -q 'If credentials are discovered during consume-test, write them to a
 fi
 pass "engage command requires same-turn credential validation"
 
+if ! grep -q 'Treat the non-empty fetch and matching `task(...)` call as one atomic consume-test step' "$ENGAGE_MD"; then
+  fail "engage command is missing atomic fetch+dispatch consume-test guidance"
+fi
+pass "engage command treats fetch+dispatch as one atomic consume-test step"
+
+if ! grep -q 'Do NOT interpret the fetch as a complete step or as permission to stop with fetched cases left in `processing`' "$OPERATOR_TXT"; then
+  fail "operator prompt is missing explicit fetched-batch stall prevention guidance"
+fi
+pass "operator prompt forbids treating a fetch as a completed consume-test step"
+
 if ! grep -q '"discovered_credentials": \[\]' "$ENGAGE_MD" || ! grep -q '"validated_credentials": \[\]' "$ENGAGE_MD" || ! grep -q '"credentials": \[\]' "$ENGAGE_MD"; then
   fail "engage command is missing the canonical auth.json seed schema"
 fi
