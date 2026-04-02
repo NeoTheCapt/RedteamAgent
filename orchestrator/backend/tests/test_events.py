@@ -457,6 +457,34 @@ def test_process_log_task_projection_upgrades_weaker_synthetic_log_phase(tmp_pat
     assert upgraded[0].id == -1
 
 
+def test_opencode_log_subagent_creation_is_projected_into_active_task_timeline(tmp_path: Path):
+    run_root = tmp_path / "opencode-subagent"
+    log_dir = run_root / "opencode-home" / "log"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    (log_dir / "2026-04-02T020938.log").write_text(
+        (
+            "INFO  2026-04-02T02:21:20 +5ms service=session "
+            "id=ses_child slug=calm-rocket version=1.3.7 projectID=global directory=/workspace "
+            "parentID=ses_parent title=Analyze api batch (@vulnerability-analyst subagent) "
+            'permission=[{"permission":"todowrite","pattern":"*","action":"deny"}] '
+            'time={"created":1775096480142,"updated":1775096480142} created\n'
+        ),
+        encoding="utf-8",
+    )
+
+    events = _project_process_log_events(run_id=1, run_root=run_root, events=[])
+
+    assert any(
+        event.event_type == "task.started"
+        and event.phase == "consume-test"
+        and event.agent_name == "vulnerability-analyst"
+        and event.task_name == "vulnerability-analyst"
+        and event.summary == "Analyze api batch (@vulnerability-analyst subagent)"
+        and event.created_at == "2026-04-02 02:21:20"
+        for event in events
+    )
+
+
 
 def test_process_log_projection_keeps_utc_ordering_even_when_local_timezone_is_not_utc():
     client = TestClient(app)
