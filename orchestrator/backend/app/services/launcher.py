@@ -583,6 +583,10 @@ def _iter_runtime_activity_timestamps(payload):
 
 
 _TEXT_LOG_TIMESTAMP_PATTERN = re.compile(r"\b(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)\b")
+_FETCH_BATCH_COUNT_PATTERN = re.compile(r"(?m)^BATCH_COUNT=(\d+)\s*$")
+_FETCH_BATCH_AGENT_PATTERN = re.compile(r"(?m)^BATCH_AGENT=([^\n]+)\s*$")
+_FETCH_BATCH_TYPE_PATTERN = re.compile(r"(?m)^BATCH_TYPE=([^\n]+)\s*$")
+_FETCH_BATCH_IDS_PATTERN = re.compile(r"(?m)^BATCH_IDS=([^\n]+)\s*$")
 _RUNTIME_ACTIVITY_FUTURE_SKEW_SECONDS = 5 * 60
 
 
@@ -630,6 +634,87 @@ def _latest_process_log_activity_at(path: Path, *, max_lines: int = 400) -> floa
     if latest is not None:
         return latest
     return _path_mtime(path)
+
+
+def _latest_undispatched_batch_fetch(path: Path, *, max_lines: int = 400) -> dict[str, object] | None:
+    if not path.exists() or not path.is_file():
+        return None
+
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as handle:
+            lines = deque(handle, maxlen=max_lines)
+    except OSError:
+        return None
+
+    latest_fetch: dict[str, object] | None = None
+
+    for raw_line in lines:
+        stripped = raw_line.strip()
+        if not stripped.startswith("{"):
+            continue
+        try:
+            payload = json.loads(stripped)
+        except json.JSONDecodeError:
+            continue
+        if payload.get("type") != "tool_use":
+            continue
+
+        part = payload.get("part") or {}
+        state = part.get("state") or {}
+        tool_name = str(part.get("tool") or "").strip()
+        event_at = _parse_runtime_activity_timestamp(payload.get("timestamp"))
+        if event_at is None:
+            for candidate in _iter_runtime_activity_timestamps(payload):
+                if _runtime_activity_candidate_is_valid(candidate):
+                    event_at = candidate
+                    break
+
+        if tool_name == "task":
+            task_input = state.get("input") or {}
+            subagent_type = str(task_input.get("subagent_type") or "").strip()
+            if (
+                latest_fetch is not None
+                and subagent_type
+                and subagent_type == latest_fetch.get("agent")
+                and (event_at is None or event_at >= float(latest_fetch.get("timestamp") or 0))
+            ):
+                latest_fetch = None
+            continue
+
+        if tool_name != "bash":
+            continue
+
+        state_metadata = state.get("metadata") or {}
+        output_candidates = [state.get("output"), state_metadata.get("output")]
+        for candidate_output in output_candidates:
+            if not isinstance(candidate_output, str) or "BATCH_COUNT=" not in candidate_output:
+                continue
+            batch_count_match = _FETCH_BATCH_COUNT_PATTERN.search(candidate_output)
+            batch_agent_match = _FETCH_BATCH_AGENT_PATTERN.search(candidate_output)
+            batch_type_match = _FETCH_BATCH_TYPE_PATTERN.search(candidate_output)
+            batch_ids_match = _FETCH_BATCH_IDS_PATTERN.search(candidate_output)
+            if batch_count_match is None or batch_agent_match is None or batch_type_match is None:
+                continue
+            try:
+                batch_count = int(batch_count_match.group(1))
+            except ValueError:
+                continue
+            if batch_count <= 0:
+                continue
+            agent_name = batch_agent_match.group(1).strip()
+            batch_type = batch_type_match.group(1).strip()
+            if not agent_name or not batch_type:
+                continue
+            latest_fetch = {
+                "timestamp": event_at or 0.0,
+                "agent": agent_name,
+                "batch_type": batch_type,
+                "batch_count": batch_count,
+                "batch_ids": batch_ids_match.group(1).strip() if batch_ids_match else "",
+            }
+            break
+
+    return latest_fetch
 
 
 def _latest_running_runtime_activity_at(run: Run) -> float | None:
@@ -802,6 +887,8 @@ def _running_container_stall_reason(run: Run) -> tuple[str, str, str] | None:
     metadata_activity_at = _latest_runtime_metadata_activity_at(run)
     active_runtime_agents = _active_runtime_metadata_agents(run)
     has_current_task = _run_metadata_has_current_task(run)
+    processing_agents = _load_running_processing_agents(engagement_dir)
+    orphaned_fetch = _latest_undispatched_batch_fetch(process_log_path_for(run))
     if (
         current_phase not in EARLY_PHASE_STALL_PHASES
         and pending_cases > 0
@@ -814,6 +901,26 @@ def _running_container_stall_reason(run: Run) -> tuple[str, str, str] | None:
             current_phase,
             "queue_stalled",
             "Pending queue items remained undispatched with no active runtime agent after dispatch grace period elapsed.",
+        )
+
+    if (
+        current_phase not in EARLY_PHASE_STALL_PHASES
+        and orphaned_fetch is not None
+        and str(orphaned_fetch.get("agent") or "") in processing_agents
+        and str(orphaned_fetch.get("agent") or "") not in active_runtime_agents
+        and (time.time() - float(orphaned_fetch.get("timestamp") or 0.0)) >= PROCESSING_AGENT_MISMATCH_GRACE_SECONDS
+    ):
+        batch_type = str(orphaned_fetch.get("batch_type") or "queue")
+        agent_name = str(orphaned_fetch.get("agent") or "agent")
+        batch_ids = str(orphaned_fetch.get("batch_ids") or "").strip()
+        reason = f"Fetched non-empty {batch_type} batch for {agent_name}"
+        if batch_ids:
+            reason += f" (ids: {batch_ids})"
+        reason += " but no matching task dispatch followed before stall grace period elapsed."
+        return (
+            current_phase,
+            "queue_stalled",
+            reason,
         )
 
     orphan_activity_at = metadata_activity_at
@@ -839,7 +946,6 @@ def _running_container_stall_reason(run: Run) -> tuple[str, str, str] | None:
 
     if runtime_activity_at is not None:
         runtime_age = time.time() - runtime_activity_at
-        processing_agents = _load_running_processing_agents(engagement_dir)
         mismatch_activity_at = runtime_activity_at
         if workflow_activity_at is not None and workflow_activity_at > mismatch_activity_at:
             mismatch_activity_at = workflow_activity_at

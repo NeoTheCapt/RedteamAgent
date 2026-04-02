@@ -22,6 +22,7 @@ from .launcher import (
     _clear_run_terminal_reason,
     _last_logged_stop_metadata,
     _latest_process_log_activity_at,
+    _latest_undispatched_batch_fetch,
     _maybe_auto_resume_run,
     _start_container_supervisor,
     _write_run_terminal_reason,
@@ -426,6 +427,8 @@ def _reconcile_run_status(run: Run, project: Project | None = None, user: User |
                 return failed
 
         active_runtime_agents = _active_runtime_metadata_agents(run)
+        processing_agents = _load_processing_agents(scope_path)
+        orphaned_fetch = _latest_undispatched_batch_fetch(process_log_path_for(run))
         if (
             current_phase.replace("_", "-") not in EARLY_PHASE_STALL_PHASES
             and pending_cases > 0
@@ -439,6 +442,30 @@ def _reconcile_run_status(run: Run, project: Project | None = None, user: User |
                 failed,
                 reason_code="queue_stalled",
                 reason_text="Pending queue items remained undispatched with no active runtime agent after dispatch grace period elapsed.",
+            )
+            stop_run_runtime(failed)
+            return failed
+
+        if (
+            current_phase.replace("_", "-") not in EARLY_PHASE_STALL_PHASES
+            and orphaned_fetch is not None
+            and str(orphaned_fetch.get("agent") or "") in processing_agents
+            and str(orphaned_fetch.get("agent") or "") not in active_runtime_agents
+            and (_utc_now_naive() - _utc_datetime_from_timestamp(float(orphaned_fetch.get("timestamp") or 0.0)))
+            >= timedelta(seconds=PROCESSING_AGENT_MISMATCH_GRACE_SECONDS)
+        ):
+            batch_type = str(orphaned_fetch.get("batch_type") or "queue")
+            agent_name = str(orphaned_fetch.get("agent") or "agent")
+            batch_ids = str(orphaned_fetch.get("batch_ids") or "").strip()
+            reason_text = f"Fetched non-empty {batch_type} batch for {agent_name}"
+            if batch_ids:
+                reason_text += f" (ids: {batch_ids})"
+            reason_text += " but no matching task dispatch followed before stall grace period elapsed."
+            failed = db.update_run_status(run.id, "failed")
+            _write_run_terminal_reason(
+                failed,
+                reason_code="queue_stalled",
+                reason_text=reason_text,
             )
             stop_run_runtime(failed)
             return failed
@@ -476,7 +503,6 @@ def _reconcile_run_status(run: Run, project: Project | None = None, user: User |
             return failed
 
         last_activity_at = _latest_runtime_activity_at(run)
-        processing_agents = _load_processing_agents(scope_path)
         mismatch_activity_at = last_activity_at
         if workflow_activity_at is not None and (
             mismatch_activity_at is None or workflow_activity_at > mismatch_activity_at
