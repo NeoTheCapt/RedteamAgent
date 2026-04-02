@@ -172,7 +172,11 @@ resolve_katana_request_source() {
         && [[ "$attribute" == "regex" ]] \
         && is_katana_javascript_source_ref "$source_ref" \
         && is_katana_api_like_path "$url_path"; then
-        printf '%s\n' "katana-xhr"
+        # Hybrid JS-regex discoveries are useful path hints, but they are not the same
+        # thing as a captured XHR request. Keeping them under katana avoids inflating
+        # katana-xhr source counts on runs where the crawler only produced recoverable
+        # response-is-nil errors.
+        printf '%s\n' "$source_name"
         return 0
     fi
 
