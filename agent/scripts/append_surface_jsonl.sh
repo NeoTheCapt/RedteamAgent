@@ -49,7 +49,7 @@ normalize_surface_type() {
             printf '%s\n' "dynamic_render"
             return 0
             ;;
-        auth|authentication|login|register|mfa|oauth|oauth_flow|auth_surface)
+        auth|authentication|login|register|mfa|oauth|oauth_flow|auth_surface|anti_automation|broken_anti_automation)
             printf '%s\n' "auth_entry"
             return 0
             ;;

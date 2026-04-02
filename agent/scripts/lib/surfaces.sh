@@ -17,7 +17,7 @@ surface_canonical_type() {
         spa_route|spa|client_route|client_side_route|frontend_route|p2p_trading|web3_assets|preview_or_internal_content|asset_distribution|cdn_asset_host|cdn_host|download_host|object_storage|storage_bucket)
             printf '%s\n' "dynamic_render"
             ;;
-        auth|authentication|login|register|mfa|oauth|oauth_flow|auth_surface|identity_verification)
+        auth|authentication|login|register|mfa|oauth|oauth_flow|auth_surface|identity_verification|anti_automation|broken_anti_automation)
             printf '%s\n' "auth_entry"
             ;;
         auth_workflow)
