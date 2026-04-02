@@ -38,7 +38,7 @@ surface_canonical_type() {
         api_docs|swagger|openapi)
             printf '%s\n' "api_documentation"
             ;;
-        admin_session)
+        admin_session|jwt|jwt_token|bearer_token|session_token)
             printf '%s\n' "workflow_token"
             ;;
         *)
