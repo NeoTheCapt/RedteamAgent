@@ -588,6 +588,8 @@ _FETCH_BATCH_COUNT_PATTERN = re.compile(r"(?m)^BATCH_COUNT=(\d+)\s*$")
 _FETCH_BATCH_AGENT_PATTERN = re.compile(r"(?m)^BATCH_AGENT=([^\n]+)\s*$")
 _FETCH_BATCH_TYPE_PATTERN = re.compile(r"(?m)^BATCH_TYPE=([^\n]+)\s*$")
 _FETCH_BATCH_IDS_PATTERN = re.compile(r"(?m)^BATCH_IDS=([^\n]+)\s*$")
+_SUBAGENT_SESSION_TITLE_PATTERN = re.compile(r"title=.*?\(@(?P<agent>[A-Za-z0-9_-]+) subagent\)")
+_INLINE_SESSION_CREATED_AT_PATTERN = re.compile(r'"created":\s*(\d{10,13})')
 _RUNTIME_ACTIVITY_FUTURE_SKEW_SECONDS = 5 * 60
 
 
@@ -667,7 +669,56 @@ def _latest_nonempty_fetch_from_output(candidate_output: str) -> dict[str, objec
 
 
 
-def _latest_undispatched_batch_fetch(path: Path, *, max_lines: int = 400) -> dict[str, object] | None:
+def _opencode_logs_show_subagent_launch(
+    log_root: Path,
+    *,
+    agent_name: str,
+    since_at: float,
+    max_lines_per_file: int = 2000,
+) -> bool:
+    if not agent_name or not log_root.exists() or not log_root.is_dir():
+        return False
+
+    for path in sorted(log_root.glob("*.log"), reverse=True):
+        try:
+            with path.open("r", encoding="utf-8", errors="replace") as handle:
+                lines = deque(handle, maxlen=max_lines_per_file)
+        except OSError:
+            continue
+
+        for raw_line in lines:
+            stripped = raw_line.strip()
+            if "title=" not in stripped or "subagent" not in stripped or "created" not in stripped:
+                continue
+            match = _SUBAGENT_SESSION_TITLE_PATTERN.search(stripped)
+            if match is None or match.group("agent") != agent_name:
+                continue
+            candidate = None
+            created_match = _INLINE_SESSION_CREATED_AT_PATTERN.search(stripped)
+            if created_match is not None:
+                try:
+                    raw_created = int(created_match.group(1))
+                except ValueError:
+                    raw_created = 0
+                if raw_created > 0:
+                    candidate = raw_created / 1000 if raw_created >= 10**12 else float(raw_created)
+            if candidate is None:
+                timestamp_match = _TEXT_LOG_TIMESTAMP_PATTERN.search(stripped)
+                candidate = _parse_runtime_activity_timestamp(timestamp_match.group(1)) if timestamp_match else None
+            if candidate is not None and candidate < since_at:
+                continue
+            return True
+
+    return False
+
+
+
+def _latest_undispatched_batch_fetch(
+    path: Path,
+    *,
+    opencode_logs_root: Path | None = None,
+    max_lines: int = 400,
+) -> dict[str, object] | None:
     if not path.exists() or not path.is_file():
         return None
 
@@ -728,6 +779,17 @@ def _latest_undispatched_batch_fetch(path: Path, *, max_lines: int = 400) -> dic
                 **fetch_summary,
             }
             break
+
+    if (
+        latest_fetch is not None
+        and opencode_logs_root is not None
+        and _opencode_logs_show_subagent_launch(
+            opencode_logs_root,
+            agent_name=str(latest_fetch.get("agent") or "").strip(),
+            since_at=float(latest_fetch.get("timestamp") or 0.0),
+        )
+    ):
+        return None
 
     return latest_fetch
 
@@ -903,7 +965,10 @@ def _running_container_stall_reason(run: Run) -> tuple[str, str, str] | None:
     active_runtime_agents = _active_runtime_metadata_agents(run)
     has_current_task = _run_metadata_has_current_task(run)
     processing_agents = _load_running_processing_agents(engagement_dir)
-    orphaned_fetch = _latest_undispatched_batch_fetch(process_log_path_for(run))
+    orphaned_fetch = _latest_undispatched_batch_fetch(
+        process_log_path_for(run),
+        opencode_logs_root=opencode_home_root_for(run) / "log",
+    )
     if (
         current_phase not in EARLY_PHASE_STALL_PHASES
         and pending_cases > 0
