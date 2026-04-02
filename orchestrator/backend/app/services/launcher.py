@@ -583,6 +583,7 @@ def _iter_runtime_activity_timestamps(payload):
 
 
 _TEXT_LOG_TIMESTAMP_PATTERN = re.compile(r"\b(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)\b")
+_FETCH_BATCH_BLOCK_PATTERN = re.compile(r"(?ms)^BATCH_FILE=.*?(?=^BATCH_FILE=|\Z)")
 _FETCH_BATCH_COUNT_PATTERN = re.compile(r"(?m)^BATCH_COUNT=(\d+)\s*$")
 _FETCH_BATCH_AGENT_PATTERN = re.compile(r"(?m)^BATCH_AGENT=([^\n]+)\s*$")
 _FETCH_BATCH_TYPE_PATTERN = re.compile(r"(?m)^BATCH_TYPE=([^\n]+)\s*$")
@@ -634,6 +635,36 @@ def _latest_process_log_activity_at(path: Path, *, max_lines: int = 400) -> floa
     if latest is not None:
         return latest
     return _path_mtime(path)
+
+
+def _latest_nonempty_fetch_from_output(candidate_output: str) -> dict[str, object] | None:
+    latest_fetch: dict[str, object] | None = None
+    for block_match in _FETCH_BATCH_BLOCK_PATTERN.finditer(candidate_output):
+        block = block_match.group(0)
+        batch_count_match = _FETCH_BATCH_COUNT_PATTERN.search(block)
+        batch_agent_match = _FETCH_BATCH_AGENT_PATTERN.search(block)
+        batch_type_match = _FETCH_BATCH_TYPE_PATTERN.search(block)
+        batch_ids_match = _FETCH_BATCH_IDS_PATTERN.search(block)
+        if batch_count_match is None or batch_agent_match is None or batch_type_match is None:
+            continue
+        try:
+            batch_count = int(batch_count_match.group(1))
+        except ValueError:
+            continue
+        if batch_count <= 0:
+            continue
+        agent_name = batch_agent_match.group(1).strip()
+        batch_type = batch_type_match.group(1).strip()
+        if not agent_name or not batch_type:
+            continue
+        latest_fetch = {
+            "agent": agent_name,
+            "batch_type": batch_type,
+            "batch_count": batch_count,
+            "batch_ids": batch_ids_match.group(1).strip() if batch_ids_match else "",
+        }
+    return latest_fetch
+
 
 
 def _latest_undispatched_batch_fetch(path: Path, *, max_lines: int = 400) -> dict[str, object] | None:
@@ -689,28 +720,12 @@ def _latest_undispatched_batch_fetch(path: Path, *, max_lines: int = 400) -> dic
         for candidate_output in output_candidates:
             if not isinstance(candidate_output, str) or "BATCH_COUNT=" not in candidate_output:
                 continue
-            batch_count_match = _FETCH_BATCH_COUNT_PATTERN.search(candidate_output)
-            batch_agent_match = _FETCH_BATCH_AGENT_PATTERN.search(candidate_output)
-            batch_type_match = _FETCH_BATCH_TYPE_PATTERN.search(candidate_output)
-            batch_ids_match = _FETCH_BATCH_IDS_PATTERN.search(candidate_output)
-            if batch_count_match is None or batch_agent_match is None or batch_type_match is None:
-                continue
-            try:
-                batch_count = int(batch_count_match.group(1))
-            except ValueError:
-                continue
-            if batch_count <= 0:
-                continue
-            agent_name = batch_agent_match.group(1).strip()
-            batch_type = batch_type_match.group(1).strip()
-            if not agent_name or not batch_type:
+            fetch_summary = _latest_nonempty_fetch_from_output(candidate_output)
+            if fetch_summary is None:
                 continue
             latest_fetch = {
                 "timestamp": event_at or 0.0,
-                "agent": agent_name,
-                "batch_type": batch_type,
-                "batch_count": batch_count,
-                "batch_ids": batch_ids_match.group(1).strip() if batch_ids_match else "",
+                **fetch_summary,
             }
             break
 
