@@ -100,7 +100,7 @@ PARALLEL: Independent tasks → parallel. Dependent → sequential.
 3. **CONSUME & TEST** → dispatcher loop: reset-stale → stats → fetch → dispatch → done → requeue → repeat. Exit only when pending=0 AND processing=0.
    Dispatch rule is strict:
    - every non-empty fetched batch MUST be followed by exactly one matching subagent task in the same loop pass
-   - `api`, `graphql`, `form`, `upload`, and `websocket` batches MUST dispatch `vulnerability-analyst`
+   - `api`, `api-spec`, `graphql`, `form`, `upload`, and `websocket` batches MUST dispatch `vulnerability-analyst`
    - `page`, `data`, `javascript`, `stylesheet`, and `unknown` batches MUST dispatch `source-analyzer`
    - consume-test dispatch is SERIALIZED: fetch and dispatch exactly one non-empty batch at a time, wait for that subagent result, record its `### Case Outcomes`, then fetch the next batch
    - do NOT launch overlapping `task` calls inside the same consume-test pass, even when multiple fetched batch files are non-empty
