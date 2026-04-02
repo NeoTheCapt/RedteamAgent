@@ -317,6 +317,127 @@ EOF
   rm -rf "$dir"
 }
 
+test_append_reuses_existing_id_for_reordered_multi_route_duplicates() {
+  local dir existing_body duplicate_body appended_id duplicate_id count
+  dir=$(make_engagement_dir)
+  existing_body=$(mktemp "${TMPDIR:-/tmp}/finding-existing.XXXXXX")
+  duplicate_body=$(mktemp "${TMPDIR:-/tmp}/finding-duplicate.XXXXXX")
+
+  cat >"$existing_body" <<'EOF'
+## [FINDING-ID] Unauthenticated access to admin configuration endpoints
+- **Discovered by**: vulnerability-analyst
+- **Severity**: MEDIUM
+- **OWASP Category**: A01:2021 Broken Access Control
+- **Type**: Missing Authentication / Administrative Information Disclosure
+- **Parameter**: `GET /rest/admin/application-configuration` and `GET /rest/admin/application-version`
+EOF
+
+  cat >"$duplicate_body" <<'EOF'
+## [FINDING-ID] Missing authentication on admin configuration endpoints
+- **Discovered by**: vulnerability-analyst
+- **Severity**: MEDIUM
+- **OWASP Category**: A01:2021 Broken Access Control
+- **Type**: Missing Authentication / Information Disclosure
+- **Parameter**: `GET /rest/admin/application-version`, `GET /rest/admin/application-configuration`
+EOF
+
+  appended_id=$("$APPEND_SCRIPT" "$dir" vulnerability-analyst "$existing_body")
+  duplicate_id=$("$APPEND_SCRIPT" "$dir" vulnerability-analyst "$duplicate_body")
+
+  [[ "$appended_id" == "FINDING-VA-001" ]] || fail "expected FINDING-VA-001, got $appended_id"
+  [[ "$duplicate_id" == "FINDING-VA-001" ]] || fail "expected reordered route duplicate to reuse FINDING-VA-001, got $duplicate_id"
+
+  count=$(rg -c '^## \[FINDING-VA-' "$dir/findings.md")
+  [[ "$count" == "1" ]] || fail "expected reordered route duplicate to be skipped, got $count findings"
+
+  rm -f "$existing_body" "$duplicate_body"
+  rm -rf "$dir"
+}
+
+test_append_reuses_existing_id_for_same_route_similar_title_even_when_severity_differs() {
+  local dir existing_body duplicate_body appended_id duplicate_id count
+  dir=$(make_engagement_dir)
+  existing_body=$(mktemp "${TMPDIR:-/tmp}/finding-existing.XXXXXX")
+  duplicate_body=$(mktemp "${TMPDIR:-/tmp}/finding-duplicate.XXXXXX")
+
+  cat >"$existing_body" <<'EOF'
+## [FINDING-ID] Public /ftp directory listing exposes backup and sensitive artifact downloads
+- **Discovered by**: source-analyzer
+- **Severity**: MEDIUM
+- **OWASP Category**: A05:2021 Security Misconfiguration
+- **Type**: Directory Listing / Sensitive File Exposure
+- **Parameter**: `GET /ftp`
+EOF
+
+  cat >"$duplicate_body" <<'EOF'
+## [FINDING-ID] Public FTP directory listing exposes backup and sensitive artifacts
+- **Discovered by**: source-analyzer
+- **Severity**: HIGH
+- **OWASP Category**: A05:2021 Security Misconfiguration
+- **Type**: Directory Listing / Sensitive File Exposure
+- **Parameter**: `GET /ftp`
+EOF
+
+  appended_id=$("$APPEND_SCRIPT" "$dir" source-analyzer "$existing_body")
+  duplicate_id=$("$APPEND_SCRIPT" "$dir" source-analyzer "$duplicate_body")
+
+  [[ "$appended_id" == "FINDING-SA-001" ]] || fail "expected FINDING-SA-001, got $appended_id"
+  [[ "$duplicate_id" == "FINDING-SA-001" ]] || fail "expected same-route similar-title duplicate to reuse FINDING-SA-001, got $duplicate_id"
+
+  count=$(rg -c '^## \[FINDING-SA-' "$dir/findings.md")
+  [[ "$count" == "1" ]] || fail "expected same-route similar-title duplicate to be skipped, got $count findings"
+
+  rm -f "$existing_body" "$duplicate_body"
+  rm -rf "$dir"
+}
+
+test_integrity_check_detects_reordered_route_and_same_route_duplicates() {
+  local dir out
+  dir=$(make_engagement_dir)
+  cat >"$dir/findings.md" <<'EOF'
+# Findings
+
+- **Finding Count**: 3
+
+## [FINDING-VA-001] Unauthenticated access to admin configuration endpoints
+- **Severity**: MEDIUM
+- **OWASP Category**: A01:2021 Broken Access Control
+- **Type**: Missing Authentication / Administrative Information Disclosure
+- **Parameter**: `GET /rest/admin/application-configuration` and `GET /rest/admin/application-version`
+
+## [FINDING-VA-002] Missing authentication on admin configuration endpoints
+- **Severity**: MEDIUM
+- **OWASP Category**: A01:2021 Broken Access Control
+- **Type**: Missing Authentication / Information Disclosure
+- **Parameter**: `GET /rest/admin/application-version`, `GET /rest/admin/application-configuration`
+
+## [FINDING-SA-001] Public /ftp directory listing exposes backup and sensitive artifact downloads
+- **Severity**: MEDIUM
+- **OWASP Category**: A05:2021 Security Misconfiguration
+- **Type**: Directory Listing / Sensitive File Exposure
+- **Parameter**: `GET /ftp`
+
+## [FINDING-SA-002] Public FTP directory listing exposes backup and sensitive artifacts
+- **Severity**: HIGH
+- **OWASP Category**: A05:2021 Security Misconfiguration
+- **Type**: Directory Listing / Sensitive File Exposure
+- **Parameter**: `GET /ftp`
+EOF
+
+  out=$(mktemp "${TMPDIR:-/tmp}/finding-check.XXXXXX")
+  if "$CHECK_SCRIPT" "$dir" >"$out" 2>&1; then
+    cat "$out" >&2
+    fail "integrity check should fail on reordered-route and same-route duplicates"
+  fi
+  rg 'reason=route\+owasp\+severity\+type-bucket' "$out" >/dev/null || fail "missing route+severity+type-bucket duplicate reason"
+  rg 'reason=route\+owasp\+title-similarity' "$out" >/dev/null || fail "missing route+title-similarity duplicate reason"
+  rg '/rest/admin/application-configuration' "$out" >/dev/null || fail "missing admin route in integrity output"
+  rg 'route=/ftp' "$out" >/dev/null || fail "missing /ftp route in integrity output"
+
+  rm -f "$out"
+  rm -rf "$dir"
+}
+
 main() {
   need_script "$ALLOCATE_SCRIPT"
   need_script "$APPEND_SCRIPT"
@@ -331,6 +452,9 @@ main() {
   test_integrity_check_detects_duplicate_signatures
   test_append_reuses_existing_id_for_duplicate_artifact_evidence
   test_integrity_check_detects_duplicate_artifact_evidence
+  test_append_reuses_existing_id_for_reordered_multi_route_duplicates
+  test_append_reuses_existing_id_for_same_route_similar_title_even_when_severity_differs
+  test_integrity_check_detects_reordered_route_and_same_route_duplicates
   echo "finding contracts: ok"
 }
 
