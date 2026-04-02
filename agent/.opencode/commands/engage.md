@@ -307,9 +307,10 @@ Follow the case-dispatching skill methodology. For each cycle:
 3. Fetch and dispatch exactly one non-empty batch at a time → wait for that single subagent result → mark done / requeue any outcomes → then fetch the next batch
 4. ALWAYS fetch via `./scripts/fetch_batch_to_file.sh "$DIR/cases.db" <type> <limit> <agent> "$BATCH_FILE"`; it saves the full JSON batch to disk and prints only compact `BATCH_*` metadata for the model
 5. NEVER `cat "$BATCH_FILE"`, paste raw fetched JSON into the model context, or stop after a non-empty fetch without the matching `task(...)` call in that SAME turn
-6. Do NOT launch overlapping `task` calls inside consume-test, even if multiple batch types are ready at once
-7. If credentials are discovered during consume-test, write them to auth.json and in that SAME turn dispatch a bounded exploit-developer auth-validation task; never stop after only a credential-validation log/status entry
-8. Continue until queue empty + producers stopped
+6. Treat the non-empty fetch and matching `task(...)` call as one atomic consume-test step. Do NOT decide that the fetch alone satisfied the "one step" rule.
+7. Do NOT launch overlapping `task` calls inside consume-test, even if multiple batch types are ready at once
+8. If credentials are discovered during consume-test, write them to auth.json and in that SAME turn dispatch a bounded exploit-developer auth-validation task; never stop after only a credential-validation log/status entry
+9. Continue until queue empty + producers stopped
 
 Before leaving Test phase, run:
 `./scripts/check_collection_health.sh "$DIR"`
