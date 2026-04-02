@@ -847,6 +847,75 @@ def test_running_container_stall_reason_keeps_processing_case_alive_when_active_
 
 
 
+def test_running_container_stall_reason_treats_open_subagent_session_logs_as_active_runtime_agents():
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "https://opencode-subagent-active.example")
+    db.update_run_status(run["id"], "running")
+
+    run_row = db.get_run_by_id(run["id"])
+    assert run_row is not None
+
+    run_root = Path(run["engagement_root"])
+    runtime_dir = run_root / "runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    process_log = runtime_dir / "process.log"
+    process_log.write_text("stale processing assignment waiting on subagent\n", encoding="utf-8")
+
+    workspace = run_root / "workspace"
+    engagement_dir = workspace / "engagements" / "2026-03-31-000000-opencode-subagent-active"
+    engagement_dir.mkdir(parents=True, exist_ok=True)
+    (workspace / "engagements" / ".active").write_text(
+        "engagements/2026-03-31-000000-opencode-subagent-active\n",
+        encoding="utf-8",
+    )
+    scope_path = engagement_dir / "scope.json"
+    scope_path.write_text(
+        json.dumps(
+            {
+                "status": "in_progress",
+                "current_phase": "consume_test",
+                "phases_completed": ["recon", "collect"],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    with sqlite3.connect(engagement_dir / "cases.db") as connection:
+        connection.execute(
+            "CREATE TABLE cases (id INTEGER PRIMARY KEY AUTOINCREMENT, status TEXT NOT NULL, assigned_agent TEXT)"
+        )
+        connection.execute(
+            "INSERT INTO cases(status, assigned_agent) VALUES ('processing', 'vulnerability-analyst')"
+        )
+        connection.commit()
+
+    (run_root / "run.json").write_text(json.dumps({"agents": []}) + "\n", encoding="utf-8")
+
+    log_dir = run_root / "opencode-home" / "log"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    opencode_log = log_dir / "2026-03-31T000000.log"
+    opencode_log.write_text(
+        "INFO 2026-03-31T00:00:00 service=session id=ses_testsubagent parentID=ses_parent cwd=/tmp title=Analyze API batch (@vulnerability-analyst subagent) permissionProfile=default model=openai/gpt-5.4 created\n"
+        "INFO 2026-03-31T00:00:01 service=llm sessionID=ses_testsubagent agent=vulnerability-analyst mode=subagent stream\n",
+        encoding="utf-8",
+    )
+
+    import os
+
+    old_epoch = datetime.now().timestamp() - 130
+    os.utime(process_log, (old_epoch, old_epoch))
+    os.utime(scope_path, (old_epoch, old_epoch))
+    os.utime(engagement_dir / "cases.db", (old_epoch, old_epoch))
+    os.utime(opencode_log, (old_epoch, old_epoch))
+
+    from app.services.launcher import _running_container_stall_reason
+
+    assert _running_container_stall_reason(run_row) is None
+
+
+
 def test_running_container_stall_reason_ignores_synthetic_queue_backed_active_agents_without_runtime_timestamp():
     client = TestClient(app)
     token = register_and_login(client, "alice")

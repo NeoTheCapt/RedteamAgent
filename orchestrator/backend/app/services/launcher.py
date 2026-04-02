@@ -583,7 +583,7 @@ def _iter_runtime_activity_timestamps(payload):
 
 
 _TEXT_LOG_TIMESTAMP_PATTERN = re.compile(r"\b(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)\b")
-_TEXT_LOG_TIMESTAMP_HAS_TZ_PATTERN = re.compile(r"(?:Z|[+-]\d{2}:?\d{2})$")
+_TEXT_LOG_TIMESTAMP_OPTIONAL_TZ_PATTERN = re.compile(r"\b(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)\b|\b(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?)\b")
 _FETCH_BATCH_BLOCK_PATTERN = re.compile(r"(?ms)^BATCH_FILE=.*?(?=^BATCH_FILE=|\Z)")
 _FETCH_BATCH_COUNT_PATTERN = re.compile(r"(?m)^BATCH_COUNT=(\d+)\s*$")
 _FETCH_BATCH_AGENT_PATTERN = re.compile(r"(?m)^BATCH_AGENT=([^\n]+)\s*$")
@@ -591,6 +591,7 @@ _FETCH_BATCH_TYPE_PATTERN = re.compile(r"(?m)^BATCH_TYPE=([^\n]+)\s*$")
 _FETCH_BATCH_IDS_PATTERN = re.compile(r"(?m)^BATCH_IDS=([^\n]+)\s*$")
 _SUBAGENT_SESSION_TITLE_PATTERN = re.compile(r"title=.*?\(@(?P<agent>[A-Za-z0-9_-]+) subagent\)")
 _SUBAGENT_STREAM_PATTERN = re.compile(r"service=llm\b.*?\bagent=(?P<agent>[A-Za-z0-9_-]+)\b.*?\bmode=subagent\b")
+_SUBAGENT_SESSION_ID_PATTERN = re.compile(r"\b(?:id|sessionID)=(?P<session>ses_[A-Za-z0-9]+)\b")
 _INLINE_SESSION_CREATED_AT_PATTERN = re.compile(r'"created":\s*(\d{10,13})')
 _RUNTIME_ACTIVITY_FUTURE_SKEW_SECONDS = 5 * 60
 
@@ -671,6 +672,63 @@ def _latest_nonempty_fetch_from_output(candidate_output: str) -> dict[str, objec
 
 
 
+def _extract_text_log_timestamp(line: str) -> float | None:
+    timestamp_match = _TEXT_LOG_TIMESTAMP_OPTIONAL_TZ_PATTERN.search(line)
+    if timestamp_match is None:
+        return None
+    raw_timestamp = timestamp_match.group(1) or timestamp_match.group(2)
+    if not raw_timestamp:
+        return None
+    return _parse_runtime_activity_timestamp(raw_timestamp)
+
+
+
+def _opencode_logs_active_subagent_agents(log_root: Path) -> set[str]:
+    if not log_root.exists() or not log_root.is_dir():
+        return set()
+
+    session_agents: dict[str, str] = {}
+    active_sessions: set[str] = set()
+
+    for path in sorted(log_root.glob("*.log")):
+        try:
+            with path.open("r", encoding="utf-8", errors="replace") as handle:
+                for raw_line in handle:
+                    stripped = raw_line.strip()
+                    if not stripped:
+                        continue
+
+                    if "service=session.prompt" in stripped and (
+                        "exiting loop" in stripped or stripped.endswith(" cancel") or " cancel" in stripped
+                    ):
+                        match = _SUBAGENT_SESSION_ID_PATTERN.search(stripped)
+                        if match is not None:
+                            active_sessions.discard(match.group("session"))
+                        continue
+
+                    if "service=llm" in stripped and "mode=subagent" in stripped:
+                        stream_match = _SUBAGENT_STREAM_PATTERN.search(stripped)
+                        session_match = _SUBAGENT_SESSION_ID_PATTERN.search(stripped)
+                        if stream_match is not None and session_match is not None:
+                            session_id = session_match.group("session")
+                            session_agents[session_id] = stream_match.group("agent")
+                            active_sessions.add(session_id)
+                        continue
+
+                    if "title=" in stripped and "subagent" in stripped and "created" in stripped:
+                        title_match = _SUBAGENT_SESSION_TITLE_PATTERN.search(stripped)
+                        session_match = _SUBAGENT_SESSION_ID_PATTERN.search(stripped)
+                        if title_match is not None and session_match is not None:
+                            session_id = session_match.group("session")
+                            session_agents[session_id] = title_match.group("agent")
+                            active_sessions.add(session_id)
+        except OSError:
+            continue
+
+    return {session_agents[session_id] for session_id in active_sessions if session_agents.get(session_id)}
+
+
+
 def _opencode_logs_show_subagent_activity(
     log_root: Path,
     *,
@@ -719,11 +777,7 @@ def _opencode_logs_show_subagent_activity(
                 continue
 
             if candidate is None:
-                timestamp_match = _TEXT_LOG_TIMESTAMP_PATTERN.search(stripped)
-                if timestamp_match is not None:
-                    raw_timestamp = timestamp_match.group(1)
-                    if _TEXT_LOG_TIMESTAMP_HAS_TZ_PATTERN.search(raw_timestamp):
-                        candidate = _parse_runtime_activity_timestamp(raw_timestamp)
+                candidate = _extract_text_log_timestamp(stripped)
             if candidate is not None and candidate < since_at:
                 continue
             return True
@@ -932,6 +986,13 @@ def _active_runtime_metadata_agents(run: Run) -> set[str]:
     return active_agents
 
 
+
+def _active_runtime_agents(run: Run) -> set[str]:
+    active_agents = _active_runtime_metadata_agents(run)
+    active_agents.update(_opencode_logs_active_subagent_agents(opencode_home_root_for(run) / "log"))
+    return active_agents
+
+
 def _run_metadata_has_current_task(run: Run) -> bool:
     payload = _read_run_metadata(run)
     current_task_name = str(payload.get("current_task_name") or "").strip()
@@ -981,7 +1042,7 @@ def _running_container_stall_reason(run: Run) -> tuple[str, str, str] | None:
 
     runtime_activity_at = _latest_running_runtime_activity_at(run)
     metadata_activity_at = _latest_runtime_metadata_activity_at(run)
-    active_runtime_agents = _active_runtime_metadata_agents(run)
+    active_runtime_agents = _active_runtime_agents(run)
     has_current_task = _run_metadata_has_current_task(run)
     processing_agents = _load_running_processing_agents(engagement_dir)
     orphaned_fetch = _latest_undispatched_batch_fetch(
@@ -1442,6 +1503,8 @@ _SURFACE_TYPE_ALIASES = {
     "oauth": "auth_entry",
     "oauth_flow": "auth_entry",
     "auth_surface": "auth_entry",
+    "anti_automation": "auth_entry",
+    "broken_anti_automation": "auth_entry",
     "business_logic": "privileged_write",
     "logic_flow": "privileged_write",
     "stateful_flow": "privileged_write",
