@@ -2048,7 +2048,15 @@ def test_normalize_active_scope_marks_completed_report_and_log_headers(monkeypat
         "# Penetration Test Report: https://example.com\n"
         "**Date**: 2026-03-29 — In Progress\n"
         "**Target**: https://example.com  **Scope**: example.com, *.example.com  **Status**: In Progress\n"
-        "**Status**: In Progress (testing queue completed; report phase active)\n",
+        "**Status**: In Progress (testing queue completed; report phase active)\n\n"
+        "## Appendix\n\n"
+        "### C. Full scope.json\n\n"
+        "```json\n"
+        "{\n"
+        "  \"status\": \"in_progress\",\n"
+        "  \"current_phase\": \"report\"\n"
+        "}\n"
+        "```\n",
         encoding="utf-8",
     )
     (engagement_dir / "surfaces.jsonl").write_text("", encoding="utf-8")
@@ -2082,12 +2090,16 @@ def test_normalize_active_scope_marks_completed_report_and_log_headers(monkeypat
         if hasattr(time, "tzset"):
             time.tzset()
 
+    normalized_scope = json.loads((engagement_dir / "scope.json").read_text(encoding="utf-8"))
     log_text = (engagement_dir / "log.md").read_text(encoding="utf-8")
     report_text = (engagement_dir / "report.md").read_text(encoding="utf-8")
 
+    assert normalized_scope["end_time"].endswith("Z")
     assert "- **Status**: Completed" in log_text
     assert "**Date**: 2026-03-30 — Completed" in report_text
     assert "**Status**: Completed" in report_text
+    assert '"status": "complete"' in report_text
+    assert '"current_phase": "complete"' in report_text
     assert "In Progress" not in report_text
 
 
