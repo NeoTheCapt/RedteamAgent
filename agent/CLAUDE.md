@@ -92,6 +92,7 @@ PARALLEL: Independent tasks → parallel. Dependent → sequential.
    - `api`, `api-spec`, `graphql`, `form`, `upload`, and `websocket` batches MUST dispatch `vulnerability-analyst`
    - `page`, `data`, `javascript`, `stylesheet`, and `unknown` batches MUST dispatch `source-analyzer`
    - consume-test dispatch is SERIALIZED: fetch and dispatch exactly one non-empty batch at a time, wait for that subagent result, record its `### Case Outcomes`, then fetch the next batch
+   - a consume-test subagent handoff is not complete unless it includes a literal `### Case Outcomes` section that accounts for every fetched case ID exactly once with `DONE`, `REQUEUE`, or `ERROR`; if that section is missing or incomplete, immediately request a corrected handoff before touching queue state
    - do NOT launch overlapping `task` calls inside the same consume-test pass, even when multiple fetched batch files are non-empty
    - never leave fetched cases in `processing` without a dispatched subagent task
    - after each dispatched subagent returns, immediately consume its `### Case Outcomes` and run the required `done` / `requeue` updates before the next fetch cycle

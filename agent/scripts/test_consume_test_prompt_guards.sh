@@ -26,6 +26,10 @@ for file in "$OPERATOR_CORE" "$ENGAGE_CMD"; do
     echo "missing no record+fetch same tool call guard in $file" >&2
     exit 1
   }
+  grep -Fq 'literal `### Case Outcomes` section that accounts for every fetched case ID exactly once with `DONE`, `REQUEUE`, or `ERROR`' "$file" || {
+    echo "missing literal case-outcome contract in $file" >&2
+    exit 1
+  }
   grep -Fq 'tool result ends with `BATCH_COUNT > 0`, that assistant turn is not complete until the matching `task(...)` call has been issued' "$file" || {
     echo "missing BATCH_COUNT completion guard in $file" >&2
     exit 1
