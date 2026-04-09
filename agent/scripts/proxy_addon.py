@@ -311,11 +311,17 @@ class CaseCollector:
 
     def _generate_sig(self, query_json: str | None, body_json: str | None, url: str | None) -> str:
         keys: list[str] = []
+        control_markers: list[str] = []
         if query_json:
             try:
                 q = json.loads(query_json)
                 if isinstance(q, dict):
                     keys.extend(q.keys())
+                    control_markers.extend(
+                        f"query:{key}={json.dumps(value, sort_keys=True)}"
+                        for key, value in sorted(q.items())
+                        if key.startswith("_")
+                    )
             except json.JSONDecodeError:
                 pass
         if body_json:
@@ -323,13 +329,18 @@ class CaseCollector:
                 b = json.loads(body_json)
                 if isinstance(b, dict):
                     keys.extend(b.keys())
+                    control_markers.extend(
+                        f"body:{key}={json.dumps(value, sort_keys=True)}"
+                        for key, value in sorted(b.items())
+                        if key.startswith("_")
+                    )
             except json.JSONDecodeError:
                 pass
         parsed = urlparse(url or "")
         origin = ""
         if parsed.scheme and parsed.netloc:
             origin = f"{parsed.scheme.lower()}://{parsed.netloc.lower()}"
-        material = f"{origin}|{','.join(sorted(set(keys)))}"
+        material = f"{origin}|{','.join(sorted(set(keys)))}|{','.join(control_markers)}"
         return hashlib.md5(material.encode()).hexdigest()
 
     # -- body save policy ---------------------------------------------------
