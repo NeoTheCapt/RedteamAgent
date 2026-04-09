@@ -165,6 +165,82 @@ print(
 PY
 }
 
+extract_local_benchmark_trend_summary() {
+  local context_file="$STATE_DIR/latest-context.md"
+  local history_file="$STATE_DIR/benchmark-metrics-history.json"
+  local mapping_file="$STATE_DIR/target-benchmarks.json"
+  [[ -f "$context_file" && -f "$mapping_file" ]] || return 0
+  python3 - "$context_file" "$mapping_file" "$history_file" <<'PY'
+from pathlib import Path
+from statistics import median
+import json
+import sys
+
+context_path = Path(sys.argv[1])
+mapping_path = Path(sys.argv[2])
+history_path = Path(sys.argv[3])
+lines = context_path.read_text(encoding='utf-8', errors='replace').splitlines()
+inside = False
+metrics = {}
+for line in lines:
+    if line.startswith('## Local Benchmark Evaluation'):
+        inside = True
+        continue
+    if inside and (line.startswith('## ') or line.startswith('#### ')):
+        break
+    if inside and line.startswith('- '):
+        key, _, value = line[2:].partition(':')
+        if key and value:
+            metrics[key.strip()] = value.strip()
+if not metrics:
+    raise SystemExit(0)
+
+mapping = json.loads(mapping_path.read_text(encoding='utf-8'))
+gate = (((mapping.get('targets') or {}).get('http://127.0.0.1:8000') or {}).get('healthy_skip_gate') or {})
+window = int(gate.get('trend_window', 5) or 5)
+history = {}
+if history_path.exists():
+    try:
+        history = json.loads(history_path.read_text(encoding='utf-8'))
+    except json.JSONDecodeError:
+        history = {}
+target_state = ((history.get('targets') or {}).get('http://127.0.0.1:8000') or {})
+records = list(target_state.get('history') or [])
+if not records and target_state.get('last_metrics'):
+    records = [{
+        'updated_at': target_state.get('updated_at'),
+        'cycle_id': target_state.get('cycle_id'),
+        'metrics': target_state.get('last_metrics'),
+    }]
+
+summary_parts = []
+for metric_key in ('scenario_precision', 'scenario_automation_actionable_recall'):
+    current_raw = metrics.get(metric_key)
+    if current_raw in (None, ''):
+        continue
+    current = float(current_raw)
+    values = []
+    for record in records[-window:]:
+        value = ((record or {}).get('metrics') or {}).get(metric_key)
+        if value in (None, ''):
+            continue
+        try:
+            values.append(float(value))
+        except ValueError:
+            continue
+    if len(values) >= 3:
+        base = median(values)
+        summary_parts.append(f"{metric_key} {current:.3f} vs median {base:.3f} (Δ {current - base:+.3f}, n={len(values)})")
+    elif values:
+        base = values[-1]
+        summary_parts.append(f"{metric_key} {current:.3f} vs last {base:.3f} (Δ {current - base:+.3f})")
+    else:
+        summary_parts.append(f"{metric_key} {current:.3f} (no prior baseline)")
+if summary_parts:
+    print('Local benchmark trend: ' + ' | '.join(summary_parts))
+PY
+}
+
 evaluate_local_benchmark_gate() {
   local mapping_file="$STATE_DIR/target-benchmarks.json"
   local history_file="$STATE_DIR/benchmark-metrics-history.json"
@@ -336,12 +412,16 @@ send_cycle_summary() {
     return 0
   fi
 
-  local fixed_issues local_benchmark_metrics benchmark_summary_block
+  local fixed_issues local_benchmark_metrics local_benchmark_trend benchmark_summary_block
   fixed_issues="$(extract_fixed_issues || true)"
   local_benchmark_metrics="$(extract_local_benchmark_metrics || true)"
+  local_benchmark_trend="$(extract_local_benchmark_trend_summary || true)"
   benchmark_summary_block=""
   if [[ -n "$local_benchmark_metrics" ]]; then
     benchmark_summary_block="$local_benchmark_metrics"$'\n'
+  fi
+  if [[ -n "$local_benchmark_trend" ]]; then
+    benchmark_summary_block+="$local_benchmark_trend"$'\n'
   fi
 
   local msg_file="$cycle_dir/summary-message.txt"
@@ -616,6 +696,7 @@ cat > "$report_path" <<EOF
 
 ## Benchmark Gate
 - local_benchmark_gate: ${benchmark_gate_reason:-pass}
+- local_benchmark_trend: $(extract_local_benchmark_trend_summary || echo unavailable)
 
 ## Exit Codes
 - prep_exit_code: $prep_status

@@ -182,6 +182,7 @@ if not records and target_state.get('last_metrics'):
     }]
 
 reasons = []
+trend_lines = []
 for field, metric_key in [
     ('min_scenario_precision', 'scenario_precision'),
     ('min_scenario_automation_actionable_recall', 'scenario_automation_actionable_recall'),
@@ -207,12 +208,16 @@ for metric_key, allowed_drop in (gate.get('max_regression') or {}).items():
         values.append(float(value))
     if len(values) >= min_points:
         baseline = median(values)
+        trend_lines.append(f"{metric_key}: current {current:.3f} vs rolling median {baseline:.3f} (Δ {current - baseline:+.3f}, n={len(values)})")
         if current < baseline - allowed:
             reasons.append(f"{metric_key} trended down vs rolling median {baseline:.3f} -> {current:.3f} (allowed drop {allowed:.3f}, window={min(len(values), window)})")
     elif values:
         last = values[-1]
+        trend_lines.append(f"{metric_key}: current {current:.3f} vs last {last:.3f} (Δ {current - last:+.3f})")
         if current < last - allowed:
             reasons.append(f"{metric_key} regressed {last:.3f} -> {current:.3f} (allowed drop {allowed:.3f})")
+    else:
+        trend_lines.append(f"{metric_key}: current {current:.3f} (no prior baseline)")
 
 print('\n## Runtime Benchmark Gate Snapshot\n')
 print('- Target: http://127.0.0.1:8000')
@@ -221,6 +226,8 @@ for key in ('precision', 'recall', 'f1', 'scenario_precision', 'scenario_recall'
         print(f'- {key}: {metrics[key]}')
 if gate:
     print(f"- Gate thresholds: min_scenario_precision={gate.get('min_scenario_precision', 'n/a')}, min_scenario_automation_actionable_recall={gate.get('min_scenario_automation_actionable_recall', 'n/a')}, trend_window={gate.get('trend_window', 'n/a')}, min_history_points={gate.get('min_history_points', 'n/a')}")
+for line in trend_lines:
+    print(f'- Trend: {line}')
 if reasons:
     print('- Gate result: FAIL')
     print(f"- Gate reason: {'; '.join(reasons)}")
