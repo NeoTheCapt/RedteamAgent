@@ -1251,6 +1251,224 @@ def _last_logged_stop_reason(log_path: Path) -> str:
     return _last_logged_stop_metadata(log_path)[1]
 
 
+_REPORT_REQUIRED_SECTIONS = (
+    "## Executive Summary",
+    "## Scope and Methodology",
+    "## Findings",
+    "## Attack Narrative",
+    "## Recommendations",
+    "## Appendix",
+)
+_FINDING_SECTION_PATTERN = re.compile(
+    r"^## \[(?P<id>[^\]]+)\] (?P<title>.+?)\n(?P<body>.*?)(?=^## \[|\Z)",
+    flags=re.MULTILINE | re.DOTALL,
+)
+_FINDING_FIELD_PATTERN = re.compile(r"^- \*\*(?P<key>[^*]+)\*\*: (?P<value>.*)$", flags=re.MULTILINE)
+_FINDING_SORT_ORDER = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3, "INFO": 4}
+
+
+def _report_has_substantive_content(text: str) -> bool:
+    stripped = text.strip()
+    if not stripped or len(stripped) < 400:
+        return False
+    matched_sections = sum(1 for section in _REPORT_REQUIRED_SECTIONS if section in stripped)
+    if matched_sections < 4:
+        return False
+    if "## Findings" not in stripped:
+        return False
+    if re.search(r"^### \[FINDING-\d{3}\] ", stripped, flags=re.MULTILINE):
+        return True
+    return "No confirmed findings" in stripped
+
+
+def _parse_findings_markdown(text: str) -> list[dict[str, str]]:
+    findings: list[dict[str, str]] = []
+    for match in _FINDING_SECTION_PATTERN.finditer(text):
+        payload: dict[str, str] = {
+            "original_id": match.group("id").strip(),
+            "title": match.group("title").strip(),
+            "body": match.group("body").strip(),
+        }
+        for field in _FINDING_FIELD_PATTERN.finditer(payload["body"]):
+            key = field.group("key").strip().lower().replace(" ", "_")
+            payload[key] = field.group("value").strip()
+        findings.append(payload)
+    findings.sort(key=lambda item: (_FINDING_SORT_ORDER.get(item.get("severity", "INFO").upper(), 99), item.get("original_id", "")))
+    return findings
+
+
+def _severity_summary(findings: list[dict[str, str]]) -> dict[str, int]:
+    counts = {severity: 0 for severity in ("CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO")}
+    for finding in findings:
+        severity = str(finding.get("severity") or "INFO").upper()
+        counts[severity if severity in counts else "INFO"] += 1
+    return counts
+
+
+def _overall_risk_label(counts: dict[str, int]) -> str:
+    if counts.get("CRITICAL"):
+        return "Critical"
+    if counts.get("HIGH"):
+        return "High"
+    if counts.get("MEDIUM"):
+        return "Moderate"
+    if counts.get("LOW"):
+        return "Low"
+    return "Informational"
+
+
+def _format_scope_timeframe(scope: dict[str, object] | None) -> str:
+    if not isinstance(scope, dict):
+        return "Timeframe unavailable"
+    start = str(scope.get("start_time") or scope.get("started_at") or "").strip()
+    end = str(scope.get("end_time") or "").strip()
+    if start and end:
+        return f"{start} → {end}"
+    if start:
+        return f"Started {start}"
+    return "Timeframe unavailable"
+
+
+def _extract_findings_report_paths(findings: list[dict[str, str]]) -> list[str]:
+    paths: list[str] = []
+    seen: set[str] = set()
+    for finding in findings:
+        evidence = str(finding.get("evidence") or "")
+        for candidate in re.findall(r"(?:engagements/[^\s`'\"]+|downloads/[^\s`'\"]+|scans/[^\s`'\"]+)", evidence):
+            if candidate in seen:
+                continue
+            seen.add(candidate)
+            paths.append(candidate)
+            if len(paths) >= 8:
+                return paths
+    return paths
+
+
+def _synthesize_completion_report(engagement_dir: Path, scope: dict[str, object] | None) -> None:
+    report_path = engagement_dir / "report.md"
+    findings_path = engagement_dir / "findings.md"
+    findings_text = findings_path.read_text(encoding="utf-8", errors="replace") if findings_path.exists() else ""
+    findings = _parse_findings_markdown(findings_text)
+    counts = _severity_summary(findings)
+    total_findings = sum(counts.values())
+
+    target = ""
+    scope_entries: list[str] = []
+    phases_completed: list[str] = []
+    if isinstance(scope, dict):
+        target = str(scope.get("target") or "").strip()
+        scope_entries = [str(item).strip() for item in scope.get("scope") or [] if str(item).strip()]
+        phases_completed = [str(item).strip() for item in scope.get("phases_completed") or [] if str(item).strip()]
+
+    evidence_paths = _extract_findings_report_paths(findings)
+    cases_db = engagement_dir / "cases.db"
+    total_cases = 0
+    if cases_db.exists():
+        try:
+            with sqlite3.connect(cases_db) as connection:
+                row = connection.execute("SELECT COUNT(*) FROM cases").fetchone()
+            total_cases = int(row[0]) if row else 0
+        except sqlite3.Error:
+            total_cases = 0
+
+    surface_count = 0
+    surfaces_path = engagement_dir / "surfaces.jsonl"
+    if surfaces_path.exists():
+        surface_count = sum(1 for line in surfaces_path.read_text(encoding="utf-8", errors="replace").splitlines() if line.strip())
+
+    methodology_steps = []
+    if phases_completed:
+        methodology_steps.append(f"Completed phases: {', '.join(phases_completed)}")
+    if total_cases:
+        methodology_steps.append(f"Processed {total_cases} queued cases from crawler and follow-up analysis.")
+    if surface_count:
+        methodology_steps.append(f"Tracked {surface_count} observed surfaces in surfaces.jsonl.")
+    if not methodology_steps:
+        methodology_steps.append("Completed the orchestrated reconnaissance, analysis, and reporting workflow using recorded engagement artifacts only.")
+
+    recommendations: list[str] = []
+    if counts.get("CRITICAL") or counts.get("HIGH"):
+        recommendations.append("Prioritize the highest-severity exposures first, especially issues that enable account compromise, secret leakage, or direct access to sensitive files or privileged workflows.")
+    if any(finding.get("severity", "").upper() in {"MEDIUM", "HIGH", "CRITICAL"} and "Authentication" in str(finding.get("owasp_category") or "") for finding in findings):
+        recommendations.append("Review authentication and authorization boundaries on privileged API routes and workflow/state tokens; require explicit auth checks instead of trusting client-visible identifiers or setup material.")
+    if any("stack trace" in str(finding.get("title") or "").lower() or "exposure" in str(finding.get("type") or "").lower() for finding in findings):
+        recommendations.append("Disable verbose production error disclosure and trim sensitive response fields so diagnostic paths do not expose stack traces, hashes, tokens, or internal file locations.")
+    if not recommendations:
+        recommendations.append("Continue monitoring newly discovered surfaces and keep validating that crawler-derived coverage stays aligned with the recorded findings and queue output.")
+
+    executive_lines = [
+        f"- Target: `{target or 'unknown'}`",
+        f"- Timeframe: {_format_scope_timeframe(scope)}",
+        f"- Confirmed findings: {total_findings} total ({counts['CRITICAL']} critical / {counts['HIGH']} high / {counts['MEDIUM']} medium / {counts['LOW']} low / {counts['INFO']} info)",
+        f"- Overall risk assessment: {_overall_risk_label(counts)}",
+    ]
+
+    scope_lines = []
+    if scope_entries:
+        scope_lines.append(f"- Scope entries: {', '.join(scope_entries)}")
+    else:
+        scope_lines.append(f"- Scope entries: {target or 'Unavailable'}")
+    scope_lines.extend(f"- {line}" for line in methodology_steps)
+
+    findings_blocks: list[str] = []
+    if findings:
+        for index, finding in enumerate(findings, start=1):
+            finding_id = f"FINDING-{index:03d}"
+            findings_blocks.append(
+                "\n".join(
+                    [
+                        f"### [{finding_id}] {finding.get('title', 'Untitled finding')}",
+                        f"- **Original ID**: {finding.get('original_id', '')}",
+                        f"- **Severity**: {finding.get('severity', 'INFO')}",
+                        f"- **OWASP Category**: {finding.get('owasp_category', 'Unspecified')}",
+                        f"- **Type**: {finding.get('type', 'Unspecified')}",
+                        f"- **Location**: {finding.get('parameter', 'Unspecified')}",
+                        f"- **Description**: Derived from the recorded finding `{finding.get('original_id', '')}` and its linked evidence in `findings.md`.",
+                        "- **Evidence**:",
+                        f"  - {finding.get('evidence', 'See findings.md for the recorded proof.')}",
+                        f"- **Impact**: {finding.get('impact', 'Impact not captured in the finding record.')}",
+                        "- **Remediation**: Address the exposed condition at the affected route/component and re-test the documented evidence path after the fix.",
+                    ]
+                )
+            )
+    else:
+        findings_blocks.append("No confirmed findings were recorded in `findings.md`.")
+
+    attack_narrative = (
+        "The engagement followed the recorded orchestrator workflow from reconnaissance into targeted source and vulnerability analysis, then consolidated confirmed evidence into the final report. "
+        "The report content below was synthesized directly from `scope.json`, `findings.md`, `cases.db`, `surfaces.jsonl`, and the engagement log because the original report artifact was missing or incomplete at completion time."
+    )
+    if not findings:
+        attack_narrative += " No multi-step attack paths identified."
+
+    appendix_lines = [
+        f"- cases.db rows: {total_cases}",
+        f"- surfaces.jsonl rows: {surface_count}",
+        "- Referenced artifact files:",
+    ]
+    if evidence_paths:
+        appendix_lines.extend(f"  - `{path}`" for path in evidence_paths)
+    else:
+        appendix_lines.append("  - `findings.md`")
+        appendix_lines.append("  - `log.md`")
+
+    serialized_scope = json.dumps(scope or {}, indent=2)
+    scope_label = ", ".join(scope_entries) if scope_entries else (target or "Unavailable")
+    report_text = "\n\n".join(
+        [
+            "# Penetration Test Report",
+            f"**Date**: {_engagement_header_date(scope)} — Completed\n**Target**: {target or 'unknown'}  **Scope**: {scope_label}  **Status**: Completed",
+            "## Executive Summary\n" + "\n".join(executive_lines),
+            "## Scope and Methodology\n" + "\n".join(scope_lines),
+            "## Findings\n" + "\n\n".join(findings_blocks),
+            f"## Attack Narrative\n{attack_narrative}",
+            "## Recommendations\n" + "\n".join(f"- {item}" for item in recommendations),
+            "## Appendix\n" + "\n".join(appendix_lines) + f"\n\n### C. Full scope.json\n```json\n{serialized_scope}\n```",
+        ]
+    ).rstrip() + "\n"
+    report_path.write_text(report_text, encoding="utf-8")
+
+
 def engagement_completion_state(run: Run) -> tuple[bool, str]:
     engagement_dir = _active_engagement_dir(run)
     if engagement_dir is None:
@@ -1284,6 +1502,9 @@ def engagement_completion_state(run: Run) -> tuple[bool, str]:
         return (False, "Report phase is not marked complete.")
     if not report_path.exists():
         return (False, "report.md is missing.")
+    report_text = report_path.read_text(encoding="utf-8", errors="replace")
+    if not _report_has_substantive_content(report_text):
+        return (False, "report.md is incomplete.")
 
     pending_cases, processing_cases = _count_remaining_cases(cases_db)
     if pending_cases or processing_cases:
@@ -1400,8 +1621,12 @@ def _normalize_completion_artifacts(engagement_dir: Path, scope: dict[str, objec
     if _canonical_scope_status(scope.get("status")) != "complete":
         return
     header_date = _engagement_header_date(scope)
+    report_path = engagement_dir / "report.md"
+    existing_report = report_path.read_text(encoding="utf-8", errors="replace") if report_path.exists() else ""
+    if not _report_has_substantive_content(existing_report):
+        _synthesize_completion_report(engagement_dir, scope)
     _normalize_log_completion_artifact(engagement_dir / "log.md")
-    _normalize_report_completion_artifact(engagement_dir / "report.md", header_date=header_date, scope=scope)
+    _normalize_report_completion_artifact(report_path, header_date=header_date, scope=scope)
 
 
 _JSONL_DISALLOWED_CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")

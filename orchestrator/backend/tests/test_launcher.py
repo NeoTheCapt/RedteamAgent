@@ -2584,6 +2584,74 @@ def test_normalize_active_scope_marks_completed_report_and_log_headers(monkeypat
     assert "In Progress" not in report_text
 
 
+def test_normalize_active_scope_bootstraps_substantive_report_from_findings():
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "http://127.0.0.1:8000")
+
+    run_root = Path(run["engagement_root"])
+    workspace = run_root / "workspace"
+    engagement_dir = workspace / "engagements" / "2026-04-09-000000-local"
+    engagement_dir.mkdir(parents=True, exist_ok=True)
+    (workspace / "engagements" / ".active").write_text(
+        "engagements/2026-04-09-000000-local\n",
+        encoding="utf-8",
+    )
+    (engagement_dir / "scope.json").write_text(
+        json.dumps(
+            {
+                "target": "http://127.0.0.1:8000",
+                "scope": ["http://127.0.0.1:8000"],
+                "status": "complete",
+                "current_phase": "complete",
+                "start_time": "2026-04-09T05:20:40Z",
+                "end_time": "2026-04-09T06:12:41Z",
+                "phases_completed": ["recon", "collect", "consume_test", "exploit", "report"],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (engagement_dir / "findings.md").write_text(
+        "# Findings\n\n"
+        "## [FINDING-SA-001] Hardcoded test credentials exposed in public JavaScript bundle\n"
+        "- **Discovered by**: source-analyzer\n"
+        "- **Severity**: HIGH\n"
+        "- **OWASP Category**: A07:2021 Identification and Authentication Failures\n"
+        "- **Type**: Hardcoded Credential Disclosure\n"
+        "- **Parameter**: `email,password` in `POST /rest/user/login`\n"
+        "- **Evidence**: `downloads/source-analysis/main.js` contains `testingPassword=\"IamUsedForTesting\"`.\n"
+        "- **Impact**: Any unauthenticated user can authenticate with the exposed testing account.\n",
+        encoding="utf-8",
+    )
+    (engagement_dir / "report.md").write_text("**Date**: 2026-04-09 — Completed\n", encoding="utf-8")
+    (engagement_dir / "log.md").write_text("# Engagement Log\n", encoding="utf-8")
+    (engagement_dir / "surfaces.jsonl").write_text("", encoding="utf-8")
+    with sqlite3.connect(engagement_dir / "cases.db") as connection:
+        connection.execute(
+            "CREATE TABLE cases (id INTEGER PRIMARY KEY AUTOINCREMENT, status TEXT NOT NULL)"
+        )
+        connection.execute("INSERT INTO cases(status) VALUES ('done')")
+        connection.commit()
+
+    from app import db as app_db
+    from app.services.launcher import engagement_completion_state, normalize_active_scope
+
+    latest = app_db.get_run_by_id(run["id"])
+    assert latest is not None
+
+    normalize_active_scope(latest)
+
+    report_text = (engagement_dir / "report.md").read_text(encoding="utf-8")
+    assert "## Executive Summary" in report_text
+    assert "## Findings" in report_text
+    assert "### [FINDING-001] Hardcoded test credentials exposed in public JavaScript bundle" in report_text
+    assert "- **Original ID**: FINDING-SA-001" in report_text
+    assert "### C. Full scope.json" in report_text
+    assert engagement_completion_state(latest) == (True, "Engagement completed and finalized.")
+
+
 def test_auto_launch_marks_completed_only_when_engagement_is_finalized(monkeypatch):
     client = TestClient(app)
     token = register_and_login(client, "alice")
