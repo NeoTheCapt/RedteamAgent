@@ -1226,6 +1226,91 @@ def test_running_container_stall_reason_waits_for_recent_workflow_activity_befor
 
 
 
+def test_running_container_stall_reason_flags_stale_processing_subset_while_other_agent_stays_active():
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "https://mixed-processing-agents.example")
+    db.update_run_status(run["id"], "running")
+
+    run_row = db.get_run_by_id(run["id"])
+    assert run_row is not None
+
+    run_root = Path(run["engagement_root"])
+    runtime_dir = run_root / "runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    process_log = runtime_dir / "process.log"
+    process_log.write_text("recent runtime activity\n", encoding="utf-8")
+
+    workspace = run_root / "workspace"
+    engagement_dir = workspace / "engagements" / "2026-04-09-132832-host-docker-internal"
+    engagement_dir.mkdir(parents=True, exist_ok=True)
+    (workspace / "engagements" / ".active").write_text(
+        "engagements/2026-04-09-132832-host-docker-internal\n",
+        encoding="utf-8",
+    )
+    scope_path = engagement_dir / "scope.json"
+    scope_path.write_text(
+        json.dumps(
+            {
+                "status": "in_progress",
+                "current_phase": "consume_test",
+                "phases_completed": ["recon", "collect"],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    log_path = engagement_dir / "log.md"
+    log_path.write_text("## [14:03] Source analysis summary — source-analyzer\n", encoding="utf-8")
+    with sqlite3.connect(engagement_dir / "cases.db") as connection:
+        connection.execute(
+            "CREATE TABLE cases (id INTEGER PRIMARY KEY AUTOINCREMENT, status TEXT NOT NULL, assigned_agent TEXT, consumed_at TEXT)"
+        )
+        connection.execute(
+            "INSERT INTO cases(id, status, assigned_agent, consumed_at) VALUES (205, 'processing', 'vulnerability-analyst', '2026-04-09 13:49:39')"
+        )
+        for case_id in (1, 25, 64, 80):
+            connection.execute(
+                "INSERT INTO cases(id, status, assigned_agent, consumed_at) VALUES (?, 'processing', 'source-analyzer', '2026-04-09 14:03:59')",
+                (case_id,),
+            )
+        connection.commit()
+
+    recent_source_activity = datetime.fromtimestamp(datetime.now().timestamp() - 5, tz=UTC).strftime(
+        "%Y-%m-%d %H:%M:%S"
+    )
+    (run_root / "run.json").write_text(
+        json.dumps(
+            {
+                "agents": [
+                    {"agent_name": "source-analyzer", "status": "active", "updated_at": recent_source_activity},
+                ]
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    import os
+
+    recent_epoch = datetime.now().timestamp() - 5
+    old_epoch = datetime.now().timestamp() - 130
+    os.utime(process_log, (recent_epoch, recent_epoch))
+    os.utime(scope_path, (recent_epoch, recent_epoch))
+    os.utime(log_path, (recent_epoch, recent_epoch))
+    os.utime(engagement_dir / "cases.db", (recent_epoch, recent_epoch))
+
+    from app.services.launcher import _running_container_stall_reason
+
+    assert _running_container_stall_reason(run_row) == (
+        "consume_test",
+        "queue_stalled",
+        "Processing queue assignments (vulnerability-analyst) had no matching active runtime agent after stall grace period elapsed (active agents: source-analyzer).",
+    )
+
+
+
 def test_running_container_stall_reason_flags_undispatched_follow_on_fetch_even_with_recent_workflow_activity():
     client = TestClient(app)
     token = register_and_login(client, "alice")
@@ -1315,6 +1400,104 @@ def test_running_container_stall_reason_flags_undispatched_follow_on_fetch_even_
         "consume_test",
         "queue_stalled",
         "Fetched non-empty page batch for source-analyzer (ids: 1,23,62,73) but no matching task dispatch followed before stall grace period elapsed.",
+    )
+
+
+
+def test_running_container_stall_reason_ignores_stale_metadata_active_agent_for_orphaned_follow_on_fetch():
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "https://stale-metadata-active-agent.example")
+    db.update_run_status(run["id"], "running")
+
+    run_row = db.get_run_by_id(run["id"])
+    assert run_row is not None
+
+    run_root = Path(run["engagement_root"])
+    runtime_dir = run_root / "runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    process_log = runtime_dir / "process.log"
+    fetch_timestamp_ms = int((datetime.now().timestamp() - 130) * 1000)
+    process_log.write_text(
+        json.dumps(
+            {
+                "type": "tool_use",
+                "timestamp": fetch_timestamp_ms,
+                "part": {
+                    "tool": "bash",
+                    "state": {
+                        "output": "BATCH_FILE=/workspace/engagements/demo/scans/operator/page_batch_001.json\nBATCH_TYPE=page\nBATCH_AGENT=source-analyzer\nBATCH_COUNT=5\nBATCH_IDS=1,25,64,80,88\n"
+                    },
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    workspace = run_root / "workspace"
+    engagement_dir = workspace / "engagements" / "2026-04-09-132832-host-docker-internal"
+    engagement_dir.mkdir(parents=True, exist_ok=True)
+    (workspace / "engagements" / ".active").write_text(
+        "engagements/2026-04-09-132832-host-docker-internal\n",
+        encoding="utf-8",
+    )
+    scope_path = engagement_dir / "scope.json"
+    scope_path.write_text(
+        json.dumps(
+            {
+                "status": "in_progress",
+                "current_phase": "consume_test",
+                "phases_completed": ["recon", "collect"],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    log_path = engagement_dir / "log.md"
+    log_path.write_text("## [13:54] Data batch recorded — source-analyzer\n", encoding="utf-8")
+    with sqlite3.connect(engagement_dir / "cases.db") as connection:
+        connection.execute(
+            "CREATE TABLE cases (id INTEGER PRIMARY KEY AUTOINCREMENT, status TEXT NOT NULL, assigned_agent TEXT)"
+        )
+        for case_id in (1, 25, 64, 80, 88):
+            connection.execute(
+                "INSERT INTO cases(id, status, assigned_agent) VALUES (?, 'processing', 'source-analyzer')",
+                (case_id,),
+            )
+        connection.commit()
+
+    stale_updated_at = datetime.fromtimestamp(datetime.now().timestamp() - 8 * 3600, tz=UTC).strftime(
+        "%Y-%m-%d %H:%M:%S"
+    )
+    (run_root / "run.json").write_text(
+        json.dumps(
+            {
+                "agents": [
+                    {"agent_name": "source-analyzer", "status": "active", "updated_at": stale_updated_at},
+                ]
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    import os
+
+    old_epoch = datetime.now().timestamp() - 130
+    fresh_epoch = datetime.now().timestamp() - 5
+    os.utime(process_log, (old_epoch, old_epoch))
+    os.utime(scope_path, (old_epoch, old_epoch))
+    os.utime(engagement_dir / "cases.db", (old_epoch, old_epoch))
+    os.utime(log_path, (fresh_epoch, fresh_epoch))
+
+    from app.services.launcher import _running_container_stall_reason
+
+    assert _running_container_stall_reason(run_row) == (
+        "consume_test",
+        "queue_stalled",
+        "Fetched non-empty page batch for source-analyzer (ids: 1,25,64,80,88) but no matching task dispatch followed before stall grace period elapsed.",
     )
 
 
