@@ -1535,6 +1535,78 @@ def test_list_runs_fails_stale_processing_subset_while_other_agent_stays_active(
 
 
 
+def test_list_runs_allows_recent_processing_handoff_without_active_runtime_agent(monkeypatch):
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+
+    create_run = client.post(
+        f"/projects/{project['id']}/runs",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"target": "https://recent-processing-handoff.example"},
+    )
+    assert create_run.status_code == 201
+    run = create_run.json()
+    db.update_run_status(run["id"], "running")
+
+    run_root = Path(run["engagement_root"])
+    runtime_dir = run_root / "runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    process_log = runtime_dir / "process.log"
+    process_log.write_text("recent runtime activity\n", encoding="utf-8")
+
+    workspace = run_root / "workspace"
+    engagement_dir = workspace / "engagements" / "2026-04-09-140732-host-docker-internal"
+    engagement_dir.mkdir(parents=True, exist_ok=True)
+    (workspace / "engagements" / ".active").write_text(
+        "engagements/2026-04-09-140732-host-docker-internal\n",
+        encoding="utf-8",
+    )
+    scope_path = engagement_dir / "scope.json"
+    scope_path.write_text(
+        json.dumps(
+            {
+                "status": "in_progress",
+                "current_phase": "consume_test",
+                "phases_completed": ["recon", "collect"],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    log_path = engagement_dir / "log.md"
+    log_path.write_text("## [14:21] Analysis summary — vulnerability-analyst\n", encoding="utf-8")
+    with sqlite3.connect(engagement_dir / "cases.db") as connection:
+        connection.execute(
+            "CREATE TABLE cases (id INTEGER PRIMARY KEY AUTOINCREMENT, status TEXT NOT NULL, assigned_agent TEXT, consumed_at TEXT)"
+        )
+        connection.execute(
+            "INSERT INTO cases(id, status, assigned_agent, consumed_at) VALUES (10, 'processing', 'vulnerability-analyst', '2026-04-09 14:19:51')"
+        )
+        connection.commit()
+
+    (run_root / "run.json").write_text(json.dumps({"agents": []}) + "\n", encoding="utf-8")
+
+    recent_epoch = datetime.now().timestamp() - 5
+    os.utime(process_log, (recent_epoch, recent_epoch))
+    os.utime(scope_path, (recent_epoch, recent_epoch))
+    os.utime(log_path, (recent_epoch, recent_epoch))
+    os.utime(engagement_dir / "cases.db", (recent_epoch, recent_epoch))
+
+    monkeypatch.setattr("app.services.runs.locate_runtime_pid", lambda _run: 12345)
+    stopped: list[int] = []
+    monkeypatch.setattr("app.services.runs.stop_run_runtime", lambda reconciled_run: stopped.append(reconciled_run.id))
+
+    runs_response = client.get(
+        f"/projects/{project['id']}/runs",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert runs_response.status_code == 200
+    assert runs_response.json()[0]["status"] == "running"
+    assert stopped == []
+
+
+
 def test_list_runs_fails_undispatched_follow_on_fetch_even_with_recent_workflow_activity(monkeypatch):
     client = TestClient(app)
     token = register_and_login(client, "alice")
