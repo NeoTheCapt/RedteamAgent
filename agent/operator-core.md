@@ -70,6 +70,8 @@ PARALLEL: Independent tasks → parallel. Dependent → sequential.
    - do NOT launch overlapping `task` calls inside the same consume-test pass, even when multiple fetched batch files are non-empty
    - never leave fetched cases in `processing` without a dispatched subagent task
    - after each dispatched subagent returns, immediately consume its `### Case Outcomes` and run the required `done` / `requeue` updates before the next fetch cycle
+   - outcome-recording bash blocks may do `done` / `requeue` / stats updates, but MUST NOT also prefetch the next non-empty batch unless that SAME assistant turn will immediately launch the matching subagent task
+   - do NOT hide the next non-empty fetch inside a "record outcomes" bash command and then leave the turn on commentary, a fresh `step_start`, or any other non-dispatch state; fetched cases may not sit in `processing` waiting for a later response
    - ALWAYS fetch via `./scripts/fetch_batch_to_file.sh "$DIR/cases.db" <type> <limit> <agent> "$BATCH_FILE"`; it writes the full JSON batch to disk and prints only compact `BATCH_*` metadata for the model
    - NEVER `cat "$BATCH_FILE"`, print raw fetched JSON, or paste full batch payloads back into the model context; dispatch from the saved file path instead
    - immediately after a non-empty fetch, the SAME turn MUST launch the matching subagent task before any extra reads, summaries, todo updates, or stop checks

@@ -305,12 +305,14 @@ Follow the case-dispatching skill methodology. For each cycle:
 1. `./scripts/dispatcher.sh "$DIR/cases.db" reset-stale 10`
 2. `./scripts/dispatcher.sh "$DIR/cases.db" stats`
 3. Fetch and dispatch exactly one non-empty batch at a time → wait for that single subagent result → mark done / requeue any outcomes → then fetch the next batch
-4. ALWAYS fetch via `./scripts/fetch_batch_to_file.sh "$DIR/cases.db" <type> <limit> <agent> "$BATCH_FILE"`; it saves the full JSON batch to disk and prints only compact `BATCH_*` metadata for the model
-5. NEVER `cat "$BATCH_FILE"`, paste raw fetched JSON into the model context, or stop after a non-empty fetch without the matching `task(...)` call in that SAME turn
-6. Treat the non-empty fetch and matching `task(...)` call as one atomic consume-test step. Do NOT decide that the fetch alone satisfied the "one step" rule.
-7. Do NOT launch overlapping `task` calls inside consume-test, even if multiple batch types are ready at once
-8. If credentials are discovered during consume-test, write them to auth.json and in that SAME turn dispatch a bounded exploit-developer auth-validation task; never stop after only a credential-validation log/status entry
-9. Continue until queue empty + producers stopped
+4. Outcome-recording bash blocks may do `done` / `requeue` / stats updates, but MUST NOT also prefetch the next non-empty batch unless that SAME assistant turn will immediately launch the matching `task(...)` call
+5. Do NOT hide the next non-empty fetch inside a "record outcomes" bash command and then leave the turn on commentary, a fresh `step_start`, or any other non-dispatch state; fetched cases may not sit in `processing` waiting for a later response
+6. ALWAYS fetch via `./scripts/fetch_batch_to_file.sh "$DIR/cases.db" <type> <limit> <agent> "$BATCH_FILE"`; it saves the full JSON batch to disk and prints only compact `BATCH_*` metadata for the model
+7. NEVER `cat "$BATCH_FILE"`, paste raw fetched JSON into the model context, or stop after a non-empty fetch without the matching `task(...)` call in that SAME turn
+8. Treat the non-empty fetch and matching `task(...)` call as one atomic consume-test step. Do NOT decide that the fetch alone satisfied the "one step" rule.
+9. Do NOT launch overlapping `task` calls inside consume-test, even if multiple batch types are ready at once
+10. If credentials are discovered during consume-test, write them to auth.json and in that SAME turn dispatch a bounded exploit-developer auth-validation task; never stop after only a credential-validation log/status entry
+11. Continue until queue empty + producers stopped
 
 Before leaving Test phase, run:
 `./scripts/check_collection_health.sh "$DIR"`

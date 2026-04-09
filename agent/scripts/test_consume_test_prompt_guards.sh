@@ -18,6 +18,10 @@ for file in "$OPERATOR_CORE" "$ENGAGE_CMD"; do
     echo "missing atomic fetch+dispatch guidance in $file" >&2
     exit 1
   }
+  grep -Fq 'MUST NOT also prefetch the next non-empty batch unless that SAME assistant turn will immediately launch the matching' "$file" || {
+    echo "missing no-prefetch-without-dispatch guard in $file" >&2
+    exit 1
+  }
 done
 
 echo "PASS: consume-test prompt guards present in operator-core and /engage"
