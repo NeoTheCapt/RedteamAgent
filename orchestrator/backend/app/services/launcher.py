@@ -970,6 +970,49 @@ def _load_running_processing_agents(engagement_dir: Path | None) -> set[str]:
     return {agent for agent in raw_agents if agent}
 
 
+def _recover_orphaned_processing_cases(run: Run, engagement_dir: Path | None) -> tuple[int, set[str]]:
+    if engagement_dir is None:
+        return (0, set())
+
+    cases_db = engagement_dir / "cases.db"
+    if not cases_db.exists():
+        return (0, set())
+
+    processing_agents = _load_running_processing_agents(engagement_dir)
+    if not processing_agents:
+        return (0, set())
+
+    active_runtime_agents = _active_runtime_agents(run)
+    orphaned_agents = processing_agents.difference(active_runtime_agents)
+    if not orphaned_agents:
+        return (0, set())
+
+    try:
+        with sqlite3.connect(cases_db, timeout=5.0) as connection:
+            connection.execute("PRAGMA busy_timeout = 5000")
+            column_rows = connection.execute("PRAGMA table_info(cases)").fetchall()
+            column_names = {str(row[1]) for row in column_rows if len(row) > 1}
+            if "assigned_agent" not in column_names:
+                return (0, set())
+
+            set_clauses = ["status = 'pending'", "assigned_agent = NULL"]
+            if "consumed_at" in column_names:
+                set_clauses.append("consumed_at = NULL")
+
+            placeholders = ", ".join("?" for _ in orphaned_agents)
+            cursor = connection.execute(
+                f"UPDATE cases SET {', '.join(set_clauses)} "
+                f"WHERE status = 'processing' AND assigned_agent IN ({placeholders})",
+                tuple(sorted(orphaned_agents)),
+            )
+            connection.commit()
+            recovered = int(cursor.rowcount or 0)
+            return (recovered, orphaned_agents if recovered > 0 else set())
+    except sqlite3.Error:
+        return (0, set())
+
+
+
 def _active_runtime_metadata_agents(run: Run) -> set[str]:
     payload = _read_run_metadata(run)
     active_agents: set[str] = set()
@@ -2635,6 +2678,17 @@ def _maybe_auto_resume_run(
     if attempt >= _AUTO_RESUME_LIMIT:
         return False
 
+    recovery_note = ""
+    if phase_name == "consume_test" or scope_phase == "consume_test":
+        recovered_cases, recovered_agents = _recover_orphaned_processing_cases(run, engagement_dir)
+        if recovered_cases > 0:
+            agents_text = ", ".join(sorted(recovered_agents))
+            recovery_note = (
+                f" Re-queued {recovered_cases} orphaned processing case(s)"
+                + (f" from {agents_text}" if agents_text else "")
+                + " before /resume."
+            )
+
     next_attempt = attempt + 1
     _set_auto_resume_count(run, next_attempt)
     _set_auto_resume_progress(run, resolved_count)
@@ -2642,7 +2696,7 @@ def _maybe_auto_resume_run(
         run,
         "run.resumed",
         phase,
-        f"Relaunching /resume after {reason_code} ({next_attempt}/{_AUTO_RESUME_LIMIT}): {reason_text}",
+        f"Relaunching /resume after {reason_code} ({next_attempt}/{_AUTO_RESUME_LIMIT}): {reason_text}{recovery_note}",
     )
     resumed = db.get_run_by_id(run.id) or run
     if resumed.status != "running":

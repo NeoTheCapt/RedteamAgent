@@ -3289,3 +3289,101 @@ def test_auto_resume_resets_budget_after_queue_progress(monkeypatch):
     metadata = json.loads((Path(latest.engagement_root) / "run.json").read_text(encoding="utf-8"))
     assert metadata["auto_resume_count"] == 1
     assert metadata["auto_resume_progress"] == 2
+
+
+
+def test_auto_resume_requeues_orphaned_processing_cases_before_resume(monkeypatch):
+    from app.services import launcher
+
+    client = TestClient(app)
+    token = register_and_login(client, "alice-resume-orphaned")
+    project = create_project(client, token)
+
+    object.__setattr__(settings, "auto_launch_runs", False)
+    try:
+        run = create_run(client, token, project["id"], "https://orphaned-processing-resume.example")
+    finally:
+        object.__setattr__(settings, "auto_launch_runs", False)
+
+    latest = db.get_run_by_id(run["id"])
+    assert latest is not None
+    project_model = db.get_project_by_id(project["id"])
+    assert project_model is not None
+    user_model = db.get_user_by_id(project_model.user_id)
+    assert user_model is not None
+
+    workspace = Path(latest.engagement_root) / "workspace"
+    engagement_dir = workspace / "engagements" / "2026-03-30-020000-example-orphaned-processing"
+    engagement_dir.mkdir(parents=True, exist_ok=True)
+    (workspace / "engagements" / ".active").write_text(
+        "engagements/2026-03-30-020000-example-orphaned-processing\n",
+        encoding="utf-8",
+    )
+    (engagement_dir / "scope.json").write_text(
+        json.dumps(
+            {
+                "status": "in_progress",
+                "current_phase": "consume_test",
+                "phases_completed": ["recon", "collect"],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with sqlite3.connect(engagement_dir / "cases.db") as connection:
+        connection.execute(
+            "CREATE TABLE cases (id INTEGER PRIMARY KEY AUTOINCREMENT, status TEXT NOT NULL, assigned_agent TEXT, consumed_at TEXT)"
+        )
+        connection.executemany(
+            "INSERT INTO cases(status, assigned_agent, consumed_at) VALUES (?, ?, ?)",
+            [
+                ("processing", "source-analyzer", "2026-04-02 09:21:39"),
+                ("done", None, None),
+            ],
+        )
+        connection.commit()
+
+    (Path(latest.engagement_root) / "run.json").write_text(
+        json.dumps(
+            {
+                "agents": [
+                    {"agent_name": "operator", "status": "active", "updated_at": "2026-04-02 09:21:39"},
+                ]
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    launched = []
+    monkeypatch.setattr(
+        "app.services.launcher._launch_runtime_container",
+        lambda *args, **kwargs: launched.append("launched") or None,
+    )
+    monkeypatch.setattr("app.services.launcher._start_container_supervisor", lambda *args, **kwargs: True)
+
+    assert launcher._maybe_auto_resume_run(
+        project_model,
+        latest,
+        user_model,
+        phase="consume-test",
+        reason_code="queue_stalled",
+        reason_text="Processing queue assignments (source-analyzer) had no matching active runtime agent after stall grace period elapsed.",
+    )
+
+    with sqlite3.connect(engagement_dir / "cases.db") as connection:
+        row = connection.execute(
+            "SELECT status, assigned_agent, consumed_at FROM cases WHERE id = 1"
+        ).fetchone()
+    assert row == ("pending", None, None)
+    assert launched == ["launched"]
+
+    metadata = json.loads((Path(latest.engagement_root) / "run.json").read_text(encoding="utf-8"))
+    assert metadata["auto_resume_count"] == 1
+    events = db.list_events_for_run(run["id"])
+    assert any(
+        event.event_type == "run.resumed"
+        and "Re-queued 1 orphaned processing case(s) from source-analyzer before /resume." in event.summary
+        for event in events
+    )
