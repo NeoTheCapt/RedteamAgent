@@ -1760,6 +1760,108 @@ def test_list_runs_fails_stale_processing_queue_when_only_stale_open_subagent_lo
 
 
 
+def test_list_runs_fails_unresolved_permission_prompt_in_autonomous_runtime(monkeypatch):
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+
+    create_run = client.post(
+        f"/projects/{project['id']}/runs",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"target": "https://permission-stall.example"},
+    )
+    assert create_run.status_code == 201
+    run = create_run.json()
+    db.update_run_status(run["id"], "running")
+
+    run_root = Path(run["engagement_root"])
+    runtime_dir = run_root / "runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    (runtime_dir / "process.log").write_text("permission prompt pending\n", encoding="utf-8")
+
+    workspace = run_root / "workspace"
+    engagement_dir = workspace / "engagements" / "2026-03-31-000000-permission-stall"
+    engagement_dir.mkdir(parents=True, exist_ok=True)
+    (workspace / "engagements" / ".active").write_text(
+        "engagements/2026-03-31-000000-permission-stall\n",
+        encoding="utf-8",
+    )
+    scope_path = engagement_dir / "scope.json"
+    scope_path.write_text(
+        json.dumps(
+            {
+                "status": "in_progress",
+                "current_phase": "exploit",
+                "phases_completed": ["recon", "collect", "consume_test"],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    log_path = engagement_dir / "log.md"
+    log_path.write_text("## [00:00] Exploit phase start — operator\n", encoding="utf-8")
+    with sqlite3.connect(engagement_dir / "cases.db") as connection:
+        connection.execute(
+            "CREATE TABLE cases (id INTEGER PRIMARY KEY AUTOINCREMENT, status TEXT NOT NULL, assigned_agent TEXT)"
+        )
+        connection.execute("INSERT INTO cases(id, status, assigned_agent) VALUES (1, 'pending', NULL)")
+        connection.commit()
+
+    permission_asked_at = datetime.now(tz=UTC).replace(microsecond=0) - timedelta(seconds=90)
+    (run_root / "run.json").write_text(
+        json.dumps(
+            {
+                "agents": [
+                    {
+                        "agent_name": "exploit-developer",
+                        "status": "active",
+                        "updated_at": permission_asked_at.strftime("%Y-%m-%d %H:%M:%S"),
+                    }
+                ]
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    opencode_log = run_root / "opencode-home" / "log" / "2026-03-31T000000.log"
+    opencode_log.parent.mkdir(parents=True, exist_ok=True)
+    opencode_log.write_text(
+        "\n".join(
+            [
+                f"INFO {permission_asked_at.strftime('%Y-%m-%dT%H:%M:%S')} service=permission id=per_blocked permission=external_directory patterns=[\"/usr/share/*\"] asking",
+                f"INFO {permission_asked_at.strftime('%Y-%m-%dT%H:%M:%S')} service=bus type=permission.asked publishing",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    old_epoch = datetime.now().timestamp() - 130
+    os.utime(scope_path, (old_epoch, old_epoch))
+    os.utime(engagement_dir / "cases.db", (old_epoch, old_epoch))
+    os.utime(log_path, (old_epoch, old_epoch))
+    os.utime(opencode_log, (old_epoch, old_epoch))
+
+    monkeypatch.setattr("app.services.runs.locate_runtime_pid", lambda _run: 12345)
+    stopped: list[int] = []
+    monkeypatch.setattr("app.services.runs.stop_run_runtime", lambda reconciled_run: stopped.append(reconciled_run.id))
+
+    runs_response = client.get(
+        f"/projects/{project['id']}/runs",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert runs_response.status_code == 200
+    assert runs_response.json()[0]["status"] == "failed"
+    assert stopped == [run["id"]]
+    metadata = json.loads((run_root / "run.json").read_text(encoding="utf-8"))
+    assert metadata["stop_reason_code"] == "queue_stalled"
+    assert metadata["stop_reason_text"] == (
+        "Autonomous runtime requested interactive permission approval and never resolved it; unattended runs must stay within workspace-local inputs or fail fast instead of waiting forever."
+    )
+
+
+
 def test_list_runs_prefers_latest_non_empty_fetch_in_multi_fetch_output(monkeypatch):
     client = TestClient(app)
     token = register_and_login(client, "alice")
