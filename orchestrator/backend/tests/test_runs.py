@@ -313,6 +313,8 @@ def test_list_runs_projects_live_agent_state_into_run_metadata(monkeypatch):
         "agent_name": "vulnerability-analyst",
         "summary": "Analysis start",
     }
+    assert metadata["phase"] == "consume-test"
+    assert metadata["current_phase"] == "consume-test"
     assert metadata["current_task"] == "vulnerability-analyst"
     assert metadata["current_agent"] == "vulnerability-analyst"
     assert metadata["current_summary"] == "Analysis start"
