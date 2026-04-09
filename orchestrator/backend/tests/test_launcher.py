@@ -471,6 +471,81 @@ def test_normalize_scope_file_deduplicates_completed_phases_in_order():
 
 
 
+def test_supervise_container_refreshes_live_run_metadata_projection_on_heartbeat(monkeypatch):
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "https://projection.example")
+    db.update_run_status(run["id"], "running")
+
+    run_root = Path(run["engagement_root"])
+    workspace = run_root / "workspace"
+    engagement_dir = workspace / "engagements" / "2026-03-30-000003-projection"
+    engagement_dir.mkdir(parents=True, exist_ok=True)
+    (workspace / "engagements" / ".active").write_text(
+        "engagements/2026-03-30-000003-projection\n",
+        encoding="utf-8",
+    )
+    (engagement_dir / "scope.json").write_text(
+        json.dumps(
+            {
+                "status": "in_progress",
+                "current_phase": "consume_test",
+                "phases_completed": ["recon", "collect"],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (engagement_dir / "log.md").write_text("## [14:03] Source analysis summary — source-analyzer\n", encoding="utf-8")
+    with sqlite3.connect(engagement_dir / "cases.db") as connection:
+        connection.execute(
+            "CREATE TABLE cases (id INTEGER PRIMARY KEY AUTOINCREMENT, status TEXT NOT NULL, assigned_agent TEXT)"
+        )
+        connection.executemany(
+            "INSERT INTO cases(status, assigned_agent) VALUES (?, ?)",
+            [("pending", None), ("processing", "source-analyzer")],
+        )
+        connection.commit()
+
+    stale_timestamp = "2026-03-25 00:00:00"
+    db.set_run_updated_at(run["id"], stale_timestamp)
+
+    project_model = db.get_project_by_id(project["id"])
+    user_model = db.get_user_by_token(token, datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S"))
+    run_model = db.get_run_by_id(run["id"])
+    assert project_model is not None
+    assert user_model is not None
+    assert run_model is not None
+
+    monkeypatch.setattr("app.services.launcher._container_status", lambda _name: "running")
+    monkeypatch.setattr("app.services.launcher._ensure_runtime_log_follower", lambda *args, **kwargs: None)
+    monkeypatch.setattr("app.services.launcher._running_container_stall_reason", lambda _run: None)
+
+    def stop_after_first_heartbeat(_seconds):
+        raise RuntimeError("stop-after-heartbeat")
+
+    monkeypatch.setattr("app.services.launcher.time.sleep", stop_after_first_heartbeat)
+
+    from app.services.launcher import _supervise_container
+
+    try:
+        _supervise_container(run_model, project_model, user_model, "container-123", None, io.BytesIO())
+        raise AssertionError("expected heartbeat loop to stop test execution")
+    except RuntimeError as exc:
+        assert str(exc) == "stop-after-heartbeat"
+
+    refreshed = db.get_run_by_id(run["id"])
+    assert refreshed is not None
+    assert refreshed.updated_at != stale_timestamp
+
+    metadata = json.loads((run_root / "run.json").read_text(encoding="utf-8"))
+    assert metadata["updated_at"] == refreshed.updated_at
+    assert metadata["current_phase"] == "consume-test"
+    assert metadata["current_action"]["summary"] == "Processing 1 queued case(s)"
+
+
+
 def test_supervise_container_stops_live_stalled_runtime(monkeypatch):
     client = TestClient(app)
     token = register_and_login(client, "alice")

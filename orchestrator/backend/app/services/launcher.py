@@ -2516,6 +2516,16 @@ def _append_runtime_event(run: Run, event_type: str, phase: str, summary: str) -
         return
 
 
+def _refresh_live_run_metadata_projection(run: Run, project: Project, user: User) -> None:
+    try:
+        refreshed = db.get_run_by_id(run.id) or run
+        from .run_summary import refresh_run_metadata_projection
+
+        refresh_run_metadata_projection(refreshed, project, user)
+    except Exception:
+        return
+
+
 def _write_process_metadata(run: Run, process: subprocess.Popen[bytes]) -> None:
     metadata = {
         "run_id": run.id,
@@ -3219,6 +3229,7 @@ def _supervise_container(
             log_follower = _ensure_runtime_log_follower(run, log_follower, log_handle)
             phase, summary = _heartbeat_context(run)
             _append_runtime_event(run, "run.heartbeat", phase, summary)
+            _refresh_live_run_metadata_projection(run, project, user)
 
             live_stall = _running_container_stall_reason(run)
             if live_stall is not None:
