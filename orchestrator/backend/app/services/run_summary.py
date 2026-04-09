@@ -1035,6 +1035,10 @@ def _sync_run_metadata_projection(
             "engagement_root": run.engagement_root,
             "created_at": run.created_at,
             "updated_at": run.updated_at,
+            # Keep the legacy top-level `phase` projection in sync with
+            # `current_phase` so file-based consumers do not lose UI-visible
+            # phase state when reading run.json directly.
+            "phase": current_phase,
             "current_phase": current_phase,
             "current_task": str(current.get("task_name") or "") or None,
             "current_agent": str(current.get("agent_name") or "") or None,
