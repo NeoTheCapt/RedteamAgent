@@ -40,6 +40,7 @@ from .launcher import (
     _active_runtime_metadata_agents,
     _latest_runtime_metadata_activity_at,
     _run_metadata_has_current_task,
+    _stale_processing_agents,
 )
 
 ALLOWED_STATUSES = {"queued", "running", "completed", "failed"}
@@ -548,6 +549,29 @@ def _reconcile_run_status(run: Run, project: Project | None = None, user: User |
             return failed
 
         last_activity_at = _latest_runtime_activity_at(run)
+        stale_processing_agents = _stale_processing_agents(_active_engagement_dir(run), active_runtime_agents)
+        if current_phase.replace("_", "-") not in EARLY_PHASE_STALL_PHASES and stale_processing_agents:
+            assigned = ", ".join(sorted(stale_processing_agents))
+            if active_runtime_agents:
+                active = ", ".join(sorted(active_runtime_agents))
+                reason_text = (
+                    f"Processing queue assignments ({assigned}) had no matching active runtime agent "
+                    f"after stall grace period elapsed (active agents: {active})."
+                )
+            else:
+                reason_text = (
+                    f"Processing queue assignments ({assigned}) had no matching active runtime agent "
+                    "after stall grace period elapsed."
+                )
+            failed = db.update_run_status(run.id, "failed")
+            _write_run_terminal_reason(
+                failed,
+                reason_code="queue_stalled",
+                reason_text=reason_text,
+            )
+            stop_run_runtime(failed)
+            return failed
+
         mismatch_activity_at = last_activity_at
         if workflow_activity_at is not None and (
             mismatch_activity_at is None or workflow_activity_at > mismatch_activity_at
