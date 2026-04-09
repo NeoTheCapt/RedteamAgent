@@ -37,6 +37,11 @@ VULN_FAMILY_HINTS = {
     "authentication", "access", "control", "business", "logic", "open", "directory", "steganography",
     "policy", "security", "sensitive", "coupon", "graphql", "xml", "redirects", "component",
 }
+GENERIC_FAMILY_TOKENS = {
+    "access", "control", "security", "authentication", "authorization", "business", "logic",
+    "policy", "sensitive", "data", "information", "exposure", "disclosure", "input", "validation",
+    "component", "components", "issue", "issues", "directory", "open", "file",
+}
 
 
 @dataclass
@@ -49,6 +54,17 @@ class BenchmarkItem:
     automation: str
     endpoint_candidates: list[str]
     text_tokens: set[str]
+
+
+@dataclass
+class BenchmarkGroup:
+    key: str
+    category: str
+    automation: str
+    endpoint_candidates: list[str]
+    text_tokens: set[str]
+    member_indexes: list[int]
+    label: str
 
 
 @dataclass
@@ -247,6 +263,45 @@ def tokenize(text: str) -> set[str]:
     return output
 
 
+def specific_family_tokens(tokens: set[str]) -> set[str]:
+    return {token for token in tokens if token in VULN_FAMILY_HINTS and token not in GENERIC_FAMILY_TOKENS}
+
+
+def generic_family_tokens(tokens: set[str]) -> set[str]:
+    return {token for token in tokens if token in VULN_FAMILY_HINTS and token in GENERIC_FAMILY_TOKENS}
+
+
+def build_benchmark_groups(items: list[BenchmarkItem]) -> list[BenchmarkGroup]:
+    grouped: dict[str, BenchmarkGroup] = {}
+    for index, item in enumerate(items):
+        endpoint_key = item.endpoint_candidates[0] if item.endpoint_candidates else normalize_text(item.endpoint or item.category)
+        family_tokens = sorted(specific_family_tokens(item.text_tokens))
+        if not family_tokens:
+            family_tokens = sorted(token for token in item.text_tokens if token not in STOPWORDS)[:3]
+        key = f"{endpoint_key}||{'/'.join(family_tokens[:3])}"
+        group = grouped.get(key)
+        if group is None:
+            group = BenchmarkGroup(
+                key=key,
+                category=item.category,
+                automation=item.automation,
+                endpoint_candidates=list(item.endpoint_candidates),
+                text_tokens=set(item.text_tokens),
+                member_indexes=[index],
+                label=f"{item.category}: {item.challenge}",
+            )
+            grouped[key] = group
+        else:
+            group.member_indexes.append(index)
+            group.text_tokens.update(item.text_tokens)
+            for endpoint in item.endpoint_candidates:
+                if endpoint not in group.endpoint_candidates:
+                    group.endpoint_candidates.append(endpoint)
+            if coverage_bucket(item.automation) in {"high", "medium"} and coverage_bucket(group.automation) not in {"high", "medium"}:
+                group.automation = item.automation
+    return list(grouped.values())
+
+
 def normalize_endpoint(candidate: str) -> str:
     candidate = candidate.strip().strip("`'")
     candidate = re.sub(r"^(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+", "", candidate, flags=re.I)
@@ -322,23 +377,25 @@ def endpoint_score(finding_eps: Iterable[str], benchmark_eps: Iterable[str]) -> 
     return best_score, best_label
 
 
-def match_score(finding: Finding, item: BenchmarkItem) -> tuple[int, list[str], str]:
-    shared = sorted((finding.text_tokens & item.text_tokens) & VULN_FAMILY_HINTS)
+def match_score(finding: Finding, item: BenchmarkItem | BenchmarkGroup) -> tuple[int, list[str], str]:
+    shared_specific = sorted(specific_family_tokens(finding.text_tokens) & specific_family_tokens(item.text_tokens))
+    shared_generic = sorted(generic_family_tokens(finding.text_tokens) & generic_family_tokens(item.text_tokens))
     ep_score, ep_label = endpoint_score(finding.endpoint_candidates, item.endpoint_candidates)
-    family_overlap = len(shared)
     category_overlap = 1 if normalize_text(item.category) in normalize_text(finding.owasp_category + ' ' + finding.title + ' ' + finding.finding_type) else 0
-    score = ep_score + min(family_overlap, 4) + category_overlap
-    if any(token in finding.text_tokens for token in [item.category.lower(), item.challenge.lower()]):
-        score += 1
-    return score, shared, ep_label
+    score = ep_score + (len(shared_specific) * 2) + min(len(shared_generic), 1) + category_overlap
+    return score, shared_specific or shared_generic, ep_label
 
 
-def choose_matches(findings: list[Finding], items: list[BenchmarkItem]) -> list[Match]:
+def choose_matches(findings: list[Finding], items: list[BenchmarkItem | BenchmarkGroup]) -> list[Match]:
     candidates: list[Match] = []
     for f_idx, finding in enumerate(findings):
         for b_idx, item in enumerate(items):
             score, shared, ep_label = match_score(finding, item)
-            if score >= 7 and (shared or ep_label != "none"):
+            if ep_label == "none":
+                continue
+            if score >= 8 and shared:
+                candidates.append(Match(score=score, finding_index=f_idx, benchmark_index=b_idx, shared_tokens=shared, endpoint_match=ep_label))
+            elif score >= 10 and ep_label.startswith("exact:"):
                 candidates.append(Match(score=score, finding_index=f_idx, benchmark_index=b_idx, shared_tokens=shared, endpoint_match=ep_label))
     candidates.sort(key=lambda entry: (-entry.score, entry.finding_index, entry.benchmark_index))
     used_findings: set[int] = set()
@@ -403,6 +460,8 @@ def main() -> None:
     findings_text = findings_path.read_text(encoding="utf-8", errors="replace") if findings_path.exists() else ""
     findings = parse_findings_markdown(findings_text)
     matches = choose_matches(findings, items)
+    groups = build_benchmark_groups(items)
+    group_matches = choose_matches(findings, groups)
 
     matched_item_indexes = {entry.benchmark_index for entry in matches}
     matched_finding_indexes = {entry.finding_index for entry in matches}
@@ -413,10 +472,24 @@ def main() -> None:
     recall = ratio(tp, tp + fn)
     f1 = 0.0 if precision + recall == 0 else (2 * precision * recall / (precision + recall))
 
+    matched_group_indexes = {entry.benchmark_index for entry in group_matches}
+    matched_group_finding_indexes = {entry.finding_index for entry in group_matches}
+    scenario_tp = len(group_matches)
+    scenario_fp = max(len(findings) - scenario_tp, 0)
+    scenario_fn = max(len(groups) - scenario_tp, 0)
+    scenario_precision = ratio(scenario_tp, scenario_tp + scenario_fp)
+    scenario_recall = ratio(scenario_tp, scenario_tp + scenario_fn)
+    scenario_f1 = 0.0 if scenario_precision + scenario_recall == 0 else (2 * scenario_precision * scenario_recall / (scenario_precision + scenario_recall))
+
     automation_items = [index for index, item in enumerate(items) if coverage_bucket(item.automation) in {"high", "medium"}]
     automation_tp = sum(1 for index in automation_items if index in matched_item_indexes)
     automation_fn = len(automation_items) - automation_tp
     automation_recall = ratio(automation_tp, automation_tp + automation_fn)
+
+    automation_groups = [index for index, group in enumerate(groups) if coverage_bucket(group.automation) in {"high", "medium"}]
+    scenario_automation_tp = sum(1 for index in automation_groups if index in matched_group_indexes)
+    scenario_automation_fn = len(automation_groups) - scenario_automation_tp
+    scenario_automation_recall = ratio(scenario_automation_tp, scenario_automation_tp + scenario_automation_fn)
 
     by_category: dict[str, dict[str, int]] = {}
     for index, item in enumerate(items):
@@ -442,7 +515,16 @@ def main() -> None:
     print(f"- f1: {fmt_ratio(f1)}")
     print(f"- automation_actionable_items (high/medium): {len(automation_items)}")
     print(f"- automation_actionable_recall: {fmt_ratio(automation_recall)}")
-    print("- matching_policy: conservative heuristic match on endpoint evidence + vulnerability-family token overlap (target-specific hardcoding disabled)")
+    print(f"- benchmark_scenarios: {len(groups)}")
+    print(f"- scenario_true_positives: {scenario_tp}")
+    print(f"- scenario_false_positives: {scenario_fp}")
+    print(f"- scenario_false_negatives: {scenario_fn}")
+    print(f"- scenario_precision: {fmt_ratio(scenario_precision)}")
+    print(f"- scenario_recall: {fmt_ratio(scenario_recall)}")
+    print(f"- scenario_f1: {fmt_ratio(scenario_f1)}")
+    print(f"- scenario_automation_actionable_items (high/medium): {len(automation_groups)}")
+    print(f"- scenario_automation_actionable_recall: {fmt_ratio(scenario_automation_recall)}")
+    print("- matching_policy: conservative heuristic match on endpoint evidence + specific vulnerability-family token overlap (target-specific hardcoding disabled)")
 
     print("\n#### Category coverage\n")
     for category, counts in sorted(by_category.items(), key=lambda pair: (pair[0].lower(), pair[0])):

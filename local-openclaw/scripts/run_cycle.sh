@@ -117,11 +117,12 @@ if sections:
 PY
 }
 
-extract_local_benchmark_metrics() {
+extract_local_benchmark_metrics_json() {
   local context_file="$STATE_DIR/latest-context.md"
   [[ -f "$context_file" ]] || return 0
   python3 - "$context_file" <<'PY'
 from pathlib import Path
+import json
 import sys
 
 path = Path(sys.argv[1])
@@ -139,11 +140,67 @@ for line in lines:
         if key and value:
             metrics[key.strip()] = value.strip()
 if metrics:
-    precision = metrics.get('precision', '?')
-    recall = metrics.get('recall', '?')
-    f1 = metrics.get('f1', '?')
-    actionable = metrics.get('automation_actionable_recall', '?')
-    print(f"Local benchmark: precision {precision} / recall {recall} / f1 {f1} / actionable_recall {actionable}")
+    print(json.dumps(metrics))
+PY
+}
+
+extract_local_benchmark_metrics() {
+  local metrics_json
+  metrics_json="$(extract_local_benchmark_metrics_json || true)"
+  [[ -n "$metrics_json" ]] || return 0
+  python3 - "$metrics_json" <<'PY'
+import json
+import sys
+
+metrics = json.loads(sys.argv[1])
+precision = metrics.get('precision', '?')
+recall = metrics.get('recall', '?')
+f1 = metrics.get('f1', '?')
+scenario_precision = metrics.get('scenario_precision', '?')
+scenario_actionable = metrics.get('scenario_automation_actionable_recall', metrics.get('automation_actionable_recall', '?'))
+print(
+    f"Local benchmark: precision {precision} / recall {recall} / f1 {f1} / "
+    f"scenario_precision {scenario_precision} / scenario_actionable_recall {scenario_actionable}"
+)
+PY
+}
+
+evaluate_local_benchmark_gate() {
+  local mapping_file="$STATE_DIR/target-benchmarks.json"
+  local metrics_json
+  [[ -f "$mapping_file" ]] || return 0
+  metrics_json="$(extract_local_benchmark_metrics_json || true)"
+  [[ -n "$metrics_json" ]] || return 0
+  python3 - "$mapping_file" "$metrics_json" <<'PY'
+from pathlib import Path
+import json
+import sys
+
+mapping = json.loads(Path(sys.argv[1]).read_text(encoding='utf-8'))
+metrics = json.loads(sys.argv[2])
+entry = ((mapping.get('targets') or {}).get('http://127.0.0.1:8000') or {})
+gate = entry.get('healthy_skip_gate') or {}
+if not gate:
+    raise SystemExit(0)
+
+reasons = []
+for field, metric_key in [
+    ('min_scenario_precision', 'scenario_precision'),
+    ('min_scenario_automation_actionable_recall', 'scenario_automation_actionable_recall'),
+]:
+    if field not in gate:
+        continue
+    try:
+        current = float(metrics.get(metric_key, '0') or 0)
+    except ValueError:
+        current = 0.0
+    threshold = float(gate[field])
+    if current < threshold:
+        reasons.append(f"{metric_key}={current:.3f} < {threshold:.3f}")
+
+if reasons:
+    print('; '.join(reasons))
+    raise SystemExit(1)
 PY
 }
 
@@ -303,6 +360,7 @@ openclaw_status=0
 cycle_status="success"
 openclaw_ran="false"
 summary_excerpt=""
+benchmark_gate_reason=""
 okx_run_id=""
 local_run_id=""
 okx_run_status=""
@@ -381,6 +439,12 @@ else
       fi
 
       if grep -q 'NO_ACTIONABLE_BUG_HEALTHY_RUNS' "$openclaw_log" 2>/dev/null; then
+        benchmark_gate_reason="$(evaluate_local_benchmark_gate || true)"
+        if [[ -n "$benchmark_gate_reason" ]]; then
+          cycle_status="failed_benchmark_gate"
+          log "benchmark gate blocked healthy skip: $benchmark_gate_reason"
+          break
+        fi
         cycle_status="skipped_healthy_runs"
         log "openclaw reported no actionable bug; leaving current runs in place and ending this cycle"
         break
@@ -456,6 +520,9 @@ cat > "$report_path" <<EOF
 ## Final Observed Run Status
 - okx_run_status: ${okx_run_status:-unknown}
 - local_run_status: ${local_run_status:-unknown}
+
+## Benchmark Gate
+- local_benchmark_gate: ${benchmark_gate_reason:-pass}
 
 ## Exit Codes
 - prep_exit_code: $prep_status
