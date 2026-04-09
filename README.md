@@ -12,13 +12,13 @@
     <img src="https://img.shields.io/badge/tools-Docker%20containerized-blue" alt="Docker">
     <img src="https://img.shields.io/badge/agents-8%20specialized-orange" alt="Agents">
     <img src="https://img.shields.io/badge/skills-32%20attack%20methodologies-red" alt="Skills">
-    <img src="https://img.shields.io/badge/references-78%20files-green" alt="References">
+    <img src="https://img.shields.io/badge/references-79%20files-green" alt="References">
   </p>
 </p>
 
 ---
 
-An autonomous red team simulation agent that works with **Claude Code**, **OpenCode**, and **Codex**. It transforms any workspace into a full penetration testing environment for CTF/lab targets — featuring **8 AI agents**, **containerized Kali tools**, a **streaming case collection pipeline**, and **78 security reference files**.
+An autonomous red team simulation agent that works with **Claude Code**, **OpenCode**, and **Codex**. It transforms any workspace into a full penetration testing environment for CTF/lab targets — featuring **8 AI agents**, **containerized Kali tools**, a **streaming case collection pipeline**, and **79 security reference files**.
 
 ## Demo
 
@@ -33,9 +33,10 @@ An autonomous red team simulation agent that works with **Claude Code**, **OpenC
 - **Intelligence collection** — `intel.md` accumulates tech stack, people, domains, credentials from recon through exploitation; OSINT agent enriches with CVE, breach, DNS history, and social data
 - **8 specialized agents** — operator, recon-specialist, source-analyzer, vulnerability-analyst, exploit-developer, fuzzer, osint-analyst, report-writer
 - **Containerized tools** — all pentest tools run in Docker (Kali toolbox, mitmproxy, Katana, optional Metasploit RPC for OpenCode), zero local installation
-- **Case collection pipeline** — SQLite-backed queue with 4 producers, automatic type classification, zero-token dispatcher
-- **78 reference files** — OWASP Top 10:2025, API Security 2023, offensive tactics, AD/Kerberos attacks
+- **Case collection pipeline** — SQLite-backed queue with 4 producers, automatic type classification, zero-token dispatcher, atomic fetch-dispatch pairing
+- **79 reference files** — OWASP Top 10:2025, API Security 2023, offensive tactics, AD/Kerberos attacks
 - **Resume support** — interrupt and continue any engagement without losing progress
+- **Unattended hardening** — auto-resume after stalls, queue stall recovery, finding deduplication, surface coverage enforcement, and automatic report synthesis when report artifacts are missing or incomplete
 
 ## Installation
 
@@ -193,7 +194,7 @@ Use the local web UI when you want to manage multiple workspaces or inspect live
 - Default URL: `http://127.0.0.1:18000`
 - `./orchestrator/run.sh` bootstraps the backend virtualenv, installs frontend dependencies if needed, and builds the frontend before starting.
 - The UI exposes projects, live run status, task/phase timelines, artifacts, and terminal run metadata from the runs API.
-- Recent backend work also auto-recovers incomplete runs after supervisor loss or backend restarts, so the UI is suitable for long-running unattended sessions.
+- The backend auto-recovers incomplete runs after supervisor loss or backend restarts, synthesizes missing reports from engagement artifacts, and enforces completion health checks — making the UI suitable for long-running unattended sessions.
 
 ## Shared Outputs
 
@@ -409,7 +410,7 @@ Agent prompts and commands are maintained **only** in OpenCode format (`.opencod
 | Problem | Solution |
 |---------|----------|
 | Docker images fail to build | `docker system prune -af && cd agent/docker && docker compose build --no-cache` |
-| Docker build fails while fetching Kali packages | Re-run the build. The Dockerfiles pin Kali to the official rotator and retry automatically, but transient mirror/network failures can still require another attempt. |
+| Docker build fails while fetching Kali packages | Re-run the build. The Dockerfiles configure apt retry/timeout and pin Kali to the official mirror, but transient network failures can still require another attempt. |
 | Katana doesn't start | Check: `docker logs redteam-katana` |
 | Agent refuses to test target | Adjust auth in `agent/CLAUDE.md` or `agent/.opencode/instructions/INSTRUCTIONS.md` |
 | Queue shows 0 cases | Run `/status` — check Collect phase was executed |
