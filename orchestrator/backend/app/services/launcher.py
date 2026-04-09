@@ -2989,6 +2989,9 @@ def _launch_runtime_container(
     passthrough_keys = [
         "REDTEAM_OPENCODE_MODEL",
         "REDTEAM_OPENCODE_SMALL_MODEL",
+        "REDTEAM_CONTINUOUS_TARGETS",
+        "CONTINUOUS_OBSERVATION_TARGETS",
+        "OBSERVATION_SECONDS",
         "OPENAI_API_KEY",
         "OPENAI_BASE_URL",
         "OPENAI_MODEL",
