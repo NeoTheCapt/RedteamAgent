@@ -6,6 +6,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib/params.sh"
+source "$SCRIPT_DIR/lib/placeholders.sh"
 source "$SCRIPT_DIR/lib/source_queue_filter.sh"
 
 DB="${1:-}"
@@ -56,6 +57,13 @@ case "$ACTION" in
     if ! [[ "$LIMIT" =~ ^[0-9]+$ ]]; then
       echo "ERROR: limit must be a positive integer" >&2
       exit 1
+    fi
+
+    IN_FLIGHT_FOR_AGENT=$(sql "SELECT COUNT(*) FROM cases WHERE status='processing' AND assigned_agent='${AGENT}';")
+    if [[ "${IN_FLIGHT_FOR_AGENT:-0}" =~ ^[0-9]+$ ]] && (( IN_FLIGHT_FOR_AGENT > 0 )); then
+      echo "[]"
+      echo "Refusing fetch for ${AGENT}: ${IN_FLIGHT_FOR_AGENT} case(s) already processing" >&2
+      exit 0
     fi
 
     sqlite3 "$DB" ".timeout 5000" -json "
@@ -150,13 +158,16 @@ case "$ACTION" in
       [[ "$TYPE" == "null" || -z "$TYPE" ]] && TYPE="unknown"
       [[ "$SOURCE" == "null" || -z "$SOURCE" ]] && SOURCE="requeue"
       [[ -z "$URL_PATH" ]] && URL_PATH="$(extract_url_path "$URL")"
+      if contains_queue_placeholder "$URL" || contains_queue_placeholder "$URL_PATH"; then
+        continue
+      fi
       [[ -z "$QUERY_PARAMS" ]] && QUERY_PARAMS="$(extract_query_params "$URL" | jq -c '.')"
       [[ -z "$BODY_PARAMS" ]] && BODY_PARAMS="{}"
       [[ -z "$PATH_PARAMS" ]] && PATH_PARAMS="$(extract_path_params "$URL_PATH" | jq -c '.')"
       [[ -z "$COOKIE_PARAMS" ]] && COOKIE_PARAMS="{}"
       [[ -z "$HEADERS" ]] && HEADERS="{}"
       [[ -z "$RESPONSE_HEADERS" ]] && RESPONSE_HEADERS="{}"
-      [[ -z "$PARAMS_KEY_SIG" ]] && PARAMS_KEY_SIG="$(generate_params_sig "$QUERY_PARAMS" "$BODY_PARAMS")"
+      [[ -z "$PARAMS_KEY_SIG" ]] && PARAMS_KEY_SIG="$(generate_params_sig "$QUERY_PARAMS" "$BODY_PARAMS" "$URL")"
 
       if [[ -z "$URL" || -z "$URL_PATH" ]]; then
         echo "ERROR: requeue line missing usable url/url_path" >&2
@@ -170,6 +181,13 @@ case "$ACTION" in
       if ! should_enqueue_case "$SOURCE" "$TYPE" "$METHOD" "$URL" "$URL_PATH"; then
         continue
       fi
+
+      REQUEUE_STATUS="pending"
+      case "$TYPE" in
+        image|video|font|archive)
+          REQUEUE_STATUS="skipped"
+          ;;
+      esac
 
       # Escape single quotes for SQLite
       METHOD="${METHOD//\'/\'\'}"
@@ -200,7 +218,7 @@ case "$ACTION" in
           '${QUERY_PARAMS}', '${BODY_PARAMS}', '${PATH_PARAMS}', '${COOKIE_PARAMS}',
           '${HEADERS}', '${BODY}', '${CONTENT_TYPE}', ${CONTENT_LENGTH},
           ${RESPONSE_STATUS}, '${RESPONSE_HEADERS}', ${RESPONSE_SIZE}, '${RESPONSE_SNIPPET}',
-          '${TYPE}', '${SOURCE}', 'pending', '${PARAMS_KEY_SIG}',
+          '${TYPE}', '${SOURCE}', '${REQUEUE_STATUS}', '${PARAMS_KEY_SIG}',
           NULL, NULL
         )
         ON CONFLICT(method, url_path, params_key_sig) DO UPDATE SET
@@ -219,7 +237,10 @@ case "$ACTION" in
           response_snippet = excluded.response_snippet,
           type = excluded.type,
           source = excluded.source,
-          status = 'pending',
+          status = CASE
+            WHEN excluded.type IN ('image', 'video', 'font', 'archive') THEN 'skipped'
+            ELSE 'pending'
+          END,
           assigned_agent = NULL,
           consumed_at = NULL
         WHERE cases.type = 'unknown'

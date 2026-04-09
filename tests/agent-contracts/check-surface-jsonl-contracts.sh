@@ -25,6 +25,22 @@ grep -q '"surface_type": "object_reference"' "$ENG_DIR/surfaces.jsonl"
 grep -q '"target": "GET /orders/7"' "$ENG_DIR/surfaces.jsonl"
 
 cat <<'EOF' | "$ROOT/agent/scripts/append_surface_jsonl.sh" "$ENG_DIR"
+{"surface_type":"workflow_token","target":"GET /rest/continue-code","source":"source-analyzer","rationale":"legacy producer still emits new while surfacing a concrete continuation token endpoint","status":"new"}
+{"surface_type":"auth_entry","target":"GET /account/login?forward=...","source":"source-analyzer","rationale":"latest fixed-target run emitted follow_up for login-forward auth surface","status":"follow_up"}
+EOF
+
+grep -q '"target": "GET /rest/continue-code"' "$ENG_DIR/surfaces.jsonl"
+grep -q '"target": "GET /account/login?forward=..."' "$ENG_DIR/surfaces.jsonl"
+python3 - <<'PY' "$ENG_DIR/surfaces.jsonl"
+import json, sys
+rows = [json.loads(line) for line in open(sys.argv[1], encoding='utf-8') if line.strip()]
+continue_code = next(row for row in rows if row["target"] == "GET /rest/continue-code")
+follow_up = next(row for row in rows if row["target"] == "GET /account/login?forward=...")
+assert continue_code["status"] == "discovered", continue_code
+assert follow_up["status"] == "discovered", follow_up
+PY
+
+cat <<'EOF' | "$ROOT/agent/scripts/append_surface_jsonl.sh" "$ENG_DIR"
 {"category":"auth-workflow","path":"*/account/login-pwd/forget, */account/oauth","source":"source-analyzer","reason":"robots discloses recovery and auth-flow route families","priority":"medium"}
 {"surface_type":"identity_verification","target":"*/kyc$, */kyb/","source":"source-analyzer","rationale":"robots discloses onboarding and verification routes","status":"discovered"}
 {"surface_type":"p2p_trading","target":"*/p2p/order, */p2p/dispute","source":"source-analyzer","rationale":"robots reveals transaction and dispute workflow families","status":"discovered"}
@@ -99,6 +115,15 @@ after_count=$(wc -l < "$ENG_DIR/surfaces.jsonl")
 grep -q '"target": "GET /real/session/token"' "$ENG_DIR/surfaces.jsonl"
 
 before_count=$(wc -l < "$ENG_DIR/surfaces.jsonl")
+"$ROOT/agent/scripts/append_surface.sh" "$ENG_DIR" account_recovery "PUT http://127.0.0.1:8000/rest/continue-code-fixIt/apply/<continueCode>" vulnerability-analyst "templated continuation segment is not concrete" "direct append" discovered
+"$ROOT/agent/scripts/append_surface.sh" "$ENG_DIR" workflow_token "GET /real/direct/token" source-analyzer "concrete token endpoint remains importable" "direct append" discovered
+
+after_count=$(wc -l < "$ENG_DIR/surfaces.jsonl")
+[[ "$after_count" -eq $((before_count + 1)) ]]
+! grep -q 'real/continue-code-fixIt/apply/<continueCode>' "$ENG_DIR/surfaces.jsonl"
+grep -q '"target": "GET /real/direct/token"' "$ENG_DIR/surfaces.jsonl"
+
+before_count=$(wc -l < "$ENG_DIR/surfaces.jsonl")
 cat <<'EOF' | "$ROOT/agent/scripts/append_surface_jsonl.sh" "$ENG_DIR"
 {"surface_type":"account_recovery","target":"POST /rest/user/reset-password and GET /rest/user/security-question?email=<email>","source":"source-analyzer","rationale":"mixed advisory should preserve the concrete recovery flow while normalizing the templated fragment","status":"discovered"}
 EOF
@@ -107,5 +132,18 @@ after_count=$(wc -l < "$ENG_DIR/surfaces.jsonl")
 [[ "$after_count" -eq $((before_count + 1)) ]]
 grep -q '"target": "POST /rest/user/reset-password and GET /rest/user/security-question?email=..."' "$ENG_DIR/surfaces.jsonl"
 ! grep -q 'security-question?email=<email>' "$ENG_DIR/surfaces.jsonl"
+
+before_count=$(wc -l < "$ENG_DIR/surfaces.jsonl")
+cat <<'EOF' | "$ROOT/agent/scripts/append_surface_jsonl.sh" "$ENG_DIR"
+{"surface_type":"auth_entry","target":"GET /account/login?forward=<encoded-url>","source":"source-analyzer","rationale":"login-forward flow is still a valid auth surface even when the forward value is unknown","status":"discovered"}
+{"surface_type":"object_reference","target":"GET /v3/users/local-config/settings?uuid=<profile.uuid>","source":"source-analyzer","rationale":"bundle ties local-config reads to a uuid query value that may vary per profile","status":"discovered"}
+{"surface_type":"object_reference","target":"GET /orders/<orderId>","source":"source-analyzer","rationale":"path placeholder remains too vague and should still be rejected","status":"discovered"}
+EOF
+
+after_count=$(wc -l < "$ENG_DIR/surfaces.jsonl")
+[[ "$after_count" -eq $((before_count + 2)) ]]
+grep -q '"target": "GET /account/login?forward=..."' "$ENG_DIR/surfaces.jsonl"
+grep -q '"target": "GET /v3/users/local-config/settings?uuid=..."' "$ENG_DIR/surfaces.jsonl"
+! grep -q '"target": "GET /orders/<orderId>"' "$ENG_DIR/surfaces.jsonl"
 
 echo "surface jsonl contracts: ok"

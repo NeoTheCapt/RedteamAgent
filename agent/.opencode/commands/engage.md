@@ -115,7 +115,16 @@ printf "[]\n" > "$DIR/intel-secrets.json"
 if [ -f ".redteam-seed/auth.json" ]; then
   cp ".redteam-seed/auth.json" "$DIR/auth.json"
 else
-  echo "{}" > "$DIR/auth.json"
+  cat > "$DIR/auth.json" << EOF
+{
+  "cookies": {},
+  "headers": {},
+  "tokens": {},
+  "discovered_credentials": [],
+  "validated_credentials": [],
+  "credentials": []
+}
+EOF
 fi
 
 sqlite3 "$DIR/cases.db" < scripts/schema.sql
@@ -149,12 +158,14 @@ For later temp files that should preserve literal Markdown/JSON/JSONL content, p
 Never pass raw JSONL directly to `append_surface.sh`. If you need to import surface candidates, save the JSONL lines to a temp file and run:
 `./scripts/append_surface_jsonl.sh "$DIR" < "$TMP_JSONL"`
 
-## Step 3: Environment Check (Docker)
+## Step 3: Environment Check (Runtime Prerequisites)
 
-All pentest tools run in Docker containers. Check prerequisites:
+Check prerequisites for the active runtime mode:
 
 ```bash
 source scripts/lib/container.sh
+
+RUNTIME_MODE=$(runtime_mode)
 
 echo ""
 echo "=== Docker Check ==="
@@ -166,7 +177,11 @@ check_images
 
 echo ""
 echo "=== Local Tools ==="
-for tool in curl jq sqlite3 docker; do
+tools=(curl jq sqlite3)
+if [ "$RUNTIME_MODE" != "local" ]; then
+  tools+=(docker)
+fi
+for tool in "${tools[@]}"; do
   if which "$tool" >/dev/null 2>&1; then
     echo "[OK] $tool"
   else
@@ -175,11 +190,13 @@ for tool in curl jq sqlite3 docker; do
 done
 ```
 
-If images are missing, tell the user:
+If images are missing in Docker runtime, tell the user:
 "Docker images not built yet. Run: `cd docker && docker compose build`"
 Wait for user to confirm images are built before proceeding.
 
-If Docker is not installed, the engagement CANNOT proceed. Tell the user to install Docker first.
+If `runtime_mode` is `local`, do NOT stop just because the `docker` CLI is absent. Local runtime already treats `check_docker` and `check_images` success as sufficient, and only `curl`, `jq`, and `sqlite3` are mandatory in that mode.
+
+If Docker runtime is active and Docker is not installed, the engagement CANNOT proceed. Tell the user to install Docker first.
 
 ## Step 4: Configure Authentication
 
@@ -218,6 +235,9 @@ Start the pipeline regardless of auth choice (skip or configured):
    Never inline the background launch + PID-file redirect yourself. Do not write one-liners like:
    `DIR="..." && ./scripts/katana_ingest.sh "$DIR" ... & katana_ingest_pid=$!; printf ... > "$DIR/pids/katana_ingest.pid"`
    because bash/zsh can evaluate the redirect with an empty `$DIR` and write into `/pids/...`.
+   If you want to capture helper output, keep the temp files inside the engagement workspace, for example:
+   `KATANA_START_OUT="$DIR/scans/katana_start.out"; KATANA_START_ERR="$DIR/scans/katana_start.err"; ./scripts/start_katana_ingest_background.sh "$DIR" >"$KATANA_START_OUT" 2>"$KATANA_START_ERR" || { cat "$KATANA_START_ERR"; exit 1; }; cat "$KATANA_START_OUT"`
+   Never redirect katana helper output into `/tmp` or any other path outside the workspace. OpenCode treats those as external-directory writes and will reject the command before recon starts.
    Never launch `katana` directly from bash. Only `./scripts/start_katana_ingest_background.sh`, `./scripts/katana_ingest.sh`, or `start_katana` may start crawling.
    (Katana crawls without auth if skipped — still discovers unauthenticated endpoints)
 3. ALL subsequent phases (Recon → Collect → Consume & Test → Exploit → Report) proceed normally
@@ -285,9 +305,12 @@ Follow the case-dispatching skill methodology. For each cycle:
 1. `./scripts/dispatcher.sh "$DIR/cases.db" reset-stale 10`
 2. `./scripts/dispatcher.sh "$DIR/cases.db" stats`
 3. Fetch and dispatch exactly one non-empty batch at a time → wait for that single subagent result → mark done / requeue any outcomes → then fetch the next batch
-4. Do NOT launch overlapping `task` calls inside consume-test, even if multiple batch types are ready at once
-5. If credentials are discovered during consume-test, write them to auth.json and in that SAME turn dispatch a bounded exploit-developer auth-validation task; never stop after only a credential-validation log/status entry
-6. Continue until queue empty + producers stopped
+4. ALWAYS fetch via `./scripts/fetch_batch_to_file.sh "$DIR/cases.db" <type> <limit> <agent> "$BATCH_FILE"`; it saves the full JSON batch to disk and prints only compact `BATCH_*` metadata for the model
+5. NEVER `cat "$BATCH_FILE"`, paste raw fetched JSON into the model context, or stop after a non-empty fetch without the matching `task(...)` call in that SAME turn
+6. Treat the non-empty fetch and matching `task(...)` call as one atomic consume-test step. Do NOT decide that the fetch alone satisfied the "one step" rule.
+7. Do NOT launch overlapping `task` calls inside consume-test, even if multiple batch types are ready at once
+8. If credentials are discovered during consume-test, write them to auth.json and in that SAME turn dispatch a bounded exploit-developer auth-validation task; never stop after only a credential-validation log/status entry
+9. Continue until queue empty + producers stopped
 
 Before leaving Test phase, run:
 `./scripts/check_collection_health.sh "$DIR"`

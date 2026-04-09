@@ -10,7 +10,7 @@ import subprocess
 import tempfile
 import time
 from collections import deque
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from threading import Lock, Thread
 from pathlib import Path
 from urllib.parse import quote, urlsplit, urlunsplit
@@ -23,7 +23,7 @@ from ..models.user import User
 from ..security import create_session_token, session_expiry_timestamp
 
 
-_ACTIVE_CONTAINER_SUPERVISORS: set[int] = set()
+_ACTIVE_CONTAINER_SUPERVISORS: dict[int, object] = {}
 _ACTIVE_CONTAINER_SUPERVISORS_LOCK = Lock()
 
 
@@ -66,6 +66,42 @@ _CONTAINER_STATUS_LOOKUP_UNAVAILABLE = "__lookup_unavailable__"
 
 _LOOPBACK_RUNTIME_HOSTS = {"127.0.0.1", "localhost", "0.0.0.0", "::1"}
 _RUNTIME_HOST_GATEWAY_ALIAS = "host.docker.internal"
+
+
+def _normalize_auth_payload(raw: str) -> str:
+    payload: dict[str, object]
+    try:
+        parsed = json.loads(raw) if raw.strip() else {}
+    except json.JSONDecodeError:
+        parsed = {}
+    payload = parsed if isinstance(parsed, dict) else {}
+
+    cookies = payload.get("cookies") if isinstance(payload.get("cookies"), dict) else {}
+    headers = payload.get("headers") if isinstance(payload.get("headers"), dict) else {}
+    tokens = payload.get("tokens") if isinstance(payload.get("tokens"), dict) else {}
+    discovered = payload.get("discovered_credentials") if isinstance(payload.get("discovered_credentials"), list) else []
+    validated = payload.get("validated_credentials") if isinstance(payload.get("validated_credentials"), list) else []
+    legacy = payload.get("credentials") if isinstance(payload.get("credentials"), list) else []
+
+    merged_legacy: list[object] = []
+    seen: set[str] = set()
+    for item in [*discovered, *validated, *legacy]:
+        marker = json.dumps(item, sort_keys=True, ensure_ascii=False)
+        if marker in seen:
+            continue
+        seen.add(marker)
+        merged_legacy.append(item)
+
+    normalized = dict(payload)
+    normalized["cookies"] = cookies
+    normalized["headers"] = headers
+    normalized["tokens"] = tokens
+    normalized["discovered_credentials"] = discovered or legacy
+    normalized["validated_credentials"] = validated
+    normalized["credentials"] = merged_legacy
+    return json.dumps(normalized, separators=(",", ":"), ensure_ascii=False)
+
+
 _AUTO_RESUME_REASON_CODES = {
     "engagement_incomplete",
     "incomplete_stop",
@@ -81,7 +117,13 @@ _AUTO_RESUME_REASON_CODES = {
 _AUTO_RESUME_LIMIT = 3
 
 RUN_STALL_TIMEOUT_SECONDS = 900
-EARLY_PHASE_STALL_TIMEOUT_SECONDS = 180
+PROCESSING_AGENT_MISMATCH_GRACE_SECONDS = 120
+PENDING_QUEUE_DISPATCH_GRACE_SECONDS = 120
+# Real targets can spend several minutes in autonomous initialization/recon before the
+# first queue item or observed path lands. Keep the live launcher watchdog aligned with
+# the API reconciler so we do not fail healthy slow-start recon while subagent dispatch
+# is still warming up.
+EARLY_PHASE_STALL_TIMEOUT_SECONDS = 300
 EARLY_PHASE_STALL_PHASES = {"unknown", "recon", "collect"}
 
 
@@ -399,6 +441,17 @@ def _normalize_scope_file(scope_path: Path, *, run: Run | None = None) -> dict[s
             payload["phases_completed"] = normalized
             changed = True
 
+    if status_name == "complete" and not str(payload.get("end_time") or "").strip():
+        ended_at = str(getattr(run, "updated_at", "") or "").strip()
+        if ended_at:
+            try:
+                parsed_end_time = datetime.strptime(ended_at, "%Y-%m-%d %H:%M:%S").replace(tzinfo=UTC)
+            except ValueError:
+                parsed_end_time = None
+            if parsed_end_time is not None:
+                payload["end_time"] = parsed_end_time.isoformat(timespec="seconds").replace("+00:00", "Z")
+                changed = True
+
     disk_payload = payload
     context = _loopback_display_context(run)
     returned_payload = _rewrite_artifact_value(payload, context)
@@ -505,15 +558,21 @@ def _parse_runtime_activity_timestamp(value: object) -> float | None:
 
     for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%SZ"):
         try:
-            return datetime.strptime(text, fmt).timestamp()
+            parsed = datetime.strptime(text, fmt)
         except ValueError:
             continue
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=UTC)
+        return parsed.timestamp()
 
     try:
         normalized = text.replace("Z", "+00:00")
-        return datetime.fromisoformat(normalized).timestamp()
+        parsed = datetime.fromisoformat(normalized)
     except ValueError:
         return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.timestamp()
 
 
 def _iter_runtime_activity_timestamps(payload):
@@ -530,6 +589,16 @@ def _iter_runtime_activity_timestamps(payload):
 
 
 _TEXT_LOG_TIMESTAMP_PATTERN = re.compile(r"\b(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)\b")
+_TEXT_LOG_TIMESTAMP_OPTIONAL_TZ_PATTERN = re.compile(r"\b(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)\b|\b(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?)\b")
+_FETCH_BATCH_BLOCK_PATTERN = re.compile(r"(?ms)^BATCH_FILE=.*?(?=^BATCH_FILE=|\Z)")
+_FETCH_BATCH_COUNT_PATTERN = re.compile(r"(?m)^BATCH_COUNT=(\d+)\s*$")
+_FETCH_BATCH_AGENT_PATTERN = re.compile(r"(?m)^BATCH_AGENT=([^\n]+)\s*$")
+_FETCH_BATCH_TYPE_PATTERN = re.compile(r"(?m)^BATCH_TYPE=([^\n]+)\s*$")
+_FETCH_BATCH_IDS_PATTERN = re.compile(r"(?m)^BATCH_IDS=([^\n]+)\s*$")
+_SUBAGENT_SESSION_TITLE_PATTERN = re.compile(r"title=.*?\(@(?P<agent>[A-Za-z0-9_-]+) subagent\)")
+_SUBAGENT_STREAM_PATTERN = re.compile(r"service=llm\b.*?\bagent=(?P<agent>[A-Za-z0-9_-]+)\b.*?\bmode=subagent\b")
+_SUBAGENT_SESSION_ID_PATTERN = re.compile(r"\b(?:id|sessionID)=(?P<session>ses_[A-Za-z0-9]+)\b")
+_INLINE_SESSION_CREATED_AT_PATTERN = re.compile(r'"created":\s*(\d{10,13})')
 _RUNTIME_ACTIVITY_FUTURE_SKEW_SECONDS = 5 * 60
 
 
@@ -579,13 +648,237 @@ def _latest_process_log_activity_at(path: Path, *, max_lines: int = 400) -> floa
     return _path_mtime(path)
 
 
+def _latest_nonempty_fetch_from_output(candidate_output: str) -> dict[str, object] | None:
+    latest_fetch: dict[str, object] | None = None
+    for block_match in _FETCH_BATCH_BLOCK_PATTERN.finditer(candidate_output):
+        block = block_match.group(0)
+        batch_count_match = _FETCH_BATCH_COUNT_PATTERN.search(block)
+        batch_agent_match = _FETCH_BATCH_AGENT_PATTERN.search(block)
+        batch_type_match = _FETCH_BATCH_TYPE_PATTERN.search(block)
+        batch_ids_match = _FETCH_BATCH_IDS_PATTERN.search(block)
+        if batch_count_match is None or batch_agent_match is None or batch_type_match is None:
+            continue
+        try:
+            batch_count = int(batch_count_match.group(1))
+        except ValueError:
+            continue
+        if batch_count <= 0:
+            continue
+        agent_name = batch_agent_match.group(1).strip()
+        batch_type = batch_type_match.group(1).strip()
+        if not agent_name or not batch_type:
+            continue
+        latest_fetch = {
+            "agent": agent_name,
+            "batch_type": batch_type,
+            "batch_count": batch_count,
+            "batch_ids": batch_ids_match.group(1).strip() if batch_ids_match else "",
+        }
+    return latest_fetch
+
+
+
+def _extract_text_log_timestamp(line: str) -> float | None:
+    timestamp_match = _TEXT_LOG_TIMESTAMP_OPTIONAL_TZ_PATTERN.search(line)
+    if timestamp_match is None:
+        return None
+    raw_timestamp = timestamp_match.group(1) or timestamp_match.group(2)
+    if not raw_timestamp:
+        return None
+    return _parse_runtime_activity_timestamp(raw_timestamp)
+
+
+
+def _opencode_logs_active_subagent_agents(log_root: Path) -> set[str]:
+    if not log_root.exists() or not log_root.is_dir():
+        return set()
+
+    session_agents: dict[str, str] = {}
+    active_sessions: set[str] = set()
+
+    for path in sorted(log_root.glob("*.log")):
+        try:
+            with path.open("r", encoding="utf-8", errors="replace") as handle:
+                for raw_line in handle:
+                    stripped = raw_line.strip()
+                    if not stripped:
+                        continue
+
+                    if "service=session.prompt" in stripped and (
+                        "exiting loop" in stripped or stripped.endswith(" cancel") or " cancel" in stripped
+                    ):
+                        match = _SUBAGENT_SESSION_ID_PATTERN.search(stripped)
+                        if match is not None:
+                            active_sessions.discard(match.group("session"))
+                        continue
+
+                    if "service=llm" in stripped and "mode=subagent" in stripped:
+                        stream_match = _SUBAGENT_STREAM_PATTERN.search(stripped)
+                        session_match = _SUBAGENT_SESSION_ID_PATTERN.search(stripped)
+                        if stream_match is not None and session_match is not None:
+                            session_id = session_match.group("session")
+                            session_agents[session_id] = stream_match.group("agent")
+                            active_sessions.add(session_id)
+                        continue
+
+                    if "title=" in stripped and "subagent" in stripped and "created" in stripped:
+                        title_match = _SUBAGENT_SESSION_TITLE_PATTERN.search(stripped)
+                        session_match = _SUBAGENT_SESSION_ID_PATTERN.search(stripped)
+                        if title_match is not None and session_match is not None:
+                            session_id = session_match.group("session")
+                            session_agents[session_id] = title_match.group("agent")
+                            active_sessions.add(session_id)
+        except OSError:
+            continue
+
+    return {session_agents[session_id] for session_id in active_sessions if session_agents.get(session_id)}
+
+
+
+def _opencode_logs_show_subagent_activity(
+    log_root: Path,
+    *,
+    agent_name: str,
+    since_at: float,
+    max_lines_per_file: int = 2000,
+) -> bool:
+    if not agent_name or not log_root.exists() or not log_root.is_dir():
+        return False
+
+    for path in sorted(log_root.glob("*.log"), reverse=True):
+        try:
+            with path.open("r", encoding="utf-8", errors="replace") as handle:
+                lines = deque(handle, maxlen=max_lines_per_file)
+        except OSError:
+            continue
+
+        for raw_line in lines:
+            stripped = raw_line.strip()
+            if not stripped:
+                continue
+
+            candidate = None
+            matched_agent = ""
+
+            if "title=" in stripped and "subagent" in stripped and "created" in stripped:
+                match = _SUBAGENT_SESSION_TITLE_PATTERN.search(stripped)
+                if match is None:
+                    continue
+                matched_agent = match.group("agent")
+                created_match = _INLINE_SESSION_CREATED_AT_PATTERN.search(stripped)
+                if created_match is not None:
+                    try:
+                        raw_created = int(created_match.group(1))
+                    except ValueError:
+                        raw_created = 0
+                    if raw_created > 0:
+                        candidate = raw_created / 1000 if raw_created >= 10**12 else float(raw_created)
+            elif "service=llm" in stripped and "mode=subagent" in stripped:
+                match = _SUBAGENT_STREAM_PATTERN.search(stripped)
+                if match is None:
+                    continue
+                matched_agent = match.group("agent")
+
+            if matched_agent != agent_name:
+                continue
+
+            if candidate is None:
+                candidate = _extract_text_log_timestamp(stripped)
+            if candidate is not None and candidate < since_at:
+                continue
+            return True
+
+    return False
+
+
+
+def _latest_undispatched_batch_fetch(
+    path: Path,
+    *,
+    opencode_logs_root: Path | None = None,
+    max_lines: int = 400,
+) -> dict[str, object] | None:
+    if not path.exists() or not path.is_file():
+        return None
+
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as handle:
+            lines = deque(handle, maxlen=max_lines)
+    except OSError:
+        return None
+
+    latest_fetch: dict[str, object] | None = None
+
+    for raw_line in lines:
+        stripped = raw_line.strip()
+        if not stripped.startswith("{"):
+            continue
+        try:
+            payload = json.loads(stripped)
+        except json.JSONDecodeError:
+            continue
+        if payload.get("type") != "tool_use":
+            continue
+
+        part = payload.get("part") or {}
+        state = part.get("state") or {}
+        tool_name = str(part.get("tool") or "").strip()
+        event_at = _parse_runtime_activity_timestamp(payload.get("timestamp"))
+        if event_at is None:
+            for candidate in _iter_runtime_activity_timestamps(payload):
+                if _runtime_activity_candidate_is_valid(candidate):
+                    event_at = candidate
+                    break
+
+        if tool_name == "task":
+            task_input = state.get("input") or {}
+            subagent_type = str(task_input.get("subagent_type") or "").strip()
+            if (
+                latest_fetch is not None
+                and subagent_type
+                and subagent_type == latest_fetch.get("agent")
+                and (event_at is None or event_at >= float(latest_fetch.get("timestamp") or 0))
+            ):
+                latest_fetch = None
+            continue
+
+        if tool_name != "bash":
+            continue
+
+        state_metadata = state.get("metadata") or {}
+        output_candidates = [state.get("output"), state_metadata.get("output")]
+        for candidate_output in output_candidates:
+            if not isinstance(candidate_output, str) or "BATCH_COUNT=" not in candidate_output:
+                continue
+            fetch_summary = _latest_nonempty_fetch_from_output(candidate_output)
+            if fetch_summary is None:
+                continue
+            latest_fetch = {
+                "timestamp": event_at or 0.0,
+                **fetch_summary,
+            }
+            break
+
+    if (
+        latest_fetch is not None
+        and opencode_logs_root is not None
+        and _opencode_logs_show_subagent_activity(
+            opencode_logs_root,
+            agent_name=str(latest_fetch.get("agent") or "").strip(),
+            since_at=float(latest_fetch.get("timestamp") or 0.0),
+        )
+    ):
+        return None
+
+    return latest_fetch
+
+
 def _latest_running_runtime_activity_at(run: Run) -> float | None:
     latest = _latest_process_log_activity_at(process_log_path_for(run))
 
-    process_metadata = _path_mtime(process_metadata_path_for(run))
-    if process_metadata is not None and (latest is None or process_metadata > latest):
-        latest = process_metadata
-
+    # Ignore process.json mtime here. Launcher/recovery code may rewrite metadata
+    # without any new runtime output, and using that timestamp would let a stuck
+    # container look healthy forever.
     opencode_logs_root = opencode_home_root_for(run) / "log"
     if opencode_logs_root.exists():
         for path in opencode_logs_root.glob("*.log"):
@@ -659,13 +952,121 @@ def _load_running_queue_state(engagement_dir: Path | None) -> tuple[str, int, in
     return (current_phase, total_cases, pending_cases, processing_cases)
 
 
+def _load_running_processing_agents(engagement_dir: Path | None) -> set[str]:
+    if engagement_dir is None:
+        return set()
+
+    cases_db = engagement_dir / "cases.db"
+    if not cases_db.exists():
+        return set()
+
+    def _reader(connection: sqlite3.Connection) -> list[str]:
+        rows = connection.execute(
+            "SELECT DISTINCT assigned_agent FROM cases WHERE status = 'processing'"
+        ).fetchall()
+        return [str(row[0] or "").strip() for row in rows]
+
+    raw_agents = _read_sqlite_with_fallback(cases_db, _reader, [])
+    return {agent for agent in raw_agents if agent}
+
+
+def _recover_orphaned_processing_cases(run: Run, engagement_dir: Path | None) -> tuple[int, set[str]]:
+    if engagement_dir is None:
+        return (0, set())
+
+    cases_db = engagement_dir / "cases.db"
+    if not cases_db.exists():
+        return (0, set())
+
+    processing_agents = _load_running_processing_agents(engagement_dir)
+    if not processing_agents:
+        return (0, set())
+
+    active_runtime_agents = _active_runtime_agents(run)
+    orphaned_agents = processing_agents.difference(active_runtime_agents)
+    if not orphaned_agents:
+        return (0, set())
+
+    try:
+        with sqlite3.connect(cases_db, timeout=5.0) as connection:
+            connection.execute("PRAGMA busy_timeout = 5000")
+            column_rows = connection.execute("PRAGMA table_info(cases)").fetchall()
+            column_names = {str(row[1]) for row in column_rows if len(row) > 1}
+            if "assigned_agent" not in column_names:
+                return (0, set())
+
+            set_clauses = ["status = 'pending'", "assigned_agent = NULL"]
+            if "consumed_at" in column_names:
+                set_clauses.append("consumed_at = NULL")
+
+            placeholders = ", ".join("?" for _ in orphaned_agents)
+            cursor = connection.execute(
+                f"UPDATE cases SET {', '.join(set_clauses)} "
+                f"WHERE status = 'processing' AND assigned_agent IN ({placeholders})",
+                tuple(sorted(orphaned_agents)),
+            )
+            connection.commit()
+            recovered = int(cursor.rowcount or 0)
+            return (recovered, orphaned_agents if recovered > 0 else set())
+    except sqlite3.Error:
+        return (0, set())
+
+
+
+def _active_runtime_metadata_agents(run: Run) -> set[str]:
+    payload = _read_run_metadata(run)
+    active_agents: set[str] = set()
+    for item in payload.get("agents") or []:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("status") or "").strip().lower() != "active":
+            continue
+        # run.json agent cards are also used by the UI and may synthesize
+        # queue-backed "active" agents from processing cases even when no live
+        # task/runtime event exists. Those synthetic cards intentionally have an
+        # empty updated_at. Launcher stall recovery must only treat agents with
+        # substantive runtime activity as active, otherwise orphaned processing
+        # assignments can mask queue stalls forever.
+        if not str(item.get("updated_at") or "").strip():
+            continue
+        agent_name = str(item.get("agent_name") or item.get("task_name") or "").strip()
+        if agent_name:
+            active_agents.add(agent_name)
+    return active_agents
+
+
+
+def _active_runtime_agents(run: Run) -> set[str]:
+    active_agents = _active_runtime_metadata_agents(run)
+    active_agents.update(_opencode_logs_active_subagent_agents(opencode_home_root_for(run) / "log"))
+    return active_agents
+
+
+def _run_metadata_has_current_task(run: Run) -> bool:
+    payload = _read_run_metadata(run)
+    current_task_name = str(payload.get("current_task_name") or "").strip()
+    current_agent_name = str(payload.get("current_agent_name") or "").strip()
+    return bool(current_task_name or current_agent_name)
+
+
+def _latest_runtime_metadata_activity_at(run: Run) -> float | None:
+    payload = _read_run_metadata(run)
+    latest = None
+    for candidate in _iter_runtime_activity_timestamps(payload):
+        if not _runtime_activity_candidate_is_valid(candidate):
+            continue
+        if latest is None or candidate > latest:
+            latest = candidate
+    return latest
+
+
 def _running_container_stall_reason(run: Run) -> tuple[str, str, str] | None:
     engagement_dir = _active_engagement_dir(run)
     current_phase, total_cases, pending_cases, processing_cases = _load_running_queue_state(engagement_dir)
 
     workflow_activity_at = _latest_running_workflow_activity_at(engagement_dir)
-    if workflow_activity_at is not None:
-        workflow_age = time.time() - workflow_activity_at
+    workflow_age = (time.time() - workflow_activity_at) if workflow_activity_at is not None else None
+    if workflow_age is not None:
         if (
             current_phase not in EARLY_PHASE_STALL_PHASES
             and processing_cases > 0
@@ -689,8 +1090,98 @@ def _running_container_stall_reason(run: Run) -> tuple[str, str, str] | None:
             )
 
     runtime_activity_at = _latest_running_runtime_activity_at(run)
+    metadata_activity_at = _latest_runtime_metadata_activity_at(run)
+    active_runtime_agents = _active_runtime_agents(run)
+    has_current_task = _run_metadata_has_current_task(run)
+    processing_agents = _load_running_processing_agents(engagement_dir)
+    orphaned_fetch = _latest_undispatched_batch_fetch(
+        process_log_path_for(run),
+        opencode_logs_root=opencode_home_root_for(run) / "log",
+    )
+    if (
+        current_phase not in EARLY_PHASE_STALL_PHASES
+        and pending_cases > 0
+        and processing_cases == 0
+        and not active_runtime_agents
+        and workflow_age is not None
+        and workflow_age >= PENDING_QUEUE_DISPATCH_GRACE_SECONDS
+    ):
+        return (
+            current_phase,
+            "queue_stalled",
+            "Pending queue items remained undispatched with no active runtime agent after dispatch grace period elapsed.",
+        )
+
+    if (
+        current_phase not in EARLY_PHASE_STALL_PHASES
+        and orphaned_fetch is not None
+        and str(orphaned_fetch.get("agent") or "") in processing_agents
+        and str(orphaned_fetch.get("agent") or "") not in active_runtime_agents
+        and (time.time() - float(orphaned_fetch.get("timestamp") or 0.0)) >= PROCESSING_AGENT_MISMATCH_GRACE_SECONDS
+    ):
+        batch_type = str(orphaned_fetch.get("batch_type") or "queue")
+        agent_name = str(orphaned_fetch.get("agent") or "agent")
+        batch_ids = str(orphaned_fetch.get("batch_ids") or "").strip()
+        reason = f"Fetched non-empty {batch_type} batch for {agent_name}"
+        if batch_ids:
+            reason += f" (ids: {batch_ids})"
+        reason += " but no matching task dispatch followed before stall grace period elapsed."
+        return (
+            current_phase,
+            "queue_stalled",
+            reason,
+        )
+
+    orphan_activity_at = metadata_activity_at
+    if workflow_activity_at is not None and (
+        orphan_activity_at is None or workflow_activity_at > orphan_activity_at
+    ):
+        orphan_activity_at = workflow_activity_at
+    if (
+        current_phase not in EARLY_PHASE_STALL_PHASES
+        and total_cases > 0
+        and pending_cases == 0
+        and processing_cases == 0
+        and not active_runtime_agents
+        and not has_current_task
+        and orphan_activity_at is not None
+        and (time.time() - orphan_activity_at) >= RUN_STALL_TIMEOUT_SECONDS
+    ):
+        return (
+            current_phase,
+            "queue_stalled",
+            f"Run remained in {current_phase.replace('_', '-')} with no active runtime agent, current task, or queued work before stall timeout elapsed.",
+        )
+
     if runtime_activity_at is not None:
         runtime_age = time.time() - runtime_activity_at
+        mismatch_activity_at = runtime_activity_at
+        if workflow_activity_at is not None and workflow_activity_at > mismatch_activity_at:
+            mismatch_activity_at = workflow_activity_at
+        mismatch_age = time.time() - mismatch_activity_at
+        if (
+            current_phase not in EARLY_PHASE_STALL_PHASES
+            and processing_agents
+            and mismatch_age >= PROCESSING_AGENT_MISMATCH_GRACE_SECONDS
+            and processing_agents.isdisjoint(active_runtime_agents)
+        ):
+            assigned = ", ".join(sorted(processing_agents))
+            if active_runtime_agents:
+                active = ", ".join(sorted(active_runtime_agents))
+                reason = (
+                    f"Processing queue assignments ({assigned}) had no matching active runtime agent "
+                    f"after stall grace period elapsed (active agents: {active})."
+                )
+            else:
+                reason = (
+                    f"Processing queue assignments ({assigned}) had no matching active runtime agent "
+                    "after stall grace period elapsed."
+                )
+            return (
+                current_phase,
+                "queue_stalled",
+                reason,
+            )
         if runtime_age >= RUN_STALL_TIMEOUT_SECONDS:
             return (
                 current_phase,
@@ -760,6 +1251,224 @@ def _last_logged_stop_reason(log_path: Path) -> str:
     return _last_logged_stop_metadata(log_path)[1]
 
 
+_REPORT_REQUIRED_SECTIONS = (
+    "## Executive Summary",
+    "## Scope and Methodology",
+    "## Findings",
+    "## Attack Narrative",
+    "## Recommendations",
+    "## Appendix",
+)
+_FINDING_SECTION_PATTERN = re.compile(
+    r"^## \[(?P<id>[^\]]+)\] (?P<title>.+?)\n(?P<body>.*?)(?=^## \[|\Z)",
+    flags=re.MULTILINE | re.DOTALL,
+)
+_FINDING_FIELD_PATTERN = re.compile(r"^- \*\*(?P<key>[^*]+)\*\*: (?P<value>.*)$", flags=re.MULTILINE)
+_FINDING_SORT_ORDER = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3, "INFO": 4}
+
+
+def _report_has_substantive_content(text: str) -> bool:
+    stripped = text.strip()
+    if not stripped or len(stripped) < 400:
+        return False
+    matched_sections = sum(1 for section in _REPORT_REQUIRED_SECTIONS if section in stripped)
+    if matched_sections < 4:
+        return False
+    if "## Findings" not in stripped:
+        return False
+    if re.search(r"^### \[FINDING-\d{3}\] ", stripped, flags=re.MULTILINE):
+        return True
+    return "No confirmed findings" in stripped
+
+
+def _parse_findings_markdown(text: str) -> list[dict[str, str]]:
+    findings: list[dict[str, str]] = []
+    for match in _FINDING_SECTION_PATTERN.finditer(text):
+        payload: dict[str, str] = {
+            "original_id": match.group("id").strip(),
+            "title": match.group("title").strip(),
+            "body": match.group("body").strip(),
+        }
+        for field in _FINDING_FIELD_PATTERN.finditer(payload["body"]):
+            key = field.group("key").strip().lower().replace(" ", "_")
+            payload[key] = field.group("value").strip()
+        findings.append(payload)
+    findings.sort(key=lambda item: (_FINDING_SORT_ORDER.get(item.get("severity", "INFO").upper(), 99), item.get("original_id", "")))
+    return findings
+
+
+def _severity_summary(findings: list[dict[str, str]]) -> dict[str, int]:
+    counts = {severity: 0 for severity in ("CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO")}
+    for finding in findings:
+        severity = str(finding.get("severity") or "INFO").upper()
+        counts[severity if severity in counts else "INFO"] += 1
+    return counts
+
+
+def _overall_risk_label(counts: dict[str, int]) -> str:
+    if counts.get("CRITICAL"):
+        return "Critical"
+    if counts.get("HIGH"):
+        return "High"
+    if counts.get("MEDIUM"):
+        return "Moderate"
+    if counts.get("LOW"):
+        return "Low"
+    return "Informational"
+
+
+def _format_scope_timeframe(scope: dict[str, object] | None) -> str:
+    if not isinstance(scope, dict):
+        return "Timeframe unavailable"
+    start = str(scope.get("start_time") or scope.get("started_at") or "").strip()
+    end = str(scope.get("end_time") or "").strip()
+    if start and end:
+        return f"{start} → {end}"
+    if start:
+        return f"Started {start}"
+    return "Timeframe unavailable"
+
+
+def _extract_findings_report_paths(findings: list[dict[str, str]]) -> list[str]:
+    paths: list[str] = []
+    seen: set[str] = set()
+    for finding in findings:
+        evidence = str(finding.get("evidence") or "")
+        for candidate in re.findall(r"(?:engagements/[^\s`'\"]+|downloads/[^\s`'\"]+|scans/[^\s`'\"]+)", evidence):
+            if candidate in seen:
+                continue
+            seen.add(candidate)
+            paths.append(candidate)
+            if len(paths) >= 8:
+                return paths
+    return paths
+
+
+def _synthesize_completion_report(engagement_dir: Path, scope: dict[str, object] | None) -> None:
+    report_path = engagement_dir / "report.md"
+    findings_path = engagement_dir / "findings.md"
+    findings_text = findings_path.read_text(encoding="utf-8", errors="replace") if findings_path.exists() else ""
+    findings = _parse_findings_markdown(findings_text)
+    counts = _severity_summary(findings)
+    total_findings = sum(counts.values())
+
+    target = ""
+    scope_entries: list[str] = []
+    phases_completed: list[str] = []
+    if isinstance(scope, dict):
+        target = str(scope.get("target") or "").strip()
+        scope_entries = [str(item).strip() for item in scope.get("scope") or [] if str(item).strip()]
+        phases_completed = [str(item).strip() for item in scope.get("phases_completed") or [] if str(item).strip()]
+
+    evidence_paths = _extract_findings_report_paths(findings)
+    cases_db = engagement_dir / "cases.db"
+    total_cases = 0
+    if cases_db.exists():
+        try:
+            with sqlite3.connect(cases_db) as connection:
+                row = connection.execute("SELECT COUNT(*) FROM cases").fetchone()
+            total_cases = int(row[0]) if row else 0
+        except sqlite3.Error:
+            total_cases = 0
+
+    surface_count = 0
+    surfaces_path = engagement_dir / "surfaces.jsonl"
+    if surfaces_path.exists():
+        surface_count = sum(1 for line in surfaces_path.read_text(encoding="utf-8", errors="replace").splitlines() if line.strip())
+
+    methodology_steps = []
+    if phases_completed:
+        methodology_steps.append(f"Completed phases: {', '.join(phases_completed)}")
+    if total_cases:
+        methodology_steps.append(f"Processed {total_cases} queued cases from crawler and follow-up analysis.")
+    if surface_count:
+        methodology_steps.append(f"Tracked {surface_count} observed surfaces in surfaces.jsonl.")
+    if not methodology_steps:
+        methodology_steps.append("Completed the orchestrated reconnaissance, analysis, and reporting workflow using recorded engagement artifacts only.")
+
+    recommendations: list[str] = []
+    if counts.get("CRITICAL") or counts.get("HIGH"):
+        recommendations.append("Prioritize the highest-severity exposures first, especially issues that enable account compromise, secret leakage, or direct access to sensitive files or privileged workflows.")
+    if any(finding.get("severity", "").upper() in {"MEDIUM", "HIGH", "CRITICAL"} and "Authentication" in str(finding.get("owasp_category") or "") for finding in findings):
+        recommendations.append("Review authentication and authorization boundaries on privileged API routes and workflow/state tokens; require explicit auth checks instead of trusting client-visible identifiers or setup material.")
+    if any("stack trace" in str(finding.get("title") or "").lower() or "exposure" in str(finding.get("type") or "").lower() for finding in findings):
+        recommendations.append("Disable verbose production error disclosure and trim sensitive response fields so diagnostic paths do not expose stack traces, hashes, tokens, or internal file locations.")
+    if not recommendations:
+        recommendations.append("Continue monitoring newly discovered surfaces and keep validating that crawler-derived coverage stays aligned with the recorded findings and queue output.")
+
+    executive_lines = [
+        f"- Target: `{target or 'unknown'}`",
+        f"- Timeframe: {_format_scope_timeframe(scope)}",
+        f"- Confirmed findings: {total_findings} total ({counts['CRITICAL']} critical / {counts['HIGH']} high / {counts['MEDIUM']} medium / {counts['LOW']} low / {counts['INFO']} info)",
+        f"- Overall risk assessment: {_overall_risk_label(counts)}",
+    ]
+
+    scope_lines = []
+    if scope_entries:
+        scope_lines.append(f"- Scope entries: {', '.join(scope_entries)}")
+    else:
+        scope_lines.append(f"- Scope entries: {target or 'Unavailable'}")
+    scope_lines.extend(f"- {line}" for line in methodology_steps)
+
+    findings_blocks: list[str] = []
+    if findings:
+        for index, finding in enumerate(findings, start=1):
+            finding_id = f"FINDING-{index:03d}"
+            findings_blocks.append(
+                "\n".join(
+                    [
+                        f"### [{finding_id}] {finding.get('title', 'Untitled finding')}",
+                        f"- **Original ID**: {finding.get('original_id', '')}",
+                        f"- **Severity**: {finding.get('severity', 'INFO')}",
+                        f"- **OWASP Category**: {finding.get('owasp_category', 'Unspecified')}",
+                        f"- **Type**: {finding.get('type', 'Unspecified')}",
+                        f"- **Location**: {finding.get('parameter', 'Unspecified')}",
+                        f"- **Description**: Derived from the recorded finding `{finding.get('original_id', '')}` and its linked evidence in `findings.md`.",
+                        "- **Evidence**:",
+                        f"  - {finding.get('evidence', 'See findings.md for the recorded proof.')}",
+                        f"- **Impact**: {finding.get('impact', 'Impact not captured in the finding record.')}",
+                        "- **Remediation**: Address the exposed condition at the affected route/component and re-test the documented evidence path after the fix.",
+                    ]
+                )
+            )
+    else:
+        findings_blocks.append("No confirmed findings were recorded in `findings.md`.")
+
+    attack_narrative = (
+        "The engagement followed the recorded orchestrator workflow from reconnaissance into targeted source and vulnerability analysis, then consolidated confirmed evidence into the final report. "
+        "The report content below was synthesized directly from `scope.json`, `findings.md`, `cases.db`, `surfaces.jsonl`, and the engagement log because the original report artifact was missing or incomplete at completion time."
+    )
+    if not findings:
+        attack_narrative += " No multi-step attack paths identified."
+
+    appendix_lines = [
+        f"- cases.db rows: {total_cases}",
+        f"- surfaces.jsonl rows: {surface_count}",
+        "- Referenced artifact files:",
+    ]
+    if evidence_paths:
+        appendix_lines.extend(f"  - `{path}`" for path in evidence_paths)
+    else:
+        appendix_lines.append("  - `findings.md`")
+        appendix_lines.append("  - `log.md`")
+
+    serialized_scope = json.dumps(scope or {}, indent=2)
+    scope_label = ", ".join(scope_entries) if scope_entries else (target or "Unavailable")
+    report_text = "\n\n".join(
+        [
+            "# Penetration Test Report",
+            f"**Date**: {_engagement_header_date(scope)} — Completed\n**Target**: {target or 'unknown'}  **Scope**: {scope_label}  **Status**: Completed",
+            "## Executive Summary\n" + "\n".join(executive_lines),
+            "## Scope and Methodology\n" + "\n".join(scope_lines),
+            "## Findings\n" + "\n\n".join(findings_blocks),
+            f"## Attack Narrative\n{attack_narrative}",
+            "## Recommendations\n" + "\n".join(f"- {item}" for item in recommendations),
+            "## Appendix\n" + "\n".join(appendix_lines) + f"\n\n### C. Full scope.json\n```json\n{serialized_scope}\n```",
+        ]
+    ).rstrip() + "\n"
+    report_path.write_text(report_text, encoding="utf-8")
+
+
 def engagement_completion_state(run: Run) -> tuple[bool, str]:
     engagement_dir = _active_engagement_dir(run)
     if engagement_dir is None:
@@ -793,6 +1502,9 @@ def engagement_completion_state(run: Run) -> tuple[bool, str]:
         return (False, "Report phase is not marked complete.")
     if not report_path.exists():
         return (False, "report.md is missing.")
+    report_text = report_path.read_text(encoding="utf-8", errors="replace")
+    if not _report_has_substantive_content(report_text):
+        return (False, "report.md is incomplete.")
 
     pending_cases, processing_cases = _count_remaining_cases(cases_db)
     if pending_cases or processing_cases:
@@ -843,7 +1555,20 @@ def _normalize_log_completion_artifact(path: Path) -> None:
         path.write_text(rewritten, encoding="utf-8")
 
 
-def _normalize_report_completion_artifact(path: Path, *, header_date: str) -> None:
+def _replace_report_scope_snapshot(text: str, scope: dict[str, object] | None) -> str:
+    if not isinstance(scope, dict):
+        return text
+    serialized_scope = json.dumps(scope, indent=2)
+    return re.sub(
+        r"(### C\. Full scope\.json\s*```json\n)(.*?)(\n```)",
+        lambda match: f"{match.group(1)}{serialized_scope}{match.group(3)}",
+        text,
+        count=1,
+        flags=re.DOTALL,
+    )
+
+
+def _normalize_report_completion_artifact(path: Path, *, header_date: str, scope: dict[str, object] | None) -> None:
     if not path.exists():
         return
     original = path.read_text(encoding="utf-8", errors="replace")
@@ -868,16 +1593,23 @@ def _normalize_report_completion_artifact(path: Path, *, header_date: str) -> No
             if line != normalized:
                 lines[index] = normalized
                 changed = True
+            continue
+        if line.startswith("**Status**:"):
+            normalized = "**Status**: Completed"
+            if line != normalized:
+                lines[index] = normalized
+                changed = True
 
     if not date_found:
         insert_at = 1 if lines and lines[0].startswith("#") else 0
         lines.insert(insert_at, f"**Date**: {header_date} — Completed")
         changed = True
 
-    if not changed:
+    rewritten = "\n".join(lines)
+    rewritten = _replace_report_scope_snapshot(rewritten, scope)
+    if rewritten == original and not changed:
         return
 
-    rewritten = "\n".join(lines)
     if trailing_newline:
         rewritten += "\n"
     path.write_text(rewritten, encoding="utf-8")
@@ -889,8 +1621,12 @@ def _normalize_completion_artifacts(engagement_dir: Path, scope: dict[str, objec
     if _canonical_scope_status(scope.get("status")) != "complete":
         return
     header_date = _engagement_header_date(scope)
+    report_path = engagement_dir / "report.md"
+    existing_report = report_path.read_text(encoding="utf-8", errors="replace") if report_path.exists() else ""
+    if not _report_has_substantive_content(existing_report):
+        _synthesize_completion_report(engagement_dir, scope)
     _normalize_log_completion_artifact(engagement_dir / "log.md")
-    _normalize_report_completion_artifact(engagement_dir / "report.md", header_date=header_date)
+    _normalize_report_completion_artifact(report_path, header_date=header_date, scope=scope)
 
 
 _JSONL_DISALLOWED_CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
@@ -922,8 +1658,14 @@ def _decode_json_stream(value: str) -> list[object] | None:
     return payloads
 
 
-def _normalize_jsonl_artifact(path: Path, context: dict[str, str] | None, *, redact_headers: bool = False) -> None:
-    if context is None or not path.exists():
+def _normalize_jsonl_artifact(
+    path: Path,
+    context: dict[str, str] | None,
+    *,
+    redact_headers: bool = False,
+    preserve_malformed: bool = False,
+) -> None:
+    if not path.exists() or (context is None and not redact_headers):
         return
 
     original = path.read_text(encoding="utf-8", errors="replace")
@@ -941,9 +1683,17 @@ def _normalize_jsonl_artifact(path: Path, context: dict[str, str] | None, *, red
         payloads = _decode_json_stream(sanitized)
         if payloads is None:
             rewritten_line = _rewrite_loopback_text(sanitized, context)
-            if rewritten_line != line:
-                changed = True
-            rewritten_lines.append(rewritten_line)
+            if preserve_malformed:
+                if rewritten_line != line:
+                    changed = True
+                rewritten_lines.append(rewritten_line)
+            else:
+                if re.match(r"^https?://", stripped):
+                    if rewritten_line != line:
+                        changed = True
+                    rewritten_lines.append(rewritten_line)
+                else:
+                    changed = True
             continue
 
         if len(payloads) != 1 or sanitized != line:
@@ -999,6 +1749,8 @@ _VALID_SURFACE_TYPES = {
     "dynamic_render",
     "api_documentation",
     "workflow_token",
+    "api_param_followup",
+    "cors_review",
 }
 _VALID_SURFACE_STATUSES = {"discovered", "covered", "not_applicable", "deferred"}
 _SURFACE_TYPE_ALIASES = {
@@ -1024,10 +1776,19 @@ _SURFACE_TYPE_ALIASES = {
     "mfa": "auth_entry",
     "oauth": "auth_entry",
     "oauth_flow": "auth_entry",
+    "auth_surface": "auth_entry",
+    "anti_automation": "auth_entry",
+    "broken_anti_automation": "auth_entry",
     "business_logic": "privileged_write",
     "logic_flow": "privileged_write",
     "stateful_flow": "privileged_write",
     "race_condition": "privileged_write",
+    "update_distribution": "file_handling",
+    "cors_surface": "cors_review",
+    "opaque_post_contract": "api_param_followup",
+    "opaque_post_body": "api_param_followup",
+    "body_contract": "api_param_followup",
+    "schema_followup": "api_param_followup",
 }
 
 
@@ -1338,13 +2099,19 @@ def normalize_active_scope(run: Run) -> None:
     _normalize_completion_artifacts(engagement_dir, scope)
     _backfill_surfaces_from_process_log(run, engagement_dir)
     _dedupe_surface_jsonl(engagement_dir / "surfaces.jsonl", context)
+    _normalize_jsonl_artifact(
+        engagement_dir / "scans" / "katana_output.jsonl",
+        context,
+        redact_headers=True,
+        preserve_malformed=not _should_persist_loopback_rewrite(run),
+    )
     if context is None:
         return
 
+    _normalize_text_artifact(engagement_dir / "log.md", context)
     _normalize_text_artifact(engagement_dir / "findings.md", context)
     _normalize_text_artifact(engagement_dir / "report.md", context)
     if _should_persist_loopback_rewrite(run):
-        _normalize_jsonl_artifact(engagement_dir / "scans" / "katana_output.jsonl", context, redact_headers=True)
         _normalize_cases_db(engagement_dir / "cases.db", context)
 
 
@@ -1469,7 +2236,8 @@ def prepare_run_runtime(project: Project, run: Run) -> None:
     seed_root_for(run).mkdir(parents=True, exist_ok=True)
 
     if project.auth_json.strip():
-        (seed_root_for(run) / "auth.json").write_text(project.auth_json + "\n", encoding="utf-8")
+        normalized_auth = _normalize_auth_payload(project.auth_json)
+        (seed_root_for(run) / "auth.json").write_text(normalized_auth + "\n", encoding="utf-8")
     elif (seed_root_for(run) / "auth.json").exists():
         (seed_root_for(run) / "auth.json").unlink()
 
@@ -1661,8 +2429,34 @@ def _current_auto_resume_count(run: Run) -> int:
         return 0
 
 
+def _current_auto_resume_progress(run: Run) -> int | None:
+    value = _read_run_metadata(run).get("auto_resume_progress")
+    if value in (None, ""):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _set_auto_resume_count(run: Run, count: int) -> None:
     _update_run_metadata(run, auto_resume_count=max(0, int(count)))
+
+
+def _current_queue_resolution_count(run: Run) -> int | None:
+    engagement_dir = _active_engagement_dir(run)
+    if engagement_dir is None:
+        return None
+    _, total_cases, pending_cases, processing_cases = _load_running_queue_state(engagement_dir)
+    if total_cases <= 0:
+        return None
+    return max(0, total_cases - pending_cases - processing_cases)
+
+
+def _set_auto_resume_progress(run: Run, resolved_count: int | None) -> None:
+    if resolved_count is None:
+        return
+    _update_run_metadata(run, auto_resume_progress=max(0, int(resolved_count)))
 
 
 def _init_only_exit(run: Run) -> bool:
@@ -1766,6 +2560,56 @@ def _container_exit_code(container_name: str) -> int | None:
         return None
 
 
+def _looks_like_runtime_process(command: str, *, container_name: str | None) -> bool:
+    normalized = command.strip()
+    if not normalized:
+        return False
+
+    if " docker logs " in f" {normalized} ":
+        return False
+
+    runtime_markers = (
+        " opencode run --format json /autoengage ",
+        " opencode run --format json /resume ",
+        " docker run ",
+    )
+    if any(marker in f" {normalized} " for marker in runtime_markers):
+        if container_name and container_name in normalized and " docker run " in f" {normalized} ":
+            return True
+        if " opencode run --format json /" in f" {normalized} ":
+            return True
+
+    return False
+
+
+def _runtime_log_follower_pids(container_name: str | None) -> list[int]:
+    if not container_name:
+        return []
+
+    try:
+        output = subprocess.check_output(["ps", "eww", "-axo", "pid=,command="], text=True)
+    except (subprocess.SubprocessError, OSError):
+        return []
+
+    follower_pids: list[int] = []
+    for line in output.splitlines():
+        normalized = line.strip()
+        if not normalized:
+            continue
+        if container_name not in normalized:
+            continue
+        if " docker logs " not in f" {normalized} ":
+            continue
+        pid_text, _, _ = normalized.partition(" ")
+        try:
+            pid = int(pid_text)
+        except ValueError:
+            continue
+        if _pid_alive(pid):
+            follower_pids.append(pid)
+    return follower_pids
+
+
 def locate_runtime_pid(run: Run) -> int | None:
     metadata_path = process_metadata_path_for(run)
     payload: dict[str, object] = {}
@@ -1814,14 +2658,17 @@ def locate_runtime_pid(run: Run) -> int | None:
     for line in output.splitlines():
         if needle not in line:
             continue
-        pid_text, _, _ = line.strip().partition(" ")
+        normalized = line.strip()
+        if not _looks_like_runtime_process(normalized, container_name=container_name):
+            continue
+        pid_text, _, _ = normalized.partition(" ")
         try:
             pid = int(pid_text)
         except ValueError:
             continue
         if _pid_alive(pid):
             process_metadata_path_for(run).write_text(
-                json.dumps({"pid": pid, "run_id": run.id, "command": line.strip()}, indent=2, sort_keys=True) + "\n",
+                json.dumps({"pid": pid, "run_id": run.id, "command": normalized}, indent=2, sort_keys=True) + "\n",
                 encoding="utf-8",
             )
             return pid
@@ -1830,6 +2677,8 @@ def locate_runtime_pid(run: Run) -> int | None:
 
 def stop_run_runtime(run: Run) -> None:
     container_name = _container_name_from_metadata(run)
+    if not container_name:
+        container_name = runtime_container_name(run)
     if container_name:
         subprocess.run(
             ["docker", "rm", "-f", container_name],
@@ -1837,6 +2686,11 @@ def stop_run_runtime(run: Run) -> None:
             stderr=subprocess.DEVNULL,
             check=False,
         )
+        for follower_pid in _runtime_log_follower_pids(container_name):
+            try:
+                os.kill(follower_pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
 
     pid = locate_runtime_pid(run)
     if isinstance(pid, int) and pid > 0:
@@ -1897,7 +2751,12 @@ def _runtime_log_follow_command(run: Run) -> list[str]:
         if has_history:
             latest_activity = _latest_process_log_activity_at(process_log)
             if latest_activity is not None:
-                since_value = datetime.fromtimestamp(latest_activity, UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+                # `docker logs --since` is inclusive. Advancing by 1 ms avoids
+                # replaying the last captured line each time the follower is
+                # restarted, which otherwise duplicates structured runtime
+                # events in process.log.
+                since_at = datetime.fromtimestamp(latest_activity, UTC) + timedelta(milliseconds=1)
+                since_value = since_at.isoformat(timespec="milliseconds").replace("+00:00", "Z")
                 command.extend(["--since", since_value])
     command.append(runtime_container_name(run))
     return command
@@ -2020,19 +2879,49 @@ def _maybe_auto_resume_run(
 ) -> bool:
     if reason_code not in _AUTO_RESUME_REASON_CODES:
         return False
-    if _active_engagement_dir(run) is None:
+
+    engagement_dir = _active_engagement_dir(run)
+    if engagement_dir is None:
         return False
+
+    phase_name = _canonical_phase_name(phase)
+    scope = _normalize_scope_file(engagement_dir / "scope.json", run=run) or {}
+    scope_phase = _canonical_phase_name(scope.get("current_phase")) if isinstance(scope, dict) else "unknown"
+    if phase_name in {"report", "complete"} or scope_phase in {"report", "complete"}:
+        return False
+
     attempt = _current_auto_resume_count(run)
+    resolved_count = _current_queue_resolution_count(run)
+    last_resolved_count = _current_auto_resume_progress(run)
+    if (
+        resolved_count is not None
+        and last_resolved_count is not None
+        and resolved_count > last_resolved_count
+    ):
+        attempt = 0
+
     if attempt >= _AUTO_RESUME_LIMIT:
         return False
 
+    recovery_note = ""
+    if phase_name == "consume_test" or scope_phase == "consume_test":
+        recovered_cases, recovered_agents = _recover_orphaned_processing_cases(run, engagement_dir)
+        if recovered_cases > 0:
+            agents_text = ", ".join(sorted(recovered_agents))
+            recovery_note = (
+                f" Re-queued {recovered_cases} orphaned processing case(s)"
+                + (f" from {agents_text}" if agents_text else "")
+                + " before /resume."
+            )
+
     next_attempt = attempt + 1
     _set_auto_resume_count(run, next_attempt)
+    _set_auto_resume_progress(run, resolved_count)
     _append_runtime_event(
         run,
         "run.resumed",
         phase,
-        f"Relaunching /resume after {reason_code} ({next_attempt}/{_AUTO_RESUME_LIMIT}): {reason_text}",
+        f"Relaunching /resume after {reason_code} ({next_attempt}/{_AUTO_RESUME_LIMIT}): {reason_text}{recovery_note}",
     )
     resumed = db.get_run_by_id(run.id) or run
     if resumed.status != "running":
@@ -2052,6 +2941,7 @@ def _maybe_auto_resume_run(
         user,
         log_follower=log_follower,
         log_handle=log_handle,
+        replace_existing=True,
     )
     return True
 
@@ -2094,11 +2984,13 @@ def _start_container_supervisor(
     *,
     log_follower: subprocess.Popen[bytes] | None = None,
     log_handle=None,
+    replace_existing: bool = False,
 ) -> bool:
+    supervisor_token = object()
     with _ACTIVE_CONTAINER_SUPERVISORS_LOCK:
-        if run.id in _ACTIVE_CONTAINER_SUPERVISORS:
+        if run.id in _ACTIVE_CONTAINER_SUPERVISORS and not replace_existing:
             return False
-        _ACTIVE_CONTAINER_SUPERVISORS.add(run.id)
+        _ACTIVE_CONTAINER_SUPERVISORS[run.id] = supervisor_token
 
     created_log_handle = False
     try:
@@ -2107,7 +2999,7 @@ def _start_container_supervisor(
             log_handle = open(process_log_path_for(run), "ab")
             created_log_handle = True
 
-        def _runner() -> None:
+        def _runner(_run: Run) -> None:
             try:
                 _supervise_container(
                     run,
@@ -2119,9 +3011,10 @@ def _start_container_supervisor(
                 )
             finally:
                 with _ACTIVE_CONTAINER_SUPERVISORS_LOCK:
-                    _ACTIVE_CONTAINER_SUPERVISORS.discard(run.id)
+                    if _ACTIVE_CONTAINER_SUPERVISORS.get(run.id) is supervisor_token:
+                        _ACTIVE_CONTAINER_SUPERVISORS.pop(run.id, None)
 
-        Thread(target=_runner, daemon=True).start()
+        Thread(target=_runner, args=(run,), daemon=True).start()
         return True
     except Exception:
         if created_log_handle and log_handle is not None:
@@ -2130,7 +3023,8 @@ def _start_container_supervisor(
             except Exception:
                 pass
         with _ACTIVE_CONTAINER_SUPERVISORS_LOCK:
-            _ACTIVE_CONTAINER_SUPERVISORS.discard(run.id)
+            if _ACTIVE_CONTAINER_SUPERVISORS.get(run.id) is supervisor_token:
+                _ACTIVE_CONTAINER_SUPERVISORS.pop(run.id, None)
         raise
 
 
@@ -2247,6 +3141,7 @@ def start_run_runtime(project: Project, run: Run, user: User) -> Run:
     prepare_run_runtime(project, run)
     process_log_path_for(run).parent.mkdir(parents=True, exist_ok=True)
     _set_auto_resume_count(run, 0)
+    _update_run_metadata(run, auto_resume_progress=None)
     log_handle = open(process_log_path_for(run), "ab")
 
     try:

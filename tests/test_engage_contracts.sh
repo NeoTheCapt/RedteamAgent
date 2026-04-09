@@ -34,6 +34,11 @@ if grep -Eq 'katana_ingest\.sh "\$DIR" &' "$ENGAGE_MD"; then
 fi
 pass "background producer startup detaches stdio"
 
+if grep -q '/tmp/katana_start\.' "$ENGAGE_MD"; then
+  fail "engage command still redirects katana helper output into /tmp"
+fi
+pass "engage command keeps katana helper temp output inside the workspace"
+
 if ! grep -q "katana_ingest_pid=\$!" "$ENGAGE_MD"; then
   fail "engage command is missing explicit safe katana PID capture guidance"
 fi
@@ -89,10 +94,45 @@ if ! grep -q 'do not stop after only writing a log entry like `Credential valida
 fi
 pass "operator prompt forbids log-only credential validation stalls"
 
+if ! grep -q 'the SAME turn that decides exploit has started must launch both the osint-analyst task and at least one bounded exploit-developer task' "$OPERATOR_TXT"; then
+  fail "operator prompt does not enforce same-turn parallel exploit dispatch"
+fi
+pass "operator prompt enforces same-turn parallel exploit dispatch"
+
+if ! grep -q 'Do NOT stop after only `Exploit start`, only OSINT triage, or only a todo/log update' "$OPERATOR_TXT"; then
+  fail "operator prompt does not forbid OSINT-only exploit stalls"
+fi
+pass "operator prompt forbids OSINT-only exploit stalls"
+
 if ! grep -q 'If credentials are discovered during consume-test, write them to auth.json and in that SAME turn dispatch a bounded exploit-developer auth-validation task' "$ENGAGE_MD"; then
   fail "engage command is missing same-turn credential validation guidance"
 fi
 pass "engage command requires same-turn credential validation"
+
+if ! grep -q 'Treat the non-empty fetch and matching `task(...)` call as one atomic consume-test step' "$ENGAGE_MD"; then
+  fail "engage command is missing atomic fetch+dispatch consume-test guidance"
+fi
+pass "engage command treats fetch+dispatch as one atomic consume-test step"
+
+if ! grep -q 'Do NOT interpret the fetch as a complete step or as permission to stop with fetched cases left in `processing`' "$OPERATOR_TXT"; then
+  fail "operator prompt is missing explicit fetched-batch stall prevention guidance"
+fi
+pass "operator prompt forbids treating a fetch as a completed consume-test step"
+
+if ! grep -q '"discovered_credentials": \[\]' "$ENGAGE_MD" || ! grep -q '"validated_credentials": \[\]' "$ENGAGE_MD" || ! grep -q '"credentials": \[\]' "$ENGAGE_MD"; then
+  fail "engage command is missing the canonical auth.json seed schema"
+fi
+pass "engage command seeds auth.json with the canonical compatibility schema"
+
+if ! grep -q 'legacy-compat `credentials` array' "$OPERATOR_TXT"; then
+  fail "operator prompt is missing legacy auth.json compatibility guidance"
+fi
+pass "operator prompt documents the auth.json compatibility schema"
+
+if ! grep -q 'KeyError: credentials' "$OPERATOR_TXT"; then
+  fail "operator prompt is missing the explicit legacy-credentials crash guard"
+fi
+pass "operator prompt warns against auth.json credentials key regressions"
 
 if ! grep -q 'authorized lab mirrors resolved inside the harness' "$OPERATOR_TXT"; then
   fail "operator prompt is missing explicit branded-target lab-mirror authorization guidance"

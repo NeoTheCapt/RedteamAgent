@@ -516,6 +516,85 @@ def test_run_summary_current_activity_prefers_scope_phase_for_unknown_task_event
     assert payload["current"]["phase"] == "consume-test"
 
 
+def test_run_summary_overview_updated_at_uses_runtime_activity_when_events_are_stale():
+    client = TestClient(app)
+    token = register_and_login(client, "alice-runtime-activity")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "http://127.0.0.1:8000")
+    active_dir = setup_active_engagement(run)
+    (active_dir / "scope.json").write_text(
+        json.dumps(
+            {
+                "hostname": "127.0.0.1",
+                "status": "in_progress",
+                "phases_completed": ["recon", "collect", "consume_test"],
+                "current_phase": "exploit",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    client.post(
+        f"/projects/{project['id']}/runs/{run['id']}/events",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "event_type": "task.started",
+            "phase": "exploit",
+            "task_name": "exploit-developer",
+            "agent_name": "exploit-developer",
+            "summary": "KeePass vault + upload/admin/continue-code chain",
+        },
+    )
+
+    from app import db
+
+    with db.get_connection() as connection:
+        connection.execute(
+            "UPDATE events SET created_at = ? WHERE run_id = ? AND event_type = 'task.started'",
+            ("2026-04-01 19:51:00", run["id"]),
+        )
+
+    runtime_dir = Path(run["engagement_root"], "runtime")
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    runtime_activity_timestamp_ms = int(time.time() * 1000)
+    old_epoch = runtime_activity_timestamp_ms / 1000 - 300
+    os.utime(active_dir / "scope.json", (old_epoch, old_epoch))
+    (runtime_dir / "process.log").write_text(
+        json.dumps(
+            {
+                "type": "tool_use",
+                "timestamp": runtime_activity_timestamp_ms,
+                "part": {
+                    "tool": "task",
+                    "state": {
+                        "status": "completed",
+                        "input": {
+                            "description": "Run OSINT triage",
+                            "subagent_type": "osint-analyst",
+                            "prompt": "Current phase: exploit\n",
+                        },
+                    },
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    response = client.get(
+        f"/projects/{project['id']}/runs/{run['id']}/summary",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+
+    expected_updated_at = datetime.fromtimestamp(runtime_activity_timestamp_ms / 1000, UTC).replace(
+        tzinfo=None,
+        microsecond=0,
+    ).strftime("%Y-%m-%d %H:%M:%S")
+    assert payload["overview"]["updated_at"] == expected_updated_at
+
+
 def test_run_summary_keeps_late_source_analyzer_log_projection_in_consume_test():
     client = TestClient(app)
     token = register_and_login(client, "alice")
@@ -906,6 +985,92 @@ def test_run_summary_reopened_current_phase_prunes_completed_marker_and_stays_ac
     consume_waterfall = next(item for item in run_metadata["phase_waterfall"] if item["phase"] == "consume-test")
     assert consume_waterfall["state"] == "active"
     assert consume_waterfall["active_agents"] == 1
+
+
+def test_run_summary_prefers_active_exploit_task_over_remaining_consume_queue():
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "http://127.0.0.1:8000")
+    active_dir = setup_active_engagement(run)
+    (active_dir / "scope.json").write_text(
+        json.dumps(
+            {
+                "hostname": "127.0.0.1",
+                "status": "in_progress",
+                "phases_completed": ["recon", "collect"],
+                "current_phase": "consume_test",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with sqlite3.connect(active_dir / "cases.db") as connection:
+        connection.execute(
+            "CREATE TABLE cases (type TEXT NOT NULL, status TEXT NOT NULL, assigned_agent TEXT, source TEXT)"
+        )
+        connection.execute(
+            "INSERT INTO cases (type, status, assigned_agent, source) VALUES ('api', 'processing', 'vulnerability-analyst', 'katana-xhr')"
+        )
+        connection.execute(
+            "INSERT INTO cases (type, status, assigned_agent, source) VALUES ('page', 'pending', NULL, 'katana')"
+        )
+        connection.commit()
+
+    for event in [
+        {
+            "event_type": "task.started",
+            "phase": "consume-test",
+            "task_name": "vulnerability-analyst",
+            "agent_name": "vulnerability-analyst",
+            "summary": "Analysis start",
+        },
+        {
+            "event_type": "task.started",
+            "phase": "exploit",
+            "task_name": "exploit-developer",
+            "agent_name": "exploit-developer",
+            "summary": "Exploit start",
+        },
+    ]:
+        response = client.post(
+            f"/projects/{project['id']}/runs/{run['id']}/events",
+            headers={"Authorization": f"Bearer {token}"},
+            json=event,
+        )
+        assert response.status_code == 201
+
+    response = client.get(
+        f"/projects/{project['id']}/runs/{run['id']}/summary",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+
+    exploit_phase = next(item for item in payload["phases"] if item["phase"] == "exploit")
+    consume_phase = next(item for item in payload["phases"] if item["phase"] == "consume-test")
+    exploit_agent = next(item for item in payload["agents"] if item["agent_name"] == "exploit-developer")
+
+    assert payload["overview"]["current_phase"] == "exploit"
+    assert payload["current"]["phase"] == "exploit"
+    assert payload["current"]["agent_name"] == "exploit-developer"
+    assert exploit_phase["state"] == "active"
+    assert exploit_phase["active_agents"] == 1
+    assert consume_phase["state"] == "active"
+    assert consume_phase["active_agents"] == 1
+    assert exploit_agent["phase"] == "exploit"
+    assert exploit_agent["status"] == "active"
+
+    persisted_scope = json.loads((active_dir / "scope.json").read_text(encoding="utf-8"))
+    assert persisted_scope["current_phase"] == "exploit"
+    assert persisted_scope["phases_completed"] == ["recon", "collect", "consume_test"]
+
+    run_metadata = json.loads((Path(run["engagement_root"]) / "run.json").read_text(encoding="utf-8"))
+    assert run_metadata["current_phase"] == "exploit"
+    exploit_waterfall = next(item for item in run_metadata["phase_waterfall"] if item["phase"] == "exploit")
+    assert exploit_waterfall["state"] == "active"
+    assert exploit_waterfall["active_agents"] == 1
+
 
 
 def test_run_summary_reopens_consume_test_when_queue_remains_after_exploit_escalation():
@@ -1307,6 +1472,9 @@ def test_run_summary_projects_current_state_into_run_metadata():
     assert run_metadata["phase_waterfall"] == payload["phases"]
     assert run_metadata["agents"] == payload["agents"]
     assert run_metadata["current_phase"] == payload["overview"]["current_phase"]
+    assert run_metadata["current_task"] == payload["current"]["task_name"]
+    assert run_metadata["current_agent"] == payload["current"]["agent_name"]
+    assert run_metadata["current_summary"] == payload["current"]["summary"]
     assert run_metadata["findings_count"] == payload["overview"]["findings_count"]
     assert run_metadata["active_agents"] == payload["overview"]["active_agents"]
     assert run_metadata["available_agents"] == payload["overview"]["available_agents"]
@@ -1920,6 +2088,10 @@ def test_run_summary_normalizes_loopback_runtime_artifacts_and_redacts_katana_he
         "# Penetration Test Report: http://host.docker.internal:8000\n",
         encoding="utf-8",
     )
+    (active_dir / "log.md").write_text(
+        "# Engagement Log\n\n- **Target**: http://host.docker.internal:8000\n",
+        encoding="utf-8",
+    )
     (active_dir / "surfaces.jsonl").write_text(
         '{"surface_type":"dynamic_render","target":"GET http://host.docker.internal:8000/rest/admin","source":"source-analyzer","rationale":"local runtime alias leaked"}\n',
         encoding="utf-8",
@@ -1987,17 +2159,89 @@ def test_run_summary_normalizes_loopback_runtime_artifacts_and_redacts_katana_he
 
     findings_text = (active_dir / "findings.md").read_text(encoding="utf-8")
     report_text = (active_dir / "report.md").read_text(encoding="utf-8")
+    log_text = (active_dir / "log.md").read_text(encoding="utf-8")
     surfaces_text = (active_dir / "surfaces.jsonl").read_text(encoding="utf-8")
     katana_text = (scans_dir / "katana_output.jsonl").read_text(encoding="utf-8")
 
     assert "host.docker.internal" not in findings_text
     assert "host.docker.internal" not in report_text
+    assert "host.docker.internal" not in log_text
     assert "host.docker.internal" not in surfaces_text
-    assert katana_text == original_katana_text
-    assert "host.docker.internal" in katana_text
-    assert "secret-jwt" in katana_text
-    assert "secret-cookie" in katana_text
-    assert '<redacted>' not in katana_text
+    assert katana_text != original_katana_text
+    assert "host.docker.internal" not in katana_text
+    assert "secret-jwt" not in katana_text
+    assert "secret-cookie" not in katana_text
+    assert '<redacted>' in katana_text
+
+    katana_rows = [json.loads(line) for line in katana_text.splitlines() if line.strip()]
+    assert katana_rows[0]["request"]["endpoint"] == "http://127.0.0.1:8000/"
+    xhr_headers = katana_rows[0]["response"]["xhr_requests"][0]["headers"]
+    assert xhr_headers["Authorization"] == "<redacted>"
+    assert xhr_headers["Cookie"] == "<redacted>"
+
+
+def test_run_summary_redacts_live_katana_headers_for_non_loopback_runs():
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "https://www.okx.com")
+    active_dir = setup_active_engagement(run)
+
+    (active_dir / "scope.json").write_text(
+        json.dumps(
+            {
+                "target": "https://www.okx.com",
+                "hostname": "www.okx.com",
+                "port": 443,
+                "scope": ["www.okx.com", "*.www.okx.com"],
+                "status": "in_progress",
+                "current_phase": "collect",
+            }
+        ),
+        encoding="utf-8",
+    )
+    scans_dir = active_dir / "scans"
+    scans_dir.mkdir(parents=True, exist_ok=True)
+    original_katana_text = json.dumps(
+        {
+            "request": {"method": "GET", "endpoint": "https://www.okx.com/"},
+            "response": {
+                "status_code": 200,
+                "headers": {"Content-Type": "text/html"},
+                "xhr_requests": [
+                    {
+                        "method": "GET",
+                        "endpoint": "https://www.okx.com/api/v5/account/balance",
+                        "headers": {
+                            "Cookie": "session=secret-cookie",
+                            "X-API-Key": "secret-api-key",
+                            "Accept": "application/json",
+                        },
+                    }
+                ],
+            },
+        },
+        separators=(",", ":"),
+    )
+    (scans_dir / "katana_output.jsonl").write_text(original_katana_text, encoding="utf-8")
+
+    response = client.get(
+        f"/projects/{project['id']}/runs/{run['id']}/summary",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+
+    katana_text = (scans_dir / "katana_output.jsonl").read_text(encoding="utf-8")
+    assert "secret-cookie" not in katana_text
+    assert "secret-api-key" not in katana_text
+    assert "<redacted>" in katana_text
+    assert "https://www.okx.com/api/v5/account/balance" in katana_text
+
+    katana_rows = [json.loads(line) for line in katana_text.splitlines() if line.strip()]
+    xhr_headers = katana_rows[0]["response"]["xhr_requests"][0]["headers"]
+    assert xhr_headers["Cookie"] == "<redacted>"
+    assert xhr_headers["X-API-Key"] == "<redacted>"
+    assert xhr_headers["Accept"] == "application/json"
 
 
 def test_run_summary_normalizes_malformed_katana_jsonl_streams_for_terminal_runs():
@@ -2093,6 +2337,74 @@ def test_run_summary_normalizes_malformed_katana_jsonl_streams_for_terminal_runs
     assert xhr_headers["Authorization"] == "<redacted>"
     assert xhr_headers["Cookie"] == "<redacted>"
     assert rows[2]["response"]["headers"]["Feature-Policy"] == "payment 'self'"
+
+
+
+def test_run_summary_drops_irrecoverable_malformed_katana_jsonl_lines_for_terminal_runs():
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "http://127.0.0.1:8000")
+    active_dir = setup_active_engagement(run)
+
+    (active_dir / "scope.json").write_text(
+        json.dumps(
+            {
+                "target": "http://host.docker.internal:8000",
+                "hostname": "host.docker.internal",
+                "port": 8000,
+                "scope": ["host.docker.internal", "*.host.docker.internal"],
+                "status": "in_progress",
+                "current_phase": "consume_test",
+            }
+        ),
+        encoding="utf-8",
+    )
+    scans_dir = active_dir / "scans"
+    scans_dir.mkdir(parents=True, exist_ok=True)
+
+    first = json.dumps(
+        {
+            "request": {"method": "GET", "endpoint": "http://host.docker.internal:8000/"},
+            "response": {"status_code": 200, "headers": {"Content-Type": "text/html"}},
+        },
+        separators=(",", ":"),
+    )
+    second = json.dumps(
+        {
+            "request": {"method": "GET", "endpoint": "http://host.docker.internal:8000/rest/user/login"},
+            "response": {"status_code": 200, "headers": {"Content-Type": "application/json"}},
+        },
+        separators=(",", ":"),
+    )
+    malformed = '{"request":{"method":"GET","endpoint":"http://host.docker.internal:8000/rest/continue-code","attribu//127.0.0.1:8000/main.jdocker.internal:8000/main.js"},"response":{"status_co'
+    suffix_fragment = ':37 GMT"},"content_length":821}}'
+    (scans_dir / "katana_output.jsonl").write_text(
+        first + "\n" + malformed + "\n" + second + "\n" + suffix_fragment + "\n",
+        encoding="utf-8",
+    )
+
+    from app import db as app_db
+
+    app_db.update_run_status(run["id"], "completed")
+
+    response = client.get(
+        f"/projects/{project['id']}/runs/{run['id']}/summary",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+
+    normalized = (scans_dir / "katana_output.jsonl").read_text(encoding="utf-8")
+    assert "host.docker.internal" not in normalized
+    assert "attribu//127.0.0.1:8000/main.jdocker.internal:8000/main.js" not in normalized
+    assert ':37 GMT"},"content_length":821}}' not in normalized
+
+    rows = [json.loads(line) for line in normalized.splitlines() if line.strip()]
+    assert len(rows) == 2
+    assert [row["request"]["endpoint"] for row in rows] == [
+        "http://127.0.0.1:8000/",
+        "http://127.0.0.1:8000/rest/user/login",
+    ]
 
 
 
@@ -2299,6 +2611,83 @@ def test_run_summary_backfill_accepts_category_and_path_surface_candidates():
             "source": "source-analyzer",
             "rationale": "lazy-loaded web3 sandbox compiles Solidity client-side",
             "evidence_ref": "",
+            "status": "discovered",
+        },
+    ]
+
+
+def test_run_summary_backfill_accepts_new_surface_taxonomy_entries():
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "https://www.okx.com")
+    active_dir = setup_active_engagement(run)
+
+    (active_dir / "scope.json").write_text(
+        json.dumps(
+            {
+                "target": "https://www.okx.com",
+                "hostname": "www.okx.com",
+                "port": 443,
+                "scope": ["www.okx.com", "*.okx.com"],
+                "status": "in_progress",
+                "current_phase": "consume_test",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (active_dir / "surfaces.jsonl").write_text("", encoding="utf-8")
+
+    process_log = Path(run["engagement_root"], "runtime", "process.log")
+    process_log.parent.mkdir(parents=True, exist_ok=True)
+    process_log.write_text(
+        json.dumps(
+            {
+                "type": "tool_use",
+                "part": {
+                    "state": {
+                        "output": (
+                            "[vulnerability-analyst] #### Surface Candidates\n"
+                            "[vulnerability-analyst] {\"surface_type\":\"api_param_followup\",\"target\":\"GET https://www.okx.com/priapi/v1/dx/market/v2/token/pool/project/list :: chainId\",\"source\":\"vulnerability-analyst\",\"rationale\":\"Endpoint explicitly requires Integer chainId; concrete input missing in current batch\",\"evidence_ref\":\"scans/va-api-batch/summary.json\",\"status\":\"discovered\"}\n"
+                            "[vulnerability-analyst] {\"surface_type\":\"cors_review\",\"target\":\"GET https://www.okx.com/v3/users/support/common/list-download-url\",\"source\":\"vulnerability-analyst\",\"rationale\":\"Reflected arbitrary Origin in ACAO on unauthenticated public endpoint; low-impact weak signal only\",\"evidence_ref\":\"scans/va-api-batch/summary.json\",\"status\":\"discovered\"}\n"
+                            "\n"
+                            "[vulnerability-analyst] #### Findings\n"
+                        )
+                    }
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    response = client.get(
+        f"/projects/{project['id']}/runs/{run['id']}/summary",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+
+    payload = response.json()
+    assert payload["coverage"]["total_surfaces"] == 2
+    assert any(item["type"] == "api_param_followup" and item["count"] == 1 for item in payload["coverage"]["surface_types"])
+    assert any(item["type"] == "cors_review" and item["count"] == 1 for item in payload["coverage"]["surface_types"])
+
+    surfaces_rows = [json.loads(line) for line in (active_dir / "surfaces.jsonl").read_text(encoding="utf-8").splitlines() if line.strip()]
+    assert surfaces_rows == [
+        {
+            "surface_type": "api_param_followup",
+            "target": "GET https://www.okx.com/priapi/v1/dx/market/v2/token/pool/project/list :: chainId",
+            "source": "vulnerability-analyst",
+            "rationale": "Endpoint explicitly requires Integer chainId; concrete input missing in current batch",
+            "evidence_ref": "scans/va-api-batch/summary.json",
+            "status": "discovered",
+        },
+        {
+            "surface_type": "cors_review",
+            "target": "GET https://www.okx.com/v3/users/support/common/list-download-url",
+            "source": "vulnerability-analyst",
+            "rationale": "Reflected arbitrary Origin in ACAO on unauthenticated public endpoint; low-impact weak signal only",
+            "evidence_ref": "scans/va-api-batch/summary.json",
             "status": "discovered",
         },
     ]

@@ -52,6 +52,7 @@ while IFS= read -r line; do
     url=""
     url_path=""
     override_type=""
+    line_source=""
     query_params=""
     body_params=""
     path_params=""
@@ -63,6 +64,7 @@ while IFS= read -r line; do
         url=$(echo "$line" | jq -r '.url // empty' 2>/dev/null)
         url_path=$(echo "$line" | jq -r '.url_path // empty' 2>/dev/null)
         override_type=$(echo "$line" | jq -r '.type // empty' 2>/dev/null)
+        line_source=$(echo "$line" | jq -r '.source // .agent // empty' 2>/dev/null)
         query_params=$(echo "$line" | jq -c '.query_params // {}' 2>/dev/null || echo '{}')
         body_params=$(echo "$line" | jq -c '.body_params // {}' 2>/dev/null || echo '{}')
         path_params=$(echo "$line" | jq -c '.path_params // {}' 2>/dev/null || echo '{}')
@@ -83,6 +85,11 @@ while IFS= read -r line; do
     # Strip URL to first token only — ignore any trailing data (status codes, notes, tabs, etc.)
     url=$(printf '%s' "$url" | awk '{print $1}')
     method=$(printf '%s' "$method" | tr '[:lower:]' '[:upper:]')
+
+    effective_source="$SOURCE"
+    if [[ -n "$line_source" && "$line_source" != "null" ]]; then
+        effective_source="$line_source"
+    fi
 
     # Skip unresolved placeholders and non-concrete queue entries
     if contains_queue_placeholder "$url"; then
@@ -130,9 +137,9 @@ while IFS= read -r line; do
     fi
 
     # Generate dedup signature
-    params_sig=$(generate_params_sig "$query_params" "$body_params")
+    params_sig=$(generate_params_sig "$query_params" "$body_params" "$url")
 
-    if ! should_enqueue_case "$SOURCE" "$case_type" "$method" "$url" "$url_path"; then
+    if ! should_enqueue_case "$effective_source" "$case_type" "$method" "$url" "$url_path"; then
         continue
     fi
 
@@ -142,7 +149,7 @@ while IFS= read -r line; do
         "$query_params" "$body_params" "$path_params" "$cookie_params" \
         "" "" "" "0" \
         "0" "" "0" "" \
-        "$case_type" "$SOURCE" "$params_sig"
+        "$case_type" "$effective_source" "$params_sig"
 
     count=$((count + 1))
 done

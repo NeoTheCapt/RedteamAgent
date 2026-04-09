@@ -14,14 +14,32 @@ surface_canonical_type() {
     local surface_type="${1:?surface type required}"
     surface_type="$(printf '%s' "$surface_type" | tr '[:upper:]' '[:lower:]' | tr '-' '_')"
     case "$surface_type" in
-        spa_route|spa|client_route|client_side_route|frontend_route)
+        spa_route|spa|client_route|client_side_route|frontend_route|p2p_trading|web3_assets|preview_or_internal_content|asset_distribution|cdn_asset_host|cdn_host|download_host|object_storage|storage_bucket)
             printf '%s\n' "dynamic_render"
             ;;
-        auth|authentication|login|register|mfa|oauth|oauth_flow)
+        auth|authentication|login|register|mfa|oauth|oauth_flow|auth_surface|identity_verification|anti_automation|broken_anti_automation)
             printf '%s\n' "auth_entry"
             ;;
-        business_logic|logic_flow|stateful_flow|race_condition)
+        auth_workflow)
+            printf '%s\n' "account_recovery"
+            ;;
+        business_logic|logic_flow|stateful_flow|race_condition|authenticated_admin_api|authenticated_api)
             printf '%s\n' "privileged_write"
+            ;;
+        update_distribution|distribution_artifact|file|upload)
+            printf '%s\n' "file_handling"
+            ;;
+        cors_surface)
+            printf '%s\n' "cors_review"
+            ;;
+        opaque_post_contract|opaque_post_body|body_contract|schema_followup|reflected_input)
+            printf '%s\n' "api_param_followup"
+            ;;
+        api_docs|swagger|openapi)
+            printf '%s\n' "api_documentation"
+            ;;
+        admin_session|jwt|jwt_token|bearer_token|session_token)
+            printf '%s\n' "workflow_token"
             ;;
         *)
             printf '%s\n' "$surface_type"
@@ -33,7 +51,7 @@ surface_validate_type() {
     local surface_type="${1:?surface type required}"
     surface_type="$(surface_canonical_type "$surface_type")"
     case "$surface_type" in
-        auth_entry|account_recovery|object_reference|privileged_write|file_handling|dynamic_render|api_documentation|workflow_token)
+        auth_entry|account_recovery|object_reference|privileged_write|file_handling|dynamic_render|api_documentation|workflow_token|api_param_followup|cors_review)
             return 0
             ;;
         *)
@@ -43,8 +61,22 @@ surface_validate_type() {
     esac
 }
 
+surface_canonical_status() {
+    local status="${1:?status required}"
+    status="$(printf '%s' "$status" | tr '[:upper:]' '[:lower:]' | tr '-' '_')"
+    case "$status" in
+        candidate|new|follow_up|followup)
+            printf '%s\n' "discovered"
+            ;;
+        *)
+            printf '%s\n' "$status"
+            ;;
+    esac
+}
+
 surface_validate_status() {
     local status="${1:?status required}"
+    status="$(surface_canonical_status "$status")"
     case "$status" in
         discovered|covered|not_applicable|deferred)
             return 0
@@ -84,6 +116,7 @@ upsert_surface_record() {
     local surface_file tmp_file
 
     surface_validate_type "$surface_type"
+    status="$(surface_canonical_status "$status")"
     surface_validate_status "$status"
     surface_validate_target "$target"
 
