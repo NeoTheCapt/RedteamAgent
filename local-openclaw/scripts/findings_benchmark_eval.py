@@ -36,11 +36,13 @@ VULN_FAMILY_HINTS = {
     "template", "supply", "chain", "misconfiguration", "crypto", "cryptographic", "authorization",
     "authentication", "access", "control", "business", "logic", "open", "directory", "steganography",
     "policy", "security", "sensitive", "coupon", "graphql", "xml", "redirects", "component",
+    "documentation", "swagger", "openapi", "schema", "credentials", "credential", "hardcoded",
+    "password", "backup", "exif", "enumeration", "redirect", "redirects",
 }
 GENERIC_FAMILY_TOKENS = {
     "access", "control", "security", "authentication", "authorization", "business", "logic",
     "policy", "sensitive", "data", "information", "exposure", "disclosure", "input", "validation",
-    "component", "components", "issue", "issues", "directory", "open", "file",
+    "component", "components", "issue", "issues", "directory", "open", "file", "misconfiguration",
 }
 
 
@@ -227,7 +229,7 @@ def parse_benchmark_markdown(path: Path) -> tuple[list[BenchmarkItem], dict[str,
                         attack_vector=attack,
                         endpoint=endpoint,
                         automation=automation,
-                        endpoint_candidates=extract_endpoint_candidates(endpoint),
+                        endpoint_candidates=extract_endpoint_candidates(endpoint, allow_textual_fallback=True),
                         text_tokens=tokenize(corpus),
                     )
                 )
@@ -326,7 +328,7 @@ def normalize_endpoint(candidate: str) -> str:
     return candidate
 
 
-def extract_endpoint_candidates(text: str) -> list[str]:
+def extract_endpoint_candidates(text: str, allow_textual_fallback: bool = False) -> list[str]:
     candidates: list[str] = []
     seen: set[str] = set()
     for raw in re.findall(r"`([^`]+)`", text):
@@ -349,6 +351,11 @@ def extract_endpoint_candidates(text: str) -> list[str]:
         if normalized and normalized not in seen:
             seen.add(normalized)
             candidates.append(normalized)
+    if allow_textual_fallback and not candidates:
+        normalized = normalize_endpoint(text)
+        if normalized and len(normalized) <= 80 and normalized not in seen:
+            seen.add(normalized)
+            candidates.append(normalized)
     return candidates
 
 
@@ -357,10 +364,10 @@ def endpoint_score(finding_eps: Iterable[str], benchmark_eps: Iterable[str]) -> 
     best_label = "none"
     for found in finding_eps:
         found_norm = normalize_endpoint(found)
-        found_segments = {segment for segment in re.split(r"[/?&=]+", found_norm) if segment and segment not in {"{param}"}}
+        found_segments = {segment for segment in re.split(r"[/?&=\s]+", found_norm) if segment and segment not in {"{param}"}}
         for expected in benchmark_eps:
             expected_norm = normalize_endpoint(expected)
-            expected_segments = {segment for segment in re.split(r"[/?&=]+", expected_norm) if segment and segment not in {"{param}"}}
+            expected_segments = {segment for segment in re.split(r"[/?&=\s]+", expected_norm) if segment and segment not in {"{param}"}}
             if found_norm == expected_norm:
                 return 8, f"exact:{expected_norm}"
             if found_norm and expected_norm and (found_norm.startswith(expected_norm) or expected_norm.startswith(found_norm)):
@@ -374,6 +381,9 @@ def endpoint_score(finding_eps: Iterable[str], benchmark_eps: Iterable[str]) -> 
             elif overlap >= 2 and best_score < 4:
                 best_score = 4
                 best_label = f"segments:{expected_norm}"
+            elif overlap >= 1 and best_score < 3 and (' ' in found_norm or ' ' in expected_norm):
+                best_score = 3
+                best_label = f"textual:{expected_norm}"
     return best_score, best_label
 
 
@@ -393,9 +403,10 @@ def choose_matches(findings: list[Finding], items: list[BenchmarkItem | Benchmar
             score, shared, ep_label = match_score(finding, item)
             if ep_label == "none":
                 continue
-            if score >= 8 and shared:
+            shared_specific = specific_family_tokens(finding.text_tokens) & specific_family_tokens(item.text_tokens)
+            if shared_specific and score >= 8:
                 candidates.append(Match(score=score, finding_index=f_idx, benchmark_index=b_idx, shared_tokens=shared, endpoint_match=ep_label))
-            elif score >= 10 and ep_label.startswith("exact:"):
+            elif not shared_specific and ep_label.startswith("exact:") and score >= 13:
                 candidates.append(Match(score=score, finding_index=f_idx, benchmark_index=b_idx, shared_tokens=shared, endpoint_match=ep_label))
     candidates.sort(key=lambda entry: (-entry.score, entry.finding_index, entry.benchmark_index))
     used_findings: set[int] = set()
