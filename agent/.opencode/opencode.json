@@ -16,7 +16,6 @@
     "skills/file-inclusion/SKILL.md",
     "skills/report-generation/SKILL.md",
     "skills/source-analysis/SKILL.md",
-    "skills/case-dispatching/SKILL.md",
     "skills/command-injection/SKILL.md",
     "skills/ssti-testing/SKILL.md",
     "skills/idor-testing/SKILL.md",
@@ -146,7 +145,7 @@
       "grep": true
     },
     "osint-analyst": {
-      "description": "OSINT intelligence gathering — CVE/breach/DNS/social research. Dispatched in EXPLOIT phase parallel with exploit-developer.",
+      "description": "OSINT intelligence gathering \u2014 CVE/breach/DNS/social research. Dispatched in EXPLOIT phase parallel with exploit-developer.",
       "mode": "subagent",
       "prompt": "{file:prompts/agents/osint-analyst.txt}",
       "read": true,
