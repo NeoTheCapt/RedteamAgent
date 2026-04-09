@@ -1,6 +1,6 @@
 import io
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 import subprocess
@@ -847,7 +847,7 @@ def test_running_container_stall_reason_keeps_processing_case_alive_when_active_
 
 
 
-def test_running_container_stall_reason_treats_open_subagent_session_logs_as_active_runtime_agents():
+def test_running_container_stall_reason_treats_recent_open_subagent_session_logs_as_active_runtime_agents():
     client = TestClient(app)
     token = register_and_login(client, "alice")
     project = create_project(client, token)
@@ -896,9 +896,11 @@ def test_running_container_stall_reason_treats_open_subagent_session_logs_as_act
     log_dir = run_root / "opencode-home" / "log"
     log_dir.mkdir(parents=True, exist_ok=True)
     opencode_log = log_dir / "2026-03-31T000000.log"
+    recent_created_at = datetime.now(tz=UTC).replace(microsecond=0)
+    recent_stream_at = recent_created_at + timedelta(seconds=1)
     opencode_log.write_text(
-        "INFO 2026-03-31T00:00:00 service=session id=ses_testsubagent parentID=ses_parent cwd=/tmp title=Analyze API batch (@vulnerability-analyst subagent) permissionProfile=default model=openai/gpt-5.4 created\n"
-        "INFO 2026-03-31T00:00:01 service=llm sessionID=ses_testsubagent agent=vulnerability-analyst mode=subagent stream\n",
+        f"INFO {recent_created_at.strftime('%Y-%m-%dT%H:%M:%S')} service=session id=ses_testsubagent parentID=ses_parent cwd=/tmp title=Analyze API batch (@vulnerability-analyst subagent) permissionProfile=default model=openai/gpt-5.4 created\n"
+        f"INFO {recent_stream_at.strftime('%Y-%m-%dT%H:%M:%S')} service=llm sessionID=ses_testsubagent agent=vulnerability-analyst mode=subagent stream\n",
         encoding="utf-8",
     )
 
@@ -913,6 +915,81 @@ def test_running_container_stall_reason_treats_open_subagent_session_logs_as_act
     from app.services.launcher import _running_container_stall_reason
 
     assert _running_container_stall_reason(run_row) is None
+
+
+
+def test_running_container_stall_reason_ignores_stale_open_subagent_session_logs_after_runtime_timeout():
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "https://opencode-subagent-stale.example")
+    db.update_run_status(run["id"], "running")
+
+    run_row = db.get_run_by_id(run["id"])
+    assert run_row is not None
+
+    run_root = Path(run["engagement_root"])
+    runtime_dir = run_root / "runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    process_log = runtime_dir / "process.log"
+    process_log.write_text("stale processing assignment waiting on subagent\n", encoding="utf-8")
+
+    workspace = run_root / "workspace"
+    engagement_dir = workspace / "engagements" / "2026-03-31-000000-opencode-subagent-stale"
+    engagement_dir.mkdir(parents=True, exist_ok=True)
+    (workspace / "engagements" / ".active").write_text(
+        "engagements/2026-03-31-000000-opencode-subagent-stale\n",
+        encoding="utf-8",
+    )
+    scope_path = engagement_dir / "scope.json"
+    scope_path.write_text(
+        json.dumps(
+            {
+                "status": "in_progress",
+                "current_phase": "consume_test",
+                "phases_completed": ["recon", "collect"],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    with sqlite3.connect(engagement_dir / "cases.db") as connection:
+        connection.execute(
+            "CREATE TABLE cases (id INTEGER PRIMARY KEY AUTOINCREMENT, status TEXT NOT NULL, assigned_agent TEXT)"
+        )
+        connection.execute(
+            "INSERT INTO cases(status, assigned_agent) VALUES ('processing', 'vulnerability-analyst')"
+        )
+        connection.commit()
+
+    (run_root / "run.json").write_text(json.dumps({"agents": []}) + "\n", encoding="utf-8")
+
+    log_dir = run_root / "opencode-home" / "log"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    opencode_log = log_dir / "2026-03-31T000000.log"
+    stale_created_at = datetime.now(tz=UTC).replace(microsecond=0) - timedelta(seconds=1000)
+    stale_stream_at = stale_created_at + timedelta(seconds=1)
+    opencode_log.write_text(
+        f"INFO {stale_created_at.strftime('%Y-%m-%dT%H:%M:%S')} service=session id=ses_testsubagent parentID=ses_parent cwd=/tmp title=Analyze API batch (@vulnerability-analyst subagent) permissionProfile=default model=openai/gpt-5.4 created\n"
+        f"INFO {stale_stream_at.strftime('%Y-%m-%dT%H:%M:%S')} service=llm sessionID=ses_testsubagent agent=vulnerability-analyst mode=subagent stream\n",
+        encoding="utf-8",
+    )
+
+    import os
+
+    stale_runtime_epoch = datetime.now().timestamp() - 130
+    os.utime(process_log, (stale_runtime_epoch, stale_runtime_epoch))
+    os.utime(scope_path, (stale_runtime_epoch, stale_runtime_epoch))
+    os.utime(engagement_dir / "cases.db", (stale_runtime_epoch, stale_runtime_epoch))
+    os.utime(opencode_log, (stale_runtime_epoch, stale_runtime_epoch))
+
+    from app.services.launcher import _running_container_stall_reason
+
+    assert _running_container_stall_reason(run_row) == (
+        "consume_test",
+        "queue_stalled",
+        "Processing queue assignments (vulnerability-analyst) had no matching active runtime agent after stall grace period elapsed.",
+    )
 
 
 
