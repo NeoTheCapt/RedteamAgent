@@ -81,9 +81,11 @@ KATANA_FALLBACK_ACTIVATED=0
 KATANA_FALLBACK_STALL_SECONDS="${KATANA_FALLBACK_STALL_SECONDS:-90}"
 KATANA_FALLBACK_RECOVERABLE_THRESHOLD="${KATANA_FALLBACK_RECOVERABLE_THRESHOLD:-8}"
 KATANA_LAST_SUCCESS_TS=0
+KATANA_LAST_XHR_TS=0
 KATANA_LAST_OUTPUT_CHANGE_TS=0
 KATANA_RECOVERABLE_ERROR_LINES=0
 KATANA_SUCCESS_LINES=0
+KATANA_XHR_REQUESTS=0
 KATANA_INGEST_EXIT_GRACE_SECONDS="${KATANA_INGEST_EXIT_GRACE_SECONDS:-10}"
 
 cleanup_katana_ingest() {
@@ -144,6 +146,44 @@ maybe_log_progress() {
     fi
 }
 
+katana_request_is_fallback_xhr_candidate() {
+    local request_json="${1:-}"
+    local source_name method url url_path request_accept request_content_type response_content_type has_body
+
+    [[ "$KATANA_FALLBACK_ACTIVATED" == "1" ]] || return 1
+
+    source_name="$(printf '%s' "$request_json" | jq -r '.source // "katana"' 2>/dev/null || echo "katana")"
+    [[ "$source_name" == "katana" ]] || return 1
+
+    method="$(printf '%s' "$request_json" | jq -r '.method // "GET"' 2>/dev/null || echo "GET")"
+    url="$(printf '%s' "$request_json" | jq -r '.url // empty' 2>/dev/null || true)"
+    [[ -n "$url" ]] || return 1
+    url_path="$(extract_url_path "$url")"
+
+    request_accept="$(printf '%s' "$request_json" | jq -r '.request_accept // ""' 2>/dev/null || true)"
+    request_content_type="$(printf '%s' "$request_json" | jq -r '.request_content_type // ""' 2>/dev/null || true)"
+    response_content_type="$(printf '%s' "$request_json" | jq -r '.content_type // ""' 2>/dev/null || true)"
+    has_body="$(printf '%s' "$request_json" | jq -r 'if (.has_body // false) then "1" else "0" end' 2>/dev/null || echo "0")"
+
+    if [[ "$has_body" == "1" ]]; then
+        return 0
+    fi
+
+    case "$method" in
+        POST|PUT|PATCH|DELETE)
+            return 0
+            ;;
+    esac
+
+    if is_katana_api_like_path "$url_path"; then
+        if [[ "$request_accept" == *application/json* ]] || [[ "$request_content_type" == *application/json* ]] || [[ "$response_content_type" == *application/json* ]]; then
+            return 0
+        fi
+    fi
+
+    return 1
+}
+
 resolve_katana_request_source() {
     local request_json="${1:-}"
     local source_name tag attribute source_ref url url_path error_text
@@ -177,6 +217,11 @@ resolve_katana_request_source() {
         # katana-xhr source counts on runs where the crawler only produced recoverable
         # response-is-nil errors.
         printf '%s\n' "$source_name"
+        return 0
+    fi
+
+    if katana_request_is_fallback_xhr_candidate "$request_json"; then
+        printf 'katana-xhr\n'
         return 0
     fi
 
@@ -240,6 +285,9 @@ katana_line_counts_as_success() {
                 method: (.request.method // "GET"),
                 url: (.request.endpoint // .request.url // .url // empty),
                 content_type: (.response.headers["content-type"] // .response.headers["Content-Type"] // ""),
+                request_accept: (.request.headers["Accept"] // .request.headers["accept"] // ""),
+                request_content_type: (.request.headers["Content-Type"] // .request.headers["content-type"] // ""),
+                has_body: (((.request.body // "") | tostring | length) > 0),
                 response_status: (.response.status_code // 0),
                 source: "katana",
                 source_ref: (.request.source // ""),
@@ -265,6 +313,22 @@ katana_line_counts_as_success() {
     )
 
     return 1
+}
+
+katana_line_xhr_request_count() {
+    local line="${1:-}"
+    local xhr_count
+
+    [[ -n "$line" ]] || {
+        printf '0\n'
+        return 0
+    }
+
+    xhr_count="$(printf '%s' "$line" | jq -r '(.response.xhr_requests // []) | length' 2>/dev/null || echo "0")"
+    if [[ ! "$xhr_count" =~ ^[0-9]+$ ]]; then
+        xhr_count=0
+    fi
+    printf '%s\n' "$xhr_count"
 }
 
 ingest_request() {
@@ -321,9 +385,15 @@ ingest_request() {
 
 ingest_katana_line() {
     local line="${1:-}"
-    local url method content_type resp_status request_json error_text
+    local url method content_type resp_status request_json error_text xhr_request_count
 
     [[ -n "$line" ]] || return 0
+
+    xhr_request_count="$(katana_line_xhr_request_count "$line")"
+    if [[ "$xhr_request_count" =~ ^[0-9]+$ ]] && (( xhr_request_count > 0 )); then
+        KATANA_XHR_REQUESTS=$((KATANA_XHR_REQUESTS + xhr_request_count))
+        KATANA_LAST_XHR_TS="$(date +%s)"
+    fi
 
     error_text="$(printf '%s' "$line" | jq -r '.error // empty' 2>/dev/null || true)"
     if [[ -n "$error_text" ]] && katana_error_is_recoverable_discovery "$error_text"; then
@@ -360,6 +430,9 @@ ingest_katana_line() {
                 method: (.request.method // "GET"),
                 url: (.request.endpoint // .request.url // .url // empty),
                 content_type: (.response.headers["content-type"] // .response.headers["Content-Type"] // ""),
+                request_accept: (.request.headers["Accept"] // .request.headers["accept"] // ""),
+                request_content_type: (.request.headers["Content-Type"] // .request.headers["content-type"] // ""),
+                has_body: (((.request.body // "") | tostring | length) > 0),
                 response_status: (.response.status_code // 0),
                 source: "katana",
                 source_ref: (.request.source // ""),
@@ -671,7 +744,7 @@ activate_plain_katana_fallback() {
         return 0
     fi
 
-    echo "[katana_ingest] Activating headless katana fallback after ${KATANA_RECOVERABLE_ERROR_LINES} recoverable hybrid errors and no successful crawl rows"
+    echo "[katana_ingest] Activating headless katana fallback after ${KATANA_RECOVERABLE_ERROR_LINES} recoverable hybrid errors and no katana-xhr discoveries"
     stop_katana >/dev/null 2>&1 || true
     sanitize_katana_output_for_restart
 
@@ -698,28 +771,26 @@ activate_plain_katana_fallback() {
 }
 
 maybe_activate_katana_fallback() {
-    local now elapsed_since_output elapsed_since_success
+    local now elapsed_since_xhr
 
     [[ "${KATANA_FALLBACK_ENABLE:-1}" == "1" ]] || return 0
     [[ "$KATANA_INGEST_STARTED_KATANA" == "1" ]] || return 0
     [[ "$KATANA_FALLBACK_ACTIVATED" == "0" ]] || return 0
     [[ "$KATANA_RECOVERABLE_ERROR_LINES" -ge "$KATANA_FALLBACK_RECOVERABLE_THRESHOLD" ]] || return 0
-    [[ "$KATANA_SUCCESS_LINES" -eq 0 ]] || return 0
+    [[ "$KATANA_XHR_REQUESTS" -eq 0 ]] || return 0
 
     now="$(date +%s)"
-    if [[ "$KATANA_LAST_OUTPUT_CHANGE_TS" -le 0 ]]; then
+    if [[ "$KATANA_LAST_XHR_TS" -le 0 ]]; then
         return 0
     fi
 
-    elapsed_since_output=$((now - KATANA_LAST_OUTPUT_CHANGE_TS))
-    elapsed_since_success=$((now - KATANA_LAST_SUCCESS_TS))
+    elapsed_since_xhr=$((now - KATANA_LAST_XHR_TS))
 
-    # Recoverable hybrid-error floods can keep appending new rows forever while never
-    # producing a single usable crawl result. In that state, waiting for output silence
-    # prevents the plain headless fallback from ever starting on noisy targets such as
-    # OKX. Once we've crossed the recoverable-error threshold, require a recent success
-    # signal, not a quiet output file.
-    if (( elapsed_since_success < KATANA_FALLBACK_STALL_SECONDS )); then
+    # Recoverable hybrid-error floods can keep appending asset/page rows forever while
+    # never yielding a single katana-xhr discovery. In that state, waiting for output
+    # silence or treating any 200 asset as sufficient progress prevents the plain
+    # headless fallback from ever starting on noisy targets such as OKX.
+    if (( elapsed_since_xhr < KATANA_FALLBACK_STALL_SECONDS )); then
         return 0
     fi
 
@@ -733,6 +804,7 @@ if [[ "${KATANA_INGEST_SKIP_START:-0}" != "1" ]]; then
     KATANA_INGEST_STARTED_KATANA=1
     KATANA_LAST_OUTPUT_CHANGE_TS="$(date +%s)"
     KATANA_LAST_SUCCESS_TS="$(date +%s)"
+    KATANA_LAST_XHR_TS="$(date +%s)"
 fi
 
 # --- Monitor output and ingest ---
