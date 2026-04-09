@@ -993,6 +993,87 @@ def test_running_container_stall_reason_ignores_stale_open_subagent_session_logs
 
 
 
+def test_running_container_stall_reason_flags_unresolved_permission_prompt_in_autonomous_runtime():
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "https://permission-stall.example")
+    db.update_run_status(run["id"], "running")
+
+    run_row = db.get_run_by_id(run["id"])
+    assert run_row is not None
+
+    run_root = Path(run["engagement_root"])
+    runtime_dir = run_root / "runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    (runtime_dir / "process.log").write_text("permission prompt pending\n", encoding="utf-8")
+
+    workspace = run_root / "workspace"
+    engagement_dir = workspace / "engagements" / "2026-03-31-000000-permission-stall"
+    engagement_dir.mkdir(parents=True, exist_ok=True)
+    (workspace / "engagements" / ".active").write_text(
+        "engagements/2026-03-31-000000-permission-stall\n",
+        encoding="utf-8",
+    )
+    (engagement_dir / "scope.json").write_text(
+        json.dumps(
+            {
+                "status": "in_progress",
+                "current_phase": "exploit",
+                "phases_completed": ["recon", "collect", "consume_test"],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    with sqlite3.connect(engagement_dir / "cases.db") as connection:
+        connection.execute(
+            "CREATE TABLE cases (id INTEGER PRIMARY KEY AUTOINCREMENT, status TEXT NOT NULL, assigned_agent TEXT)"
+        )
+        connection.execute("INSERT INTO cases(status, assigned_agent) VALUES ('pending', NULL)")
+        connection.commit()
+
+    permission_asked_at = datetime.now(tz=UTC).replace(microsecond=0) - timedelta(seconds=90)
+    (run_root / "run.json").write_text(
+        json.dumps(
+            {
+                "agents": [
+                    {
+                        "agent_name": "exploit-developer",
+                        "status": "active",
+                        "updated_at": permission_asked_at.strftime("%Y-%m-%d %H:%M:%S"),
+                    }
+                ]
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    log_dir = run_root / "opencode-home" / "log"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    opencode_log = log_dir / "2026-03-31T000000.log"
+    opencode_log.write_text(
+        "\n".join(
+            [
+                f"INFO {permission_asked_at.strftime('%Y-%m-%dT%H:%M:%S')} service=permission id=per_blocked permission=external_directory patterns=[\"/usr/share/*\"] asking",
+                f"INFO {permission_asked_at.strftime('%Y-%m-%dT%H:%M:%S')} service=bus type=permission.asked publishing",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    from app.services.launcher import _running_container_stall_reason
+
+    assert _running_container_stall_reason(run_row) == (
+        "exploit",
+        "queue_stalled",
+        "Autonomous runtime requested interactive permission approval and never resolved it; unattended runs must stay within workspace-local inputs or fail fast instead of waiting forever.",
+    )
+
+
+
 def test_running_container_stall_reason_ignores_synthetic_queue_backed_active_agents_without_runtime_timestamp():
     client = TestClient(app)
     token = register_and_login(client, "alice")

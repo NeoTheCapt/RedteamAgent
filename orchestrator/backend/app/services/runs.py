@@ -23,6 +23,7 @@ from .launcher import (
     _last_logged_stop_metadata,
     _latest_process_log_activity_at,
     _latest_undispatched_batch_fetch,
+    _latest_unresolved_permission_request_at,
     _maybe_auto_resume_run,
     _start_container_supervisor,
     _write_run_terminal_reason,
@@ -50,6 +51,7 @@ RUN_STARTUP_GRACE_SECONDS = 90
 RUN_STALL_TIMEOUT_SECONDS = 900
 PROCESSING_AGENT_MISMATCH_GRACE_SECONDS = 120
 PENDING_QUEUE_DISPATCH_GRACE_SECONDS = 120
+PERMISSION_REQUEST_GRACE_SECONDS = 60
 # Real targets can spend several minutes in autonomous initialization/recon before the
 # first queue item or observed path lands. Keep the early watchdog long enough to avoid
 # killing active slow-start recon just as the first subagent/task dispatch begins.
@@ -445,10 +447,33 @@ def _reconcile_run_status(run: Run, project: Project | None = None, user: User |
 
         active_runtime_agents = _active_runtime_agents(run)
         processing_agents = _load_processing_agents(scope_path)
+        opencode_logs_root = opencode_home_root_for(run) / "log"
+        permission_log_paths = [process_log_path_for(run)]
+        if opencode_logs_root.exists():
+            permission_log_paths.extend(sorted(opencode_logs_root.glob("*.log")))
+        latest_permission_request_at = _latest_unresolved_permission_request_at(*permission_log_paths)
         orphaned_fetch = _latest_undispatched_batch_fetch(
             process_log_path_for(run),
-            opencode_logs_root=opencode_home_root_for(run) / "log",
+            opencode_logs_root=opencode_logs_root,
         )
+        if (
+            current_phase.replace("_", "-") not in EARLY_PHASE_STALL_PHASES
+            and latest_permission_request_at is not None
+            and (_utc_now_naive() - _utc_datetime_from_timestamp(latest_permission_request_at))
+            >= timedelta(seconds=PERMISSION_REQUEST_GRACE_SECONDS)
+        ):
+            failed = db.update_run_status(run.id, "failed")
+            _write_run_terminal_reason(
+                failed,
+                reason_code="queue_stalled",
+                reason_text=(
+                    "Autonomous runtime requested interactive permission approval and never resolved it; "
+                    "unattended runs must stay within workspace-local inputs or fail fast instead of waiting forever."
+                ),
+            )
+            stop_run_runtime(failed)
+            return failed
+
         if (
             current_phase.replace("_", "-") not in EARLY_PHASE_STALL_PHASES
             and pending_cases > 0
