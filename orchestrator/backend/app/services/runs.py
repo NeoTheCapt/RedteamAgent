@@ -360,6 +360,22 @@ def _sync_run_updated_at_from_activity(run: Run, *candidates: datetime | None) -
     return db.set_run_updated_at(run.id, _format_db_timestamp(latest_candidate))
 
 
+def _reattach_live_runtime_supervisor(
+    run: Run,
+    *,
+    project: Project | None,
+    user: User | None,
+    runtime_pid: int | None,
+) -> None:
+    if project is None or user is None:
+        return
+    if run.status != "running":
+        return
+    if runtime_pid in {None, RUNTIME_PID_LOOKUP_UNAVAILABLE}:
+        return
+    _start_container_supervisor(run, project, user)
+
+
 def _reconcile_run_status(run: Run, project: Project | None = None, user: User | None = None) -> Run:
     normalize_active_scope(run)
     pid = locate_runtime_pid(run)
@@ -577,12 +593,14 @@ def _reconcile_run_status(run: Run, project: Project | None = None, user: User |
         if run.status != "running":
             refreshed = db.update_run_status(run.id, "running")
             _clear_run_terminal_reason(refreshed)
+            _reattach_live_runtime_supervisor(refreshed, project=project, user=user, runtime_pid=pid)
             if project is not None and user is not None:
                 from .run_summary import refresh_run_metadata_projection
 
                 refresh_run_metadata_projection(refreshed, project, user)
             return refreshed
         _clear_run_terminal_reason(run)
+        _reattach_live_runtime_supervisor(run, project=project, user=user, runtime_pid=pid)
         if project is not None and user is not None:
             from .run_summary import refresh_run_metadata_projection
 
@@ -655,10 +673,7 @@ def recover_active_run_supervisors_on_startup() -> None:
             continue
 
         runtime_pid = locate_runtime_pid(reconciled)
-        if runtime_pid in {None, RUNTIME_PID_LOOKUP_UNAVAILABLE}:
-            continue
-
-        _start_container_supervisor(reconciled, project, user)
+        _reattach_live_runtime_supervisor(reconciled, project=project, user=user, runtime_pid=runtime_pid)
 
 
 def list_runs_for_project(project_id: int, user: User) -> list[Run]:

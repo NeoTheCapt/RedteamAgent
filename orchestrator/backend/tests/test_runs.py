@@ -2291,6 +2291,73 @@ def test_list_runs_auto_resumes_incomplete_run_when_runtime_supervisor_is_missin
 
 
 
+def test_list_runs_reattaches_supervisor_for_live_running_runtime(monkeypatch):
+    client = TestClient(app)
+    token = register_and_login(client, "alice-reattach")
+    project = create_project(client, token)
+
+    create_run = client.post(
+        f"/projects/{project['id']}/runs",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"target": "https://example.com"},
+    )
+    assert create_run.status_code == 201
+    run = create_run.json()
+    db.update_run_status(run["id"], "running")
+
+    run_root = Path(run["engagement_root"])
+    workspace = run_root / "workspace"
+    engagement_dir = workspace / "engagements" / "2026-03-29-000000-example"
+    engagement_dir.mkdir(parents=True, exist_ok=True)
+    (workspace / "engagements" / ".active").write_text(
+        "engagements/2026-03-29-000000-example\n",
+        encoding="utf-8",
+    )
+    (engagement_dir / "scope.json").write_text(
+        json.dumps(
+            {
+                "status": "in_progress",
+                "current_phase": "consume_test",
+                "phases_completed": ["recon", "collect"],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (engagement_dir / "log.md").write_text("# Activity Log\n", encoding="utf-8")
+    with sqlite3.connect(engagement_dir / "cases.db") as connection:
+        connection.execute(
+            "CREATE TABLE cases (id INTEGER PRIMARY KEY AUTOINCREMENT, status TEXT NOT NULL)"
+        )
+        connection.executemany(
+            "INSERT INTO cases(status) VALUES (?)",
+            [("pending",), ("done",)],
+        )
+        connection.commit()
+
+    process_log = run_root / "runtime" / "process.log"
+    process_log.parent.mkdir(parents=True, exist_ok=True)
+    process_log.write_text(
+        json.dumps({"timestamp": int(datetime.now(tz=UTC).timestamp() * 1000), "type": "run.heartbeat"}) + "\n",
+        encoding="utf-8",
+    )
+
+    started: list[int] = []
+
+    monkeypatch.setattr("app.services.runs.locate_runtime_pid", lambda _run: -1)
+    monkeypatch.setattr("app.services.runs._start_container_supervisor", lambda run_obj, project_obj, user_obj: started.append(run_obj.id) or True)
+    monkeypatch.setattr("app.services.run_summary.refresh_run_metadata_projection", lambda *args, **kwargs: None)
+
+    runs_response = client.get(
+        f"/projects/{project['id']}/runs",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert runs_response.status_code == 200
+    assert runs_response.json()[0]["status"] == "running"
+    assert started == [run["id"]]
+
+
+
 def test_list_runs_auto_resumes_logged_incomplete_stop_when_runtime_supervisor_is_missing(monkeypatch):
     client = TestClient(app)
     token = register_and_login(client, "alice")
