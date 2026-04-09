@@ -31,6 +31,41 @@ sql() {
   sqlite3 "$DB" ".timeout 5000" "$1"
 }
 
+normalize_id_list() {
+  if (($# == 0)); then
+    echo "ERROR: id_list must contain at least one numeric ID" >&2
+    exit 1
+  fi
+
+  local token
+  local normalized=()
+  for token in "$@"; do
+    token="${token// /}"
+    token="${token#,}"
+    token="${token%,}"
+    [[ -z "$token" ]] && continue
+    IFS=',' read -r -a parts <<< "$token"
+    local part
+    for part in "${parts[@]}"; do
+      [[ -z "$part" ]] && continue
+      if ! [[ "$part" =~ ^[0-9]+$ ]]; then
+        echo "ERROR: id_list must contain only numeric IDs separated by commas or spaces" >&2
+        exit 1
+      fi
+      normalized+=("$part")
+    done
+  done
+
+  if ((${#normalized[@]} == 0)); then
+    echo "ERROR: id_list must contain at least one numeric ID" >&2
+    exit 1
+  fi
+
+  local joined
+  printf -v joined '%s,' "${normalized[@]}"
+  echo "${joined%,}"
+}
+
 fetch_priority_order_clause() {
   local queue_type="$(_source_queue_lower "${1:-}")"
 
@@ -187,23 +222,15 @@ case "$ACTION" in
     ;;
 
   done)
-    ID_LIST="${3:?Missing id_list argument}"
-    # Validate ID_LIST contains only digits and commas
-    if ! [[ "$ID_LIST" =~ ^[0-9,]+$ ]]; then
-      echo "ERROR: id_list must contain only numeric IDs separated by commas" >&2
-      exit 1
-    fi
+    shift 2
+    ID_LIST="$(normalize_id_list "$@")"
     sql "UPDATE cases SET status='done' WHERE id IN (${ID_LIST});"
     echo "Marked done: ${ID_LIST}"
     ;;
 
   error)
-    ID_LIST="${3:?Missing id_list argument}"
-    # Validate ID_LIST contains only digits and commas
-    if ! [[ "$ID_LIST" =~ ^[0-9,]+$ ]]; then
-      echo "ERROR: id_list must contain only numeric IDs separated by commas" >&2
-      exit 1
-    fi
+    shift 2
+    ID_LIST="$(normalize_id_list "$@")"
     sql "UPDATE cases SET status='error', retry_count = COALESCE(retry_count,0) + 1 WHERE id IN (${ID_LIST});"
     echo "Marked error: ${ID_LIST}"
     ;;
