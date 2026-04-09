@@ -119,6 +119,7 @@ _AUTO_RESUME_LIMIT = 3
 RUN_STALL_TIMEOUT_SECONDS = 900
 PROCESSING_AGENT_MISMATCH_GRACE_SECONDS = 120
 PENDING_QUEUE_DISPATCH_GRACE_SECONDS = 120
+PERMISSION_REQUEST_GRACE_SECONDS = 60
 # Real targets can spend several minutes in autonomous initialization/recon before the
 # first queue item or observed path lands. Keep the live launcher watchdog aligned with
 # the API reconciler so we do not fail healthy slow-start recon while subagent dispatch
@@ -599,6 +600,8 @@ _SUBAGENT_SESSION_TITLE_PATTERN = re.compile(r"title=.*?\(@(?P<agent>[A-Za-z0-9_
 _SUBAGENT_STREAM_PATTERN = re.compile(r"service=llm\b.*?\bagent=(?P<agent>[A-Za-z0-9_-]+)\b.*?\bmode=subagent\b")
 _SUBAGENT_SESSION_ID_PATTERN = re.compile(r"\b(?:id|sessionID)=(?P<session>ses_[A-Za-z0-9]+)\b")
 _INLINE_SESSION_CREATED_AT_PATTERN = re.compile(r'"created":\s*(\d{10,13})')
+_PERMISSION_REQUEST_ID_PATTERN = re.compile(r"\bid=(per_[A-Za-z0-9]+)\b")
+_PERMISSION_REQUEST_RESOLVED_PATTERN = re.compile(r"\b(approved|allowed|granted|denied|rejected|cancel(?:led)?|resolved|answered|completed)\b", re.IGNORECASE)
 _RUNTIME_ACTIVITY_FUTURE_SKEW_SECONDS = 5 * 60
 
 
@@ -646,6 +649,40 @@ def _latest_process_log_activity_at(path: Path, *, max_lines: int = 400) -> floa
     if latest is not None:
         return latest
     return _path_mtime(path)
+
+
+def _latest_unresolved_permission_request_at(*paths: Path, max_lines: int = 800) -> float | None:
+    pending_requests: dict[str, float] = {}
+
+    for path in paths:
+        if not path.exists() or not path.is_file():
+            continue
+        try:
+            with path.open("r", encoding="utf-8", errors="replace") as handle:
+                lines = deque(handle, maxlen=max_lines)
+        except OSError:
+            continue
+
+        for raw_line in lines:
+            stripped = raw_line.strip()
+            if "service=permission" not in stripped:
+                continue
+            request_match = _PERMISSION_REQUEST_ID_PATTERN.search(stripped)
+            if request_match is None:
+                continue
+            request_id = request_match.group(1)
+            line_timestamp = _extract_text_log_timestamp(stripped)
+            if " asking" in stripped:
+                if _runtime_activity_candidate_is_valid(line_timestamp):
+                    pending_requests[request_id] = float(line_timestamp)
+                continue
+            if request_id in pending_requests and _PERMISSION_REQUEST_RESOLVED_PATTERN.search(stripped):
+                pending_requests.pop(request_id, None)
+
+    if not pending_requests:
+        return None
+    return max(pending_requests.values())
+
 
 
 def _latest_nonempty_fetch_from_output(candidate_output: str) -> dict[str, object] | None:
@@ -1131,10 +1168,26 @@ def _running_container_stall_reason(run: Run) -> tuple[str, str, str] | None:
     active_runtime_agents = _active_runtime_agents(run)
     has_current_task = _run_metadata_has_current_task(run)
     processing_agents = _load_running_processing_agents(engagement_dir)
+    opencode_logs_root = opencode_home_root_for(run) / "log"
+    permission_log_paths = [process_log_path_for(run)]
+    if opencode_logs_root.exists():
+        permission_log_paths.extend(sorted(opencode_logs_root.glob("*.log")))
+    latest_permission_request_at = _latest_unresolved_permission_request_at(*permission_log_paths)
     orphaned_fetch = _latest_undispatched_batch_fetch(
         process_log_path_for(run),
-        opencode_logs_root=opencode_home_root_for(run) / "log",
+        opencode_logs_root=opencode_logs_root,
     )
+    if (
+        current_phase not in EARLY_PHASE_STALL_PHASES
+        and latest_permission_request_at is not None
+        and (time.time() - latest_permission_request_at) >= PERMISSION_REQUEST_GRACE_SECONDS
+    ):
+        return (
+            current_phase,
+            "queue_stalled",
+            "Autonomous runtime requested interactive permission approval and never resolved it; unattended runs must stay within workspace-local inputs or fail fast instead of waiting forever.",
+        )
+
     if (
         current_phase not in EARLY_PHASE_STALL_PHASES
         and pending_cases > 0
