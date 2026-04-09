@@ -44,6 +44,7 @@ benchmark_findings_report() {
     printf '%s\n' "$snapshot_json" | python3 "$ROOT_DIR/scripts/findings_benchmark_eval.py" \
         --mapping "$mapping_file" \
         --root-dir "$ROOT_DIR" \
+        --openclaw-bin "${OPENCLAW_BIN:-openclaw}" \
         --label "$label"
 }
 

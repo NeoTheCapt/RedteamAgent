@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -37,12 +38,30 @@ VULN_FAMILY_HINTS = {
     "authentication", "access", "control", "business", "logic", "open", "directory", "steganography",
     "policy", "security", "sensitive", "coupon", "graphql", "xml", "redirects", "component",
     "documentation", "swagger", "openapi", "schema", "credentials", "credential", "hardcoded",
-    "password", "backup", "exif", "enumeration", "redirect", "redirects",
+    "password", "backup", "exif", "enumeration", "redirect", "redirects", "login", "throttling",
+    "lockout", "rate", "limit", "debug", "stack", "trace", "configuration", "unauthenticated",
+    "privilege", "logs", "logging", "secret", "leak",
 }
 GENERIC_FAMILY_TOKENS = {
     "access", "control", "security", "authentication", "authorization", "business", "logic",
     "policy", "sensitive", "data", "information", "exposure", "disclosure", "input", "validation",
     "component", "components", "issue", "issues", "directory", "open", "file", "misconfiguration",
+}
+CATEGORY_ALIAS_TOKENS = {
+    'broken access control': {'access', 'control', 'idor', 'bola', 'authorization', 'unauthenticated', 'forced', 'browsing', 'privilege'},
+    'broken authentication': {'authentication', 'credential', 'credentials', 'password', 'oauth', '2fa', 'login', 'session', 'account'},
+    'broken anti automation': {'automation', 'captcha', 'brute', 'throttling', 'lockout', 'rate', 'limit', 'enumeration', 'race'},
+    'security misconfiguration': {'misconfiguration', 'swagger', 'openapi', 'metrics', 'headers', 'debug', 'stack', 'trace', 'configuration'},
+    'sensitive data exposure': {'sensitive', 'exposure', 'leak', 'backup', 'claims', 'secret', 'token', 'jwt', 'exif'},
+    'observability failures': {'logs', 'logging', 'metrics', 'trace', 'stack', 'access', 'audit'},
+    'unvalidated redirects': {'redirect', 'allowlist', 'whitelist', 'target'},
+    'injection': {'injection', 'sql', 'nosql', 'ssti', 'template'},
+    'xss': {'xss', 'dom', 'csp', 'reflected', 'stored', 'subtitle'},
+    'xxe': {'xxe', 'xml', 'entity'},
+    'insecure deserialization': {'deserialization', 'rce', 'object'},
+    'improper input validation': {'validation', 'upload', 'mass', 'assignment', 'quantity', 'coupon'},
+    'vulnerable components': {'supply', 'dependency', 'component', 'jwt', 'typosquatting', 'unsigned'},
+    'cryptographic issues': {'crypto', 'cryptographic', 'hash', 'coupon', 'key'},
 }
 
 
@@ -89,6 +108,7 @@ class Match:
     benchmark_index: int
     shared_tokens: list[str]
     endpoint_match: str
+    reason: str = ""
 
 
 def load_snapshot() -> dict:
@@ -127,7 +147,7 @@ def parse_findings_markdown(text: str) -> list[Finding]:
                 owasp_category=payload.get("owasp_category", ""),
                 parameter=payload.get("parameter", ""),
                 evidence=payload.get("evidence", ""),
-                text_tokens=tokenize(corpus),
+                text_tokens=(tokenize(corpus) | category_alias_tokens(payload.get("owasp_category", "") + " " + payload.get("type", ""))),
                 endpoint_candidates=extract_endpoint_candidates(corpus),
             )
         )
@@ -230,7 +250,7 @@ def parse_benchmark_markdown(path: Path) -> tuple[list[BenchmarkItem], dict[str,
                         endpoint=endpoint,
                         automation=automation,
                         endpoint_candidates=extract_endpoint_candidates(endpoint, allow_textual_fallback=True),
-                        text_tokens=tokenize(corpus),
+                        text_tokens=(tokenize(corpus) | category_alias_tokens(current_category)),
                     )
                 )
             continue
@@ -262,6 +282,15 @@ def tokenize(text: str) -> set[str]:
             continue
         if len(token) >= 3:
             output.add(token)
+    return output
+
+
+def category_alias_tokens(text: str) -> set[str]:
+    normalized = normalize_text(text)
+    output: set[str] = set()
+    for label, aliases in CATEGORY_ALIAS_TOKENS.items():
+        if label in normalized:
+            output.update(aliases)
     return output
 
 
@@ -421,6 +450,83 @@ def choose_matches(findings: list[Finding], items: list[BenchmarkItem | Benchmar
     return chosen
 
 
+def parse_openclaw_json(output: str) -> dict:
+    start = output.find('{')
+    if start < 0:
+        raise ValueError('openclaw agent did not emit JSON payload')
+    return json.loads(output[start:])
+
+
+def judge_matches_with_llm(findings: list[Finding], items: list[BenchmarkItem], openclaw_bin: str) -> list[Match]:
+    benchmark_lines = []
+    benchmark_ids: dict[str, int] = {}
+    for index, item in enumerate(items, start=1):
+        benchmark_id = f"B{index:03d}"
+        benchmark_ids[benchmark_id] = index - 1
+        benchmark_lines.append(
+            f"{benchmark_id} | category={item.category} | challenge={item.challenge} | "
+            f"attack={item.attack_vector} | endpoint={item.endpoint or '(none)'} | automation={item.automation}"
+        )
+
+    finding_lines = []
+    finding_ids: dict[str, int] = {}
+    for index, finding in enumerate(findings):
+        finding_ids[finding.finding_id] = index
+        evidence = normalize_text(finding.evidence)[:240]
+        finding_lines.append(
+            f"{finding.finding_id} | title={finding.title} | severity={finding.severity} | "
+            f"type={finding.finding_type or '(none)'} | owasp={finding.owasp_category or '(none)'} | "
+            f"parameter={finding.parameter or '(none)'} | evidence={evidence or '(none)'}"
+        )
+
+    prompt = (
+        "You are a security benchmark judge. Match recorded automated findings to benchmark challenge items.\n"
+        "Rules:\n"
+        "- Final matching must be semantic, not regex-based.\n"
+        "- A match is valid only when the finding and benchmark item describe the same vulnerability scenario or a clearly corresponding exploitation objective.\n"
+        "- Do NOT match purely because the endpoint is similar. Endpoint is only supporting evidence.\n"
+        "- Prefer precision over optimistic matching. If unsure, leave the finding unmatched.\n"
+        "- Keep benchmark ids unique: one benchmark item can be matched at most once.\n"
+        "- Do not use target-specific shortcuts or Juice-Shop-specific answer keys; judge from the finding text and benchmark item semantics only.\n"
+        "- Output JSON only with this schema: {\"matches\":[{\"finding_id\":\"...\",\"benchmark_id\":\"B001\",\"confidence\":\"high|medium|low\",\"reason\":\"...\"}]}\n\n"
+        "Benchmark items:\n" + "\n".join(benchmark_lines) + "\n\n"
+        "Recorded findings:\n" + "\n".join(finding_lines)
+    )
+
+    result = subprocess.run(
+        [openclaw_bin, 'agent', '--local', '--agent', 'main', '--json', '--thinking', 'low', '--timeout', '180', '--message', prompt],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip() or result.stdout.strip() or f'openclaw agent failed with {result.returncode}')
+    payload = parse_openclaw_json((result.stdout or '') + (result.stderr or ''))
+    raw_text = ''.join((item.get('text') or '') for item in (payload.get('payloads') or []))
+    judge_output = json.loads(raw_text)
+
+    matches: list[Match] = []
+    used_findings: set[int] = set()
+    used_benchmarks: set[int] = set()
+    confidence_bonus = {'high': 2, 'medium': 1, 'low': 0}
+    for entry in judge_output.get('matches') or []:
+        finding_id = str(entry.get('finding_id') or '').strip()
+        benchmark_id = str(entry.get('benchmark_id') or '').strip()
+        if finding_id not in finding_ids or benchmark_id not in benchmark_ids:
+            continue
+        f_idx = finding_ids[finding_id]
+        b_idx = benchmark_ids[benchmark_id]
+        if f_idx in used_findings or b_idx in used_benchmarks:
+            continue
+        used_findings.add(f_idx)
+        used_benchmarks.add(b_idx)
+        judge_reason = str(entry.get('reason') or '').strip()
+        reason_tokens = sorted(tokenize(judge_reason))[:6]
+        score = 10 + confidence_bonus.get(str(entry.get('confidence') or '').lower(), 0)
+        matches.append(Match(score=score, finding_index=f_idx, benchmark_index=b_idx, shared_tokens=reason_tokens, endpoint_match='llm-judge', reason=judge_reason))
+    return matches
+
+
 def coverage_bucket(value: str) -> str:
     normalized = value.strip().lower()
     if any(token in normalized for token in ["高", "high"]):
@@ -447,6 +553,7 @@ def main() -> None:
     parser.add_argument("--mapping", required=True, help="Path to target benchmark mapping JSON.")
     parser.add_argument("--root-dir", default="", help="Optional local-openclaw root for resolving relative benchmark paths.")
     parser.add_argument("--label", default="", help="Human label override.")
+    parser.add_argument("--openclaw-bin", default="openclaw", help="OpenClaw CLI binary used for LLM judging.")
     args = parser.parse_args()
 
     snapshot = load_snapshot()
@@ -470,9 +577,17 @@ def main() -> None:
     findings_path = engagement_dir / "findings.md"
     findings_text = findings_path.read_text(encoding="utf-8", errors="replace") if findings_path.exists() else ""
     findings = parse_findings_markdown(findings_text)
-    matches = choose_matches(findings, items)
+    try:
+        matches = judge_matches_with_llm(findings, items, args.openclaw_bin)
+    except Exception as exc:
+        print(f"### {label}\n")
+        print(f"- benchmark_file: `{benchmark_path}`")
+        print(f"- target: {target or '(unknown)' }")
+        print(f"- findings_path: `{findings_path}`")
+        print(f"- judge_error: {exc}")
+        print("- matching_policy: LLM judge failed; no benchmark metrics emitted.")
+        return
     groups = build_benchmark_groups(items)
-    group_matches = choose_matches(findings, groups)
 
     matched_item_indexes = {entry.benchmark_index for entry in matches}
     matched_finding_indexes = {entry.finding_index for entry in matches}
@@ -483,10 +598,13 @@ def main() -> None:
     recall = ratio(tp, tp + fn)
     f1 = 0.0 if precision + recall == 0 else (2 * precision * recall / (precision + recall))
 
-    matched_group_indexes = {entry.benchmark_index for entry in group_matches}
-    matched_group_finding_indexes = {entry.finding_index for entry in group_matches}
-    scenario_tp = len(group_matches)
-    scenario_fp = max(len(findings) - scenario_tp, 0)
+    matched_group_indexes = {
+        group_index
+        for group_index, group in enumerate(groups)
+        if any(member in matched_item_indexes for member in group.member_indexes)
+    }
+    scenario_tp = len(matched_group_indexes)
+    scenario_fp = max(len(findings) - len(matched_finding_indexes), 0)
     scenario_fn = max(len(groups) - scenario_tp, 0)
     scenario_precision = ratio(scenario_tp, scenario_tp + scenario_fp)
     scenario_recall = ratio(scenario_tp, scenario_tp + scenario_fn)
@@ -535,7 +653,7 @@ def main() -> None:
     print(f"- scenario_f1: {fmt_ratio(scenario_f1)}")
     print(f"- scenario_automation_actionable_items (high/medium): {len(automation_groups)}")
     print(f"- scenario_automation_actionable_recall: {fmt_ratio(scenario_automation_recall)}")
-    print("- matching_policy: conservative heuristic match on endpoint evidence + specific vulnerability-family token overlap (target-specific hardcoding disabled)")
+    print("- matching_policy: LLM judge prompt decides benchmark↔finding alignment; regex/rules are used only for markdown parsing and post-match metric aggregation (target-specific hardcoding disabled)")
 
     print("\n#### Category coverage\n")
     for category, counts in sorted(by_category.items(), key=lambda pair: (pair[0].lower(), pair[0])):
@@ -546,10 +664,13 @@ def main() -> None:
         for entry in matches[:12]:
             item = items[entry.benchmark_index]
             finding = findings[entry.finding_index]
-            shared = ", ".join(entry.shared_tokens) if entry.shared_tokens else "(endpoint-only)"
+            reason = entry.reason or (", ".join(entry.shared_tokens) if entry.shared_tokens else "(no reason provided)")
+            reason = reason.replace('\n', ' ').strip()
+            if len(reason) > 180:
+                reason = reason[:177] + '...'
             print(
                 f"- [{item.category}] {item.challenge} ⇄ {finding.finding_id} / {finding.title} "
-                f"(score={entry.score}, endpoint={entry.endpoint_match}, shared={shared})"
+                f"(score={entry.score}, judge={entry.endpoint_match}, reason={reason})"
             )
     else:
         print("- No benchmark items matched any current findings.")
