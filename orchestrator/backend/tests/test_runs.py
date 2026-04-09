@@ -1544,7 +1544,7 @@ def test_list_runs_fails_undispatched_follow_on_fetch_even_with_recent_workflow_
 
 
 
-def test_list_runs_ignores_orphaned_follow_on_fetch_when_opencode_logs_show_subagent_activity(monkeypatch):
+def test_list_runs_ignores_orphaned_follow_on_fetch_when_opencode_logs_show_recent_subagent_activity(monkeypatch):
     client = TestClient(app)
     token = register_and_login(client, "alice")
     project = create_project(client, token)
@@ -1647,6 +1647,116 @@ def test_list_runs_ignores_orphaned_follow_on_fetch_when_opencode_logs_show_suba
     assert stopped == []
     metadata = json.loads((run_root / "run.json").read_text(encoding="utf-8"))
     assert metadata.get("stop_reason_code") is None
+
+
+
+def test_list_runs_fails_stale_processing_queue_when_only_stale_open_subagent_logs_remain(monkeypatch):
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+
+    create_run = client.post(
+        f"/projects/{project['id']}/runs",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"target": "https://stale-subagent-activity.example"},
+    )
+    assert create_run.status_code == 201
+    run = create_run.json()
+    db.update_run_status(run["id"], "running")
+
+    run_root = Path(run["engagement_root"])
+    runtime_dir = run_root / "runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    process_log = runtime_dir / "process.log"
+    fetch_epoch = datetime.now().timestamp() - 1000
+    fetch_timestamp_ms = int(fetch_epoch * 1000)
+    process_log.write_text(
+        json.dumps(
+            {
+                "type": "tool_use",
+                "timestamp": fetch_timestamp_ms,
+                "part": {
+                    "tool": "bash",
+                    "state": {
+                        "output": "BATCH_FILE=/workspace/engagements/demo/scans/operator/api_batch_001.json\nBATCH_TYPE=api\nBATCH_AGENT=vulnerability-analyst\nBATCH_COUNT=4\nBATCH_IDS=220,221,222,223\n"
+                    },
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    workspace = run_root / "workspace"
+    engagement_dir = workspace / "engagements" / "2026-03-31-000000-stale-subagent-activity"
+    engagement_dir.mkdir(parents=True, exist_ok=True)
+    (workspace / "engagements" / ".active").write_text(
+        "engagements/2026-03-31-000000-stale-subagent-activity\n",
+        encoding="utf-8",
+    )
+    scope_path = engagement_dir / "scope.json"
+    scope_path.write_text(
+        json.dumps(
+            {
+                "status": "in_progress",
+                "current_phase": "consume_test",
+                "phases_completed": ["recon", "collect"],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    log_path = engagement_dir / "log.md"
+    log_path.write_text("## [00:00] Source analysis summary — source-analyzer\n", encoding="utf-8")
+    with sqlite3.connect(engagement_dir / "cases.db") as connection:
+        connection.execute(
+            "CREATE TABLE cases (id INTEGER PRIMARY KEY AUTOINCREMENT, status TEXT NOT NULL, assigned_agent TEXT)"
+        )
+        connection.execute(
+            "INSERT INTO cases(id, status, assigned_agent) VALUES (220, 'processing', 'vulnerability-analyst')"
+        )
+        connection.commit()
+
+    (run_root / "run.json").write_text(json.dumps({"agents": []}) + "\n", encoding="utf-8")
+
+    opencode_log = run_root / "opencode-home" / "log" / "2026-03-31T000000.log"
+    opencode_log.parent.mkdir(parents=True, exist_ok=True)
+    opencode_log.write_text(
+        json.dumps(
+            {
+                "type": "log",
+                "message": "subagent session created",
+            }
+        )
+        + "\n"
+        + f"INFO 2026-04-02T00:00:00 service=session id=ses_testsubagent parentID=ses_parent cwd=/tmp title=Resume API triage (@vulnerability-analyst subagent) permissionProfile=default model=openai/gpt-5.4 time={{\"created\":{fetch_timestamp_ms + 1000}}} created\n"
+        + "INFO 2026-04-02T00:00:01 service=llm sessionID=ses_testsubagent agent=vulnerability-analyst mode=subagent stream\n",
+        encoding="utf-8",
+    )
+
+    stale_runtime_epoch = datetime.now().timestamp() - 130
+    os.utime(process_log, (stale_runtime_epoch, stale_runtime_epoch))
+    os.utime(scope_path, (stale_runtime_epoch, stale_runtime_epoch))
+    os.utime(engagement_dir / "cases.db", (stale_runtime_epoch, stale_runtime_epoch))
+    os.utime(log_path, (stale_runtime_epoch, stale_runtime_epoch))
+    os.utime(opencode_log, (stale_runtime_epoch, stale_runtime_epoch))
+
+    monkeypatch.setattr("app.services.runs.locate_runtime_pid", lambda _run: 12345)
+    stopped: list[int] = []
+    monkeypatch.setattr("app.services.runs.stop_run_runtime", lambda reconciled_run: stopped.append(reconciled_run.id))
+
+    runs_response = client.get(
+        f"/projects/{project['id']}/runs",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert runs_response.status_code == 200
+    assert runs_response.json()[0]["status"] == "failed"
+    assert stopped == [run["id"]]
+    metadata = json.loads((run_root / "run.json").read_text(encoding="utf-8"))
+    assert metadata["stop_reason_code"] == "queue_stalled"
+    assert metadata["stop_reason_text"] == (
+        "Processing queue assignments (vulnerability-analyst) had no matching active runtime agent after stall grace period elapsed."
+    )
 
 
 

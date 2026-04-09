@@ -689,12 +689,25 @@ def _extract_text_log_timestamp(line: str) -> float | None:
 
 
 
-def _opencode_logs_active_subagent_agents(log_root: Path) -> set[str]:
+def _opencode_logs_active_subagent_agents(
+    log_root: Path,
+    *,
+    active_window_seconds: int = RUN_STALL_TIMEOUT_SECONDS,
+) -> set[str]:
     if not log_root.exists() or not log_root.is_dir():
         return set()
 
     session_agents: dict[str, str] = {}
+    session_last_activity: dict[str, float] = {}
     active_sessions: set[str] = set()
+    now = time.time()
+
+    def _remember_session_activity(session_id: str, candidate: float | None) -> None:
+        if not session_id or not _runtime_activity_candidate_is_valid(candidate):
+            return
+        previous = session_last_activity.get(session_id)
+        if previous is None or float(candidate) > previous:
+            session_last_activity[session_id] = float(candidate)
 
     for path in sorted(log_root.glob("*.log")):
         try:
@@ -704,12 +717,16 @@ def _opencode_logs_active_subagent_agents(log_root: Path) -> set[str]:
                     if not stripped:
                         continue
 
+                    line_timestamp = _extract_text_log_timestamp(stripped)
+
                     if "service=session.prompt" in stripped and (
                         "exiting loop" in stripped or stripped.endswith(" cancel") or " cancel" in stripped
                     ):
                         match = _SUBAGENT_SESSION_ID_PATTERN.search(stripped)
                         if match is not None:
-                            active_sessions.discard(match.group("session"))
+                            session_id = match.group("session")
+                            _remember_session_activity(session_id, line_timestamp)
+                            active_sessions.discard(session_id)
                         continue
 
                     if "service=llm" in stripped and "mode=subagent" in stripped:
@@ -718,6 +735,7 @@ def _opencode_logs_active_subagent_agents(log_root: Path) -> set[str]:
                         if stream_match is not None and session_match is not None:
                             session_id = session_match.group("session")
                             session_agents[session_id] = stream_match.group("agent")
+                            _remember_session_activity(session_id, line_timestamp)
                             active_sessions.add(session_id)
                         continue
 
@@ -727,11 +745,30 @@ def _opencode_logs_active_subagent_agents(log_root: Path) -> set[str]:
                         if title_match is not None and session_match is not None:
                             session_id = session_match.group("session")
                             session_agents[session_id] = title_match.group("agent")
+                            created_match = _INLINE_SESSION_CREATED_AT_PATTERN.search(stripped)
+                            created_timestamp = None
+                            if created_match is not None:
+                                try:
+                                    raw_created = int(created_match.group(1))
+                                except ValueError:
+                                    raw_created = 0
+                                if raw_created > 0:
+                                    created_timestamp = raw_created / 1000 if raw_created >= 10**12 else float(raw_created)
+                            _remember_session_activity(session_id, created_timestamp or line_timestamp)
                             active_sessions.add(session_id)
         except OSError:
             continue
 
-    return {session_agents[session_id] for session_id in active_sessions if session_agents.get(session_id)}
+    active_agents: set[str] = set()
+    for session_id in active_sessions:
+        agent_name = session_agents.get(session_id)
+        last_activity = session_last_activity.get(session_id)
+        if not agent_name or last_activity is None:
+            continue
+        if now - last_activity > active_window_seconds:
+            continue
+        active_agents.add(agent_name)
+    return active_agents
 
 
 
