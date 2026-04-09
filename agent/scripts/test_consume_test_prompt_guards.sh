@@ -22,6 +22,14 @@ for file in "$OPERATOR_CORE" "$ENGAGE_CMD"; do
     echo "missing no-prefetch-without-dispatch guard in $file" >&2
     exit 1
   }
+  grep -Fq 'NEVER combine outcome recording (`done`, `error`, `requeue`, `append_*`, queue stats, scope/findings/log updates) and `fetch_batch_to_file.sh` in the same bash/tool call' "$file" || {
+    echo "missing no record+fetch same tool call guard in $file" >&2
+    exit 1
+  }
+  grep -Fq 'tool result ends with `BATCH_COUNT > 0`, that assistant turn is not complete until the matching `task(...)` call has been issued' "$file" || {
+    echo "missing BATCH_COUNT completion guard in $file" >&2
+    exit 1
+  }
 done
 
 echo "PASS: consume-test prompt guards present in operator-core and /engage"
