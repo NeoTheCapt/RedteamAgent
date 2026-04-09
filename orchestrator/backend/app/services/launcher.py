@@ -1044,6 +1044,52 @@ def _load_running_processing_agents(engagement_dir: Path | None) -> set[str]:
     return {agent for agent in raw_agents if agent}
 
 
+def _stale_processing_agents(
+    engagement_dir: Path | None,
+    active_runtime_agents: set[str],
+    *,
+    stale_after_seconds: int = PROCESSING_AGENT_MISMATCH_GRACE_SECONDS,
+) -> set[str]:
+    if engagement_dir is None:
+        return set()
+
+    cases_db = engagement_dir / "cases.db"
+    if not cases_db.exists():
+        return set()
+
+    def _reader(connection: sqlite3.Connection) -> list[tuple[str, str | None]]:
+        column_rows = connection.execute("PRAGMA table_info(cases)").fetchall()
+        column_names = {str(row[1]) for row in column_rows if len(row) > 1}
+        if "assigned_agent" not in column_names or "consumed_at" not in column_names:
+            return []
+        rows = connection.execute(
+            "SELECT assigned_agent, consumed_at FROM cases WHERE status = 'processing' AND assigned_agent IS NOT NULL"
+        ).fetchall()
+        return [(str(row[0] or "").strip(), str(row[1] or "").strip() or None) for row in rows]
+
+    rows = _read_sqlite_with_fallback(cases_db, _reader, [])
+    if not rows:
+        return set()
+
+    now = time.time()
+    latest_consumed_at: dict[str, float] = {}
+    for agent_name, consumed_at in rows:
+        if not agent_name or agent_name in active_runtime_agents:
+            continue
+        parsed = _parse_runtime_activity_timestamp(consumed_at)
+        if not _runtime_activity_candidate_is_valid(parsed):
+            continue
+        latest = latest_consumed_at.get(agent_name)
+        if latest is None or float(parsed) > latest:
+            latest_consumed_at[agent_name] = float(parsed)
+
+    return {
+        agent_name
+        for agent_name, consumed_at in latest_consumed_at.items()
+        if (now - consumed_at) >= stale_after_seconds
+    }
+
+
 def _recover_orphaned_processing_cases(run: Run, engagement_dir: Path | None) -> tuple[int, set[str]]:
     if engagement_dir is None:
         return (0, set())
@@ -1090,6 +1136,7 @@ def _recover_orphaned_processing_cases(run: Run, engagement_dir: Path | None) ->
 def _active_runtime_metadata_agents(run: Run) -> set[str]:
     payload = _read_run_metadata(run)
     active_agents: set[str] = set()
+    now = time.time()
     for item in payload.get("agents") or []:
         if not isinstance(item, dict):
             continue
@@ -1099,9 +1146,12 @@ def _active_runtime_metadata_agents(run: Run) -> set[str]:
         # queue-backed "active" agents from processing cases even when no live
         # task/runtime event exists. Those synthetic cards intentionally have an
         # empty updated_at. Launcher stall recovery must only treat agents with
-        # substantive runtime activity as active, otherwise orphaned processing
-        # assignments can mask queue stalls forever.
-        if not str(item.get("updated_at") or "").strip():
+        # substantive and recent runtime activity as active, otherwise stale
+        # queue-backed cards can mask orphaned processing forever.
+        updated_at = _parse_runtime_activity_timestamp(item.get("updated_at"))
+        if not _runtime_activity_candidate_is_valid(updated_at):
+            continue
+        if (now - float(updated_at)) > PROCESSING_AGENT_MISMATCH_GRACE_SECONDS:
             continue
         agent_name = str(item.get("agent_name") or item.get("task_name") or "").strip()
         if agent_name:
@@ -1241,6 +1291,26 @@ def _running_container_stall_reason(run: Run) -> tuple[str, str, str] | None:
             current_phase,
             "queue_stalled",
             f"Run remained in {current_phase.replace('_', '-')} with no active runtime agent, current task, or queued work before stall timeout elapsed.",
+        )
+
+    stale_processing_agents = _stale_processing_agents(engagement_dir, active_runtime_agents)
+    if current_phase not in EARLY_PHASE_STALL_PHASES and stale_processing_agents:
+        assigned = ", ".join(sorted(stale_processing_agents))
+        if active_runtime_agents:
+            active = ", ".join(sorted(active_runtime_agents))
+            reason = (
+                f"Processing queue assignments ({assigned}) had no matching active runtime agent "
+                f"after stall grace period elapsed (active agents: {active})."
+            )
+        else:
+            reason = (
+                f"Processing queue assignments ({assigned}) had no matching active runtime agent "
+                "after stall grace period elapsed."
+            )
+        return (
+            current_phase,
+            "queue_stalled",
+            reason,
         )
 
     if runtime_activity_at is not None:
