@@ -131,10 +131,89 @@ if [[ "$REFRESH_ORCHESTRATOR" == "1" ]]; then
     fi
 fi
 
+append_benchmark_gate_snapshot() {
+    local prompt_file="$1"
+    local context_file="$STATE_DIR/latest-context.md"
+    local mapping_file="$STATE_DIR/target-benchmarks.json"
+    local history_file="$STATE_DIR/benchmark-metrics-history.json"
+    [[ -f "$context_file" && -f "$mapping_file" ]] || return 0
+
+    python3 - "$context_file" "$mapping_file" "$history_file" >> "$prompt_file" <<'PY'
+from pathlib import Path
+import json
+import sys
+
+context_path = Path(sys.argv[1])
+mapping_path = Path(sys.argv[2])
+history_path = Path(sys.argv[3])
+lines = context_path.read_text(encoding='utf-8', errors='replace').splitlines()
+inside = False
+metrics = {}
+for line in lines:
+    if line.startswith('## Local Benchmark Evaluation'):
+        inside = True
+        continue
+    if inside and (line.startswith('## ') or line.startswith('#### ')):
+        break
+    if inside and line.startswith('- '):
+        key, _, value = line[2:].partition(':')
+        if key and value:
+            metrics[key.strip()] = value.strip()
+if not metrics:
+    raise SystemExit(0)
+
+mapping = json.loads(mapping_path.read_text(encoding='utf-8'))
+entry = ((mapping.get('targets') or {}).get('http://127.0.0.1:8000') or {})
+gate = entry.get('healthy_skip_gate') or {}
+history = {}
+if history_path.exists():
+    try:
+        history = json.loads(history_path.read_text(encoding='utf-8'))
+    except json.JSONDecodeError:
+        history = {}
+previous = (((history.get('targets') or {}).get('http://127.0.0.1:8000') or {}).get('last_metrics') or {})
+
+reasons = []
+for field, metric_key in [
+    ('min_scenario_precision', 'scenario_precision'),
+    ('min_scenario_automation_actionable_recall', 'scenario_automation_actionable_recall'),
+]:
+    if field not in gate:
+        continue
+    current = float(metrics.get(metric_key, '0') or 0)
+    threshold = float(gate[field])
+    if current < threshold:
+        reasons.append(f"{metric_key}={current:.3f} < {threshold:.3f}")
+for metric_key, allowed_drop in (gate.get('max_regression') or {}).items():
+    if metric_key not in metrics or metric_key not in previous:
+        continue
+    current = float(metrics.get(metric_key, '0') or 0)
+    last = float(previous.get(metric_key, '0') or 0)
+    allowed = float(allowed_drop)
+    if current < last - allowed:
+        reasons.append(f"{metric_key} regressed {last:.3f} -> {current:.3f} (allowed drop {allowed:.3f})")
+
+print('\n## Runtime Benchmark Gate Snapshot\n')
+print('- Target: http://127.0.0.1:8000')
+for key in ('precision', 'recall', 'f1', 'scenario_precision', 'scenario_recall', 'scenario_f1', 'scenario_automation_actionable_recall'):
+    if key in metrics:
+        print(f'- {key}: {metrics[key]}')
+if gate:
+    print(f"- Gate thresholds: min_scenario_precision={gate.get('min_scenario_precision', 'n/a')}, min_scenario_automation_actionable_recall={gate.get('min_scenario_automation_actionable_recall', 'n/a')}")
+if reasons:
+    print('- Gate result: FAIL')
+    print(f"- Gate reason: {'; '.join(reasons)}")
+    print('- Instruction: Do not conclude NO_ACTIONABLE_BUG_HEALTHY_RUNS while this benchmark gate is failing. Treat low or regressed benchmark quality as actionable optimizer work and improve general detection / correlation / execution / reporting logic without target-specific hardcoding.')
+else:
+    print('- Gate result: PASS')
+PY
+}
+
 echo "[$(timestamp)] building latest run context before taking action..."
 "$ROOT_DIR/scripts/build_context.sh" | tee "$LOGS_DIR/build-context.log"
 
 cp "$PROMPTS_DIR/scan-optimizer-loop.txt" "$STATE_DIR/openclaw-prompt.txt"
+append_benchmark_gate_snapshot "$STATE_DIR/openclaw-prompt.txt"
 
 echo "[$(timestamp)] prepared OpenClaw cycle inputs:"
 echo "- context: $STATE_DIR/latest-context.md"
