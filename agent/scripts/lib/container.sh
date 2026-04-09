@@ -26,6 +26,9 @@ KATANA_RATE_LIMIT="${KATANA_RATE_LIMIT:-60}"
 KATANA_STRATEGY="${KATANA_STRATEGY:-breadth-first}"
 KATANA_ENABLE_JSLUICE="${KATANA_ENABLE_JSLUICE:-0}"
 KATANA_ENABLE_PATH_CLIMB="${KATANA_ENABLE_PATH_CLIMB:-0}"
+KATANA_ENABLE_HYBRID="${KATANA_ENABLE_HYBRID:-1}"
+KATANA_ENABLE_XHR="${KATANA_ENABLE_XHR:-1}"
+KATANA_ENABLE_HEADLESS="${KATANA_ENABLE_HEADLESS:-1}"
 HOST_GATEWAY_ALIAS="${HOST_GATEWAY_ALIAS:-host.docker.internal}"
 
 runtime_mode() {
@@ -395,17 +398,6 @@ start_katana() {
     runtime_target="$(_rewrite_runtime_target_arg "$target")"
     local katana_args=(
         -u "$runtime_target"
-        -hh
-        -jc
-        -xhr
-        -xhr-extraction
-        -fx
-        -td
-        -tlsi
-        -duc
-        -system-chrome
-        -system-chrome-path "$KATANA_CHROME_BIN"
-        -headless-options "$KATANA_HEADLESS_OPTIONS"
         -kf all
         -iqp
         -fsu
@@ -426,6 +418,22 @@ start_katana() {
         -jsonl
         -silent
     )
+    if [[ "${KATANA_ENABLE_HYBRID}" == "1" ]]; then
+        katana_args+=(-hh -jc -fx -td -tlsi -duc)
+    fi
+    if [[ "${KATANA_ENABLE_XHR}" == "1" ]]; then
+        katana_args+=(-xhr -xhr-extraction)
+    fi
+    if [[ "${KATANA_ENABLE_HEADLESS}" == "1" ]]; then
+        if [[ "${KATANA_ENABLE_HYBRID}" != "1" ]]; then
+            katana_args+=(-hl)
+        fi
+        katana_args+=(
+            -system-chrome
+            -system-chrome-path "$KATANA_CHROME_BIN"
+            -headless-options "$KATANA_HEADLESS_OPTIONS"
+        )
+    fi
     if [[ "${KATANA_ENABLE_JSLUICE}" == "1" ]]; then
         katana_args+=(-jsl)
     fi
@@ -442,6 +450,7 @@ start_katana() {
             return 1
         fi
         mkdir -p "${ENGAGEMENT_DIR_ABS}/scans" "${ENGAGEMENT_DIR_ABS}/pids"
+        local katana_output_path="${KATANA_OUTPUT_PATH:-${ENGAGEMENT_DIR_ABS}/scans/katana_output.jsonl}"
         local auth_args=()
         local scope_args=()
         while IFS= read -r line; do
@@ -452,7 +461,7 @@ start_katana() {
             [ -n "$line" ] || continue
             scope_args+=("$line")
         done < <(_katana_scope_array)
-        _start_local_process katana "$KATANA_LOCAL_BIN" "${katana_args[@]}" "${scope_args[@]+"${scope_args[@]}"}" "${auth_args[@]+"${auth_args[@]}"}" -elog "${ENGAGEMENT_DIR_ABS}/scans/katana_error.log" -o "${ENGAGEMENT_DIR_ABS}/scans/katana_output.jsonl" "$@"
+        _start_local_process katana "$KATANA_LOCAL_BIN" "${katana_args[@]}" "${scope_args[@]+"${scope_args[@]}"}" "${auth_args[@]+"${auth_args[@]}"}" -elog "${ENGAGEMENT_DIR_ABS}/scans/katana_error.log" -o "$katana_output_path" "$@"
         echo "[katana] Started crawling $target"
         return 0
     fi
@@ -485,6 +494,10 @@ start_katana() {
     done < <(_katana_scope_array)
 
     mkdir -p "${ENGAGEMENT_DIR_ABS}/scans" "${ENGAGEMENT_DIR_ABS}/pids"
+    local katana_output_path="${KATANA_OUTPUT_PATH:-/engagement/scans/katana_output.jsonl}"
+    if [[ -n "${KATANA_OUTPUT_PATH:-}" ]] && [[ "$katana_output_path" == "$ENGAGEMENT_DIR_ABS"/* ]]; then
+        katana_output_path="/engagement/${katana_output_path#${ENGAGEMENT_DIR_ABS}/}"
+    fi
 
     docker run -d --name "$container_name" \
         --network host \

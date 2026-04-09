@@ -108,6 +108,7 @@ normalize_finding_title() {
 
 _findings_python_helpers() {
     cat <<'PY'
+import difflib
 import re
 from urllib.parse import urlsplit
 
@@ -142,6 +143,9 @@ def normalize_route(route: str) -> str:
         return normalize_space(path)
 
     if value.startswith("/"):
+        match = re.match(r"(/[^\s`\"'<>),;]+)", value)
+        if match:
+            return normalize_space(match.group(1))
         return normalize_space(value)
 
     return ""
@@ -155,7 +159,18 @@ def normalize_artifact_ref(value: str) -> str:
     return normalize_space(token)
 
 
-def extract_route(text: str) -> str:
+def dedupe_preserve_order(values: list[str]) -> list[str]:
+    seen = set()
+    ordered = []
+    for value in values:
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        ordered.append(value)
+    return ordered
+
+
+def extract_routes(text: str) -> list[str]:
     candidates = [
         field_value(text, "Parameter"),
         field_value(text, "Target"),
@@ -164,36 +179,36 @@ def extract_route(text: str) -> str:
         text,
     ]
 
-    method_url_pattern = re.compile(r"(?i)\b(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+(https?://[^\s`\"'<>]+|/[^\s`\"'<>]+)")
-    url_pattern = re.compile(r"https?://[^\s`\"'<>]+")
-    path_pattern = re.compile(r"(?<![A-Za-z0-9])(/[^\s`\"'<>]+)")
+    method_url_pattern = re.compile(r"(?i)\b(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+((?:https?://|/)[^\s`\"'<>),;]+)")
+    url_pattern = re.compile(r"https?://[^\s`\"'<>),;]+")
+    path_pattern = re.compile(r"(?<![A-Za-z0-9])(/[^\s`\"'<>),;]+)")
 
+    routes: list[str] = []
     for candidate in candidates:
         if not candidate:
             continue
         normalized = normalize_route(candidate)
         if normalized:
-            return normalized
-
-        match = method_url_pattern.search(candidate)
-        if match:
+            routes.append(normalized)
+        for match in method_url_pattern.finditer(candidate):
             normalized = normalize_route(f"{match.group(1).upper()} {match.group(2)}")
             if normalized:
-                return normalized
-
-        match = url_pattern.search(candidate)
-        if match:
+                routes.append(normalized)
+        for match in url_pattern.finditer(candidate):
             normalized = normalize_route(match.group(0))
             if normalized:
-                return normalized
-
-        match = path_pattern.search(candidate)
-        if match:
+                routes.append(normalized)
+        for match in path_pattern.finditer(candidate):
             normalized = normalize_route(match.group(1))
             if normalized:
-                return normalized
+                routes.append(normalized)
 
-    return ""
+    return dedupe_preserve_order(routes)
+
+
+def extract_route(text: str) -> str:
+    routes = extract_routes(text)
+    return routes[0] if routes else ""
 
 
 def extract_artifact_ref(text: str) -> str:
@@ -206,7 +221,7 @@ def extract_artifact_ref(text: str) -> str:
     ]
 
     artifact_pattern = re.compile(
-        r"(?<![A-Za-z0-9])((?:[A-Za-z0-9._-]+/)*[A-Za-z0-9._-]+\.(?:js|mjs|cjs|css|html|json|map|txt|md|wasm)(?::\d+(?::\d+)?)?)"
+        r"(?<![A-Za-z0-9])((?:[A-Za-z0-9._-]+/)*[A-Za-z0-9._-]+\.(?:js|mjs|cjs|css|html|json|map|txt|md|wasm)(?:\.[A-Za-z0-9._-]+)*(?::\d+(?::\d+)?)?)"
     )
 
     for candidate in candidates:
@@ -237,13 +252,83 @@ def split_findings(text: str):
     return blocks
 
 
-def parse_finding(text: str) -> dict[str, str]:
+def title_similarity(left: str, right: str) -> float:
+    if not left or not right:
+        return 0.0
+    return difflib.SequenceMatcher(a=left, b=right).ratio()
+
+
+def normalize_type_signature(value: str) -> str:
+    if not value:
+        return ""
+
+    normalized = normalize_space(value)
+    normalized = re.sub(r"[`'\"()\[\]{}]+", " ", normalized)
+
+    synonym_patterns = {
+        r"\bvalidat(?:e|es|ed|ing|ion|ions)\b": "verify",
+        r"\bverif(?:y|ies|ied|ying|ication|ications)\b": "verify",
+        r"\bbypasses\b": "bypass",
+    }
+    for pattern, replacement in synonym_patterns.items():
+        normalized = re.sub(pattern, replacement, normalized)
+
+    tokens = [
+        token
+        for token in re.findall(r"[a-z0-9]+", normalized)
+        if len(token) > 1 and token not in {"issue", "issues", "attack", "attacks"}
+    ]
+    if not tokens:
+        return ""
+    return " ".join(tokens)
+
+
+def type_bucket(value: str) -> str:
+    return normalize_type_signature(value)
+
+
+def route_overlap(left: dict, right: dict) -> bool:
+    return bool(set(left.get("routes", [])) & set(right.get("routes", [])))
+
+
+def duplicate_reason(existing: dict, candidate: dict) -> str:
+    if candidate["title_norm"] and existing["title_norm"] == candidate["title_norm"]:
+        return "title"
+    if (
+        candidate["artifact_ref"]
+        and candidate["type"]
+        and existing["artifact_ref"] == candidate["artifact_ref"]
+        and existing["type"] == candidate["type"]
+    ):
+        return "artifact+type"
+    if (
+        route_overlap(existing, candidate)
+        and candidate["owasp"]
+        and candidate["severity"]
+        and candidate["type_bucket"]
+        and existing["owasp"] == candidate["owasp"]
+        and existing["severity"] == candidate["severity"]
+        and existing["type_bucket"] == candidate["type_bucket"]
+    ):
+        return "route+owasp+severity+type-bucket"
+    if (
+        route_overlap(existing, candidate)
+        and candidate["owasp"]
+        and existing["owasp"] == candidate["owasp"]
+        and title_similarity(existing["title_norm"], candidate["title_norm"]) >= 0.55
+    ):
+        return "route+owasp+title-similarity"
+    return ""
+
+
+def parse_finding(text: str) -> dict[str, object]:
     heading = re.search(r"(?m)^## \[(FINDING-[A-Z]{2}-[0-9]{3}|FINDING-ID)\]\s+(.+)$", text)
     finding_id = heading.group(1) if heading else ""
     title = heading.group(2) if heading else ""
     severity = normalize_space(field_value(text, "Severity"))
     owasp = normalize_space(field_value(text, "OWASP Category"))
     finding_type = normalize_space(field_value(text, "Type"))
+    routes = extract_routes(text)
     return {
         "id": finding_id,
         "title": title,
@@ -251,7 +336,9 @@ def parse_finding(text: str) -> dict[str, str]:
         "severity": severity,
         "owasp": owasp,
         "type": finding_type,
-        "route": extract_route(text),
+        "type_bucket": type_bucket(finding_type),
+        "routes": routes,
+        "route": routes[0] if routes else "",
         "artifact_ref": extract_artifact_ref(text),
     }
 PY
@@ -270,32 +357,14 @@ findings_path = Path(sys.argv[1])
 candidate_path = Path(sys.argv[2])
 
 candidate = parse_finding(candidate_path.read_text(encoding="utf-8"))
-if not candidate["title_norm"] and not candidate["route"]:
+if not candidate["title_norm"] and not candidate["route"] and not candidate["artifact_ref"]:
     raise SystemExit(0)
 
 for block in split_findings(findings_path.read_text(encoding="utf-8")):
     existing = parse_finding(block)
     if not existing["id"]:
         continue
-    if candidate["title_norm"] and existing["title_norm"] == candidate["title_norm"]:
-        print(existing["id"])
-        raise SystemExit(0)
-    if (
-        candidate["route"]
-        and candidate["severity"]
-        and candidate["owasp"]
-        and existing["route"] == candidate["route"]
-        and existing["severity"] == candidate["severity"]
-        and existing["owasp"] == candidate["owasp"]
-    ):
-        print(existing["id"])
-        raise SystemExit(0)
-    if (
-        candidate["artifact_ref"]
-        and candidate["type"]
-        and existing["artifact_ref"] == candidate["artifact_ref"]
-        and existing["type"] == candidate["type"]
-    ):
+    if duplicate_reason(existing, candidate):
         print(existing["id"])
         raise SystemExit(0)
 PY
@@ -310,24 +379,32 @@ import sys
 from pathlib import Path
 
 path = Path(sys.argv[1])
-seen_route = {}
-seen_artifact = {}
-for block in split_findings(path.read_text(encoding="utf-8")):
-    finding = parse_finding(block)
-    if finding["id"] and finding["route"] and finding["severity"] and finding["owasp"]:
-        signature = f"{finding['route']}\t{finding['owasp']}\t{finding['severity']}"
-        if signature in seen_route:
-            print(f"{seen_route[signature]} <-> {finding['id']}: {finding['title']}")
-        else:
-            seen_route[signature] = finding["id"]
-    if finding["id"] and finding["artifact_ref"] and finding["type"]:
-        signature = f"{finding['artifact_ref']}\t{finding['type']}"
-        if signature in seen_artifact:
+findings = [
+    parse_finding(block)
+    for block in split_findings(path.read_text(encoding="utf-8"))
+]
+
+for index, finding in enumerate(findings):
+    if not finding["id"]:
+        continue
+    for other in findings[index + 1 :]:
+        if not other["id"]:
+            continue
+        reason = duplicate_reason(finding, other)
+        if not reason:
+            continue
+        if reason == "artifact+type":
             print(
-                f"{seen_artifact[signature]} <-> {finding['id']}: artifact={finding['artifact_ref']} type={finding['type']}"
+                f"{finding['id']} <-> {other['id']}: artifact={other['artifact_ref']} type={other['type']}"
+            )
+        elif reason.startswith("route+"):
+            routes = sorted(set(finding.get("routes", [])) & set(other.get("routes", [])))
+            joined = ", ".join(routes) if routes else other.get("route", "")
+            print(
+                f"{finding['id']} <-> {other['id']}: route={joined} reason={reason} title={other['title']}"
             )
         else:
-            seen_artifact[signature] = finding["id"]
+            print(f"{finding['id']} <-> {other['id']}: title={other['title']}")
 PY
 }
 

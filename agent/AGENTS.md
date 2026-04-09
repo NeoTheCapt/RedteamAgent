@@ -49,7 +49,7 @@ After `/engage` initialization completes, repeat until all attack paths exhauste
 1. **ASSESS STATE** — Read scope.json, log.md, findings.md. Check log.md before ANY action.
 2. **DECIDE NEXT ACTION** — Prioritize by impact (HIGH first). Skip ahead if obvious vulns found.
 3. **FORMULATE PLAN** — Actions, tools, targets, rationale, best subagent.
-4. **PRESENT OR PROCEED** — INTERACTIVE or `/confirm manual`: use NUMBERED choices (single digits) and wait for input. AUTO-CONFIRM (default): auto-proceed after first Phase 1 approval. AUTONOMOUS (`/autoengage`): never wait; announce the next action and continue. In autonomous mode, NEVER emit a standalone status/progress-only text turn while work remains (for example “Continuing...”, “Next I’ll...”, or a queue summary by itself). Any non-terminal text must be paired in the SAME assistant turn with at least one real advancing action (task dispatch, dispatcher update, findings/surface write, phase update, coverage check, or completion check). If no advancing action is ready, write an explicit stop reason log entry and stop using the stop-reason format below.
+4. **PRESENT OR PROCEED** — INTERACTIVE or `/confirm manual`: use NUMBERED choices (single digits) and wait for input. AUTO-CONFIRM (default): auto-proceed after first Phase 1 approval. AUTONOMOUS (`/autoengage` and `/resume`): never wait; announce the next action and continue. In autonomous mode, NEVER emit a standalone status/progress-only text turn while work remains (for example “Continuing...”, “Next I’ll...”, or a queue summary by itself). Any non-terminal text must be paired in the SAME assistant turn with at least one real advancing action (task dispatch, dispatcher update, findings/surface write, phase update, coverage check, or completion check). If no advancing action is ready, write an explicit stop reason log entry and stop using the stop-reason format below.
 5. **DISPATCH** — ALWAYS dispatch to subagent. Do NOT test directly (no curl probes, no payloads). Your job: coordination. Allowed direct: read files, dispatcher.sh, write log/findings.
 6. **RECORD FINDINGS IMMEDIATELY** — Extract findings → append to findings.md → BEFORE next dispatch. If agent reports a discovery without finding format, YOU format it.
 7. **RECORD SURFACES IMMEDIATELY** — If recon/source output `#### Surface Candidates`, append them to `surfaces.jsonl` via `./scripts/append_surface.sh`.
@@ -70,7 +70,7 @@ Rules:
 - Do not delegate `/engage` initialization to the task tool or any general subagent.
 - Before initialization completes, do not read `scope.json`, `log.md`, `findings.md`, `intel.md`, `auth.json`, or `cases.db`.
 - Use the bash block from `.opencode/commands/engage.md` directly. Do not rewrite initialization in `python`, `python3`, `node`, or custom scripts.
-- The core loop starts only after initialization completes successfully.
+- The core loop starts only after /engage initialization completes successfully.
 
 ## Subagent Dispatch
 
@@ -100,7 +100,7 @@ PARALLEL: Independent tasks → parallel. Dependent → sequential.
 3. **CONSUME & TEST** → dispatcher loop: reset-stale → stats → fetch → dispatch → done → requeue → repeat. Exit only when pending=0 AND processing=0.
    Dispatch rule is strict:
    - every non-empty fetched batch MUST be followed by exactly one matching subagent task in the same loop pass
-   - `api`, `graphql`, `form`, `upload`, and `websocket` batches MUST dispatch `vulnerability-analyst`
+   - `api`, `api-spec`, `graphql`, `form`, `upload`, and `websocket` batches MUST dispatch `vulnerability-analyst`
    - `page`, `data`, `javascript`, `stylesheet`, and `unknown` batches MUST dispatch `source-analyzer`
    - consume-test dispatch is SERIALIZED: fetch and dispatch exactly one non-empty batch at a time, wait for that subagent result, record its `### Case Outcomes`, then fetch the next batch
    - do NOT launch overlapping `task` calls inside the same consume-test pass, even when multiple fetched batch files are non-empty
@@ -113,6 +113,7 @@ PARALLEL: Independent tasks → parallel. Dependent → sequential.
    High-risk surfaces `account_recovery`, `dynamic_render`, `object_reference`, and `privileged_write`
    may NOT remain `deferred` when moving to Exploit/Report. They must be `covered` or `not_applicable`.
 4. **EXPLOIT** → dispatch osint-analyst + exploit-developer in parallel. After osint: read intel.md, HIGH value → findings.md + exploit 2nd round.
+   Exploit entry rule is strict: the SAME turn that decides exploit has started must launch both the osint-analyst task and at least one bounded exploit-developer task. Do NOT stop after only `Exploit start`, only OSINT triage, or only a todo/log update. If OSINT returns first and no exploit-developer task is running yet, dispatch the missing exploit-developer task before ending the turn.
    Exploit-phase exit rule is strict: once queue stats are pending=0 and processing=0, collection health passes, surface coverage passes, and all active exploit tasks have returned with no new concrete branch to pursue, do NOT idle in exploit. In that same turn, append a concise phase-transition log entry, mark `exploit` complete in `scope.json`, switch `current_phase` to `report`, update the todo list, and dispatch `report-writer` immediately.
 5. **REPORT** → dispatch report-writer
    Never stop after saying reporting is next. The same assistant turn that decides reporting should begin MUST actually dispatch `report-writer`.
@@ -158,15 +159,18 @@ jq '.phases_completed = (reduce (((.phases_completed // []) + ["<phase>"])[]) as
 
 When ANY agent discovers credentials:
 1. Write to auth.json immediately
-2. In the SAME turn, dispatch a bounded exploit-developer auth-validation task (do not stop after only logging `Credential validation dispatch`)
-3. Try login, save token
-4. Trigger POST-AUTH RE-COLLECTION (restart Katana with auth)
-5. Continue consume-test from the updated queue/auth state
+2. Keep auth.json on the canonical schema: `cookies` object, `headers` object, `tokens` object, `discovered_credentials` array, `validated_credentials` array, and legacy-compat `credentials` array
+3. In the SAME turn, dispatch a bounded exploit-developer auth-validation task (do not stop after only writing a log entry like `Credential validation dispatch`)
+4. Try login, save token
+5. Trigger POST-AUTH RE-COLLECTION (restart Katana with auth)
+6. Continue consume-test from the updated queue/auth state
 
 Auth-validation task requirements:
 - Use exploit-developer for the login/JWT acquisition attempt
 - Keep the task narrow: validate exactly the discovered credential(s), acquire session material if successful, and test one immediate authenticated foothold
 - If validation fails, log the failure and resume the queue instead of stalling
+- Preserve legacy compatibility: if you append a credential entry, also keep `credentials` as a list so older recovery snippets do not crash with `KeyError: credentials`
+- Never chain a new shell command on the same line as a heredoc terminator when updating auth.json or findings files; start the next command on a new line
 - Any credential-validation status/log entry must be paired in the same turn with the actual exploit-developer dispatch or another advancing action
 
 ## Containerized Tool Execution
@@ -254,12 +258,25 @@ On start or `/resume`:
 ```bash
 source scripts/lib/engagement.sh
 ENG_DIR=$(resolve_engagement_dir "$(pwd)")
-cat "$ENG_DIR/scope.json"
+printf '%s\n' "ENG_DIR=$ENG_DIR"
+printf '%s\n' '---SCOPE---'
+jq -c '{status,current_phase,phases_completed,target,start_time,started_at}' "$ENG_DIR/scope.json"
+printf '%s\n' '---STATS---'
 ./scripts/dispatcher.sh "$ENG_DIR/cases.db" stats 2>/dev/null
 ```
 
-If status=in_progress: read state, present summary, recover stale cases, resume from correct phase.
+If status=in_progress: read state, present summary, recover stale cases, and continue from the correct phase in the SAME turn.
 cases.db IS the state: pending=not done, done=completed, processing=interrupted.
+
+Resume rules:
+- NEVER stop after only reading `scope.json`, `log.md`, `findings.md`, or queue stats.
+- If `current_phase` is `consume_test`/`consume-test`, immediately run `./scripts/dispatcher.sh "$ENG_DIR/cases.db" reset-stale 10` before the next fetch.
+- Treat any leftover `processing` rows on `/resume` as interrupted work to recover, not evidence that a live subagent is still progressing.
+- On `/resume`, NEVER fetch into a placeholder agent name such as `resume_operator` / `resume-operator`. Determine the real downstream assignee from the batch type first, then fetch directly into that agent (`vulnerability-analyst` for `api|api-spec|form|upload|graphql|websocket`; `source-analyzer` for `page|javascript|stylesheet|data|unknown`).
+- On `/resume`, `stylesheet` MUST be fetched for `source-analyzer` in the SAME turn as the matching dispatch. Do not leave stylesheet rows sitting in `processing` under a resume placeholder.
+- After `reset-stale`, either dispatch exactly one concrete next batch in the SAME turn or write an explicit `Run stop` log entry with a stop reason.
+- Do NOT leave `/resume` on a queue summary, `dispatcher.sh ... stats`, or `dispatcher.sh ... fetch ...` without the matching subagent dispatch / case-outcome update in that same turn.
+- When printing diagnostic banner lines that start with `-`, NEVER use bare `printf '---label---\n'`; bash can parse that as an option and abort the step. Use `printf '%s\n' '---label---'` (or `echo '---label---'`) instead.
 
 ## Communication
 

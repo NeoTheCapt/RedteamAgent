@@ -22,6 +22,7 @@ from .launcher import (
     _clear_run_terminal_reason,
     _last_logged_stop_metadata,
     _latest_process_log_activity_at,
+    _latest_undispatched_batch_fetch,
     _maybe_auto_resume_run,
     _start_container_supervisor,
     _write_run_terminal_reason,
@@ -34,6 +35,10 @@ from .launcher import (
     process_metadata_path_for,
     start_run_runtime,
     stop_run_runtime,
+    _active_runtime_agents,
+    _active_runtime_metadata_agents,
+    _latest_runtime_metadata_activity_at,
+    _run_metadata_has_current_task,
 )
 
 ALLOWED_STATUSES = {"queued", "running", "completed", "failed"}
@@ -43,7 +48,12 @@ RUN_STARTUP_GRACE_SECONDS = 90
 # that contract so long-running consume-test work is not failed a full cycle too
 # early.
 RUN_STALL_TIMEOUT_SECONDS = 900
-EARLY_PHASE_STALL_TIMEOUT_SECONDS = 180
+PROCESSING_AGENT_MISMATCH_GRACE_SECONDS = 120
+PENDING_QUEUE_DISPATCH_GRACE_SECONDS = 120
+# Real targets can spend several minutes in autonomous initialization/recon before the
+# first queue item or observed path lands. Keep the early watchdog long enough to avoid
+# killing active slow-start recon just as the first subagent/task dispatch begins.
+EARLY_PHASE_STALL_TIMEOUT_SECONDS = 300
 EARLY_PHASE_STALL_PHASES = {"unknown", "recon", "collect"}
 
 
@@ -211,10 +221,10 @@ def _latest_runtime_activity_at(run: Run) -> datetime | None:
     latest_timestamp = _latest_process_log_activity_at(process_log_path_for(run))
     latest = _utc_datetime_from_timestamp(latest_timestamp) if latest_timestamp is not None else None
 
-    process_metadata = _path_mtime(process_metadata_path_for(run))
-    if process_metadata is not None and (latest is None or process_metadata > latest):
-        latest = process_metadata
-
+    # Treat runtime activity as real runtime output only. process.json is launcher
+    # metadata and can be rewritten by recovery/status helpers long after the
+    # container stopped making progress, which would incorrectly mask genuine
+    # queue stalls as fresh activity.
     opencode_logs_root = opencode_home_root_for(run) / "log"
     if opencode_logs_root.exists():
         for path in opencode_logs_root.glob("*.log"):
@@ -228,7 +238,7 @@ def _latest_runtime_activity_at(run: Run) -> datetime | None:
     return latest
 
 
-def _latest_workflow_activity_at(run: Run, scope_path: Path | None) -> datetime | None:
+def _latest_scope_file_activity_at(scope_path: Path | None) -> datetime | None:
     latest = None
     if scope_path is not None and scope_path.exists():
         for path in (
@@ -242,6 +252,15 @@ def _latest_workflow_activity_at(run: Run, scope_path: Path | None) -> datetime 
                 continue
             if latest is None or candidate > latest:
                 latest = candidate
+    return latest
+
+
+def _latest_workflow_activity_at(run: Run, scope_path: Path | None) -> datetime | None:
+    latest = _latest_runtime_activity_at(run)
+
+    scope_latest = _latest_scope_file_activity_at(scope_path)
+    if scope_latest is not None and (latest is None or scope_latest > latest):
+        latest = scope_latest
 
     latest_event = db.get_latest_non_heartbeat_event_for_run(run.id)
     event_created_at = _parse_db_timestamp(getattr(latest_event, "created_at", ""))
@@ -297,6 +316,23 @@ def _load_queue_state(scope_path: Path | None) -> tuple[str, int, int, int, str]
         queue_health = "corrupt" if _is_sqlite_corruption_error(exc) else "error"
 
     return (current_phase, total_cases, pending_cases, processing_cases, queue_health)
+
+
+def _load_processing_agents(scope_path: Path | None) -> set[str]:
+    if scope_path is None or not scope_path.exists():
+        return set()
+    cases_db = scope_path.parent / "cases.db"
+    if not cases_db.exists():
+        return set()
+
+    def _reader(connection: sqlite3.Connection) -> list[str]:
+        rows = connection.execute(
+            "SELECT DISTINCT assigned_agent FROM cases WHERE status = 'processing' AND assigned_agent IS NOT NULL AND TRIM(assigned_agent) != ''"
+        ).fetchall()
+        return [str(row[0]) for row in rows if row and row[0]]
+
+    raw_agents = _read_sqlite_with_fallback(cases_db, _reader, [])
+    return {agent for agent in raw_agents if agent}
 
 
 def _format_db_timestamp(value: datetime) -> str:
@@ -391,7 +427,119 @@ def _reconcile_run_status(run: Run, project: Project | None = None, user: User |
                 stop_run_runtime(failed)
                 return failed
 
+        active_runtime_agents = _active_runtime_agents(run)
+        processing_agents = _load_processing_agents(scope_path)
+        orphaned_fetch = _latest_undispatched_batch_fetch(
+            process_log_path_for(run),
+            opencode_logs_root=opencode_home_root_for(run) / "log",
+        )
+        if (
+            current_phase.replace("_", "-") not in EARLY_PHASE_STALL_PHASES
+            and pending_cases > 0
+            and processing_cases == 0
+            and not active_runtime_agents
+            and workflow_activity_at is not None
+            and (_utc_now_naive() - workflow_activity_at) >= timedelta(seconds=PENDING_QUEUE_DISPATCH_GRACE_SECONDS)
+        ):
+            failed = db.update_run_status(run.id, "failed")
+            _write_run_terminal_reason(
+                failed,
+                reason_code="queue_stalled",
+                reason_text="Pending queue items remained undispatched with no active runtime agent after dispatch grace period elapsed.",
+            )
+            stop_run_runtime(failed)
+            return failed
+
+        if (
+            current_phase.replace("_", "-") not in EARLY_PHASE_STALL_PHASES
+            and orphaned_fetch is not None
+            and str(orphaned_fetch.get("agent") or "") in processing_agents
+            and str(orphaned_fetch.get("agent") or "") not in active_runtime_agents
+            and (_utc_now_naive() - _utc_datetime_from_timestamp(float(orphaned_fetch.get("timestamp") or 0.0)))
+            >= timedelta(seconds=PROCESSING_AGENT_MISMATCH_GRACE_SECONDS)
+        ):
+            batch_type = str(orphaned_fetch.get("batch_type") or "queue")
+            agent_name = str(orphaned_fetch.get("agent") or "agent")
+            batch_ids = str(orphaned_fetch.get("batch_ids") or "").strip()
+            reason_text = f"Fetched non-empty {batch_type} batch for {agent_name}"
+            if batch_ids:
+                reason_text += f" (ids: {batch_ids})"
+            reason_text += " but no matching task dispatch followed before stall grace period elapsed."
+            failed = db.update_run_status(run.id, "failed")
+            _write_run_terminal_reason(
+                failed,
+                reason_code="queue_stalled",
+                reason_text=reason_text,
+            )
+            stop_run_runtime(failed)
+            return failed
+
+        orphan_activity_at = _latest_scope_file_activity_at(scope_path)
+        metadata_activity_at = _latest_runtime_metadata_activity_at(run)
+        metadata_activity = (
+            _utc_datetime_from_timestamp(metadata_activity_at) if metadata_activity_at is not None else None
+        )
+        if metadata_activity is not None and (
+            orphan_activity_at is None or metadata_activity > orphan_activity_at
+        ):
+            orphan_activity_at = metadata_activity
+        has_current_task = _run_metadata_has_current_task(run)
+        if (
+            current_phase.replace("_", "-") not in EARLY_PHASE_STALL_PHASES
+            and total_cases > 0
+            and pending_cases == 0
+            and processing_cases == 0
+            and not active_runtime_agents
+            and not has_current_task
+            and orphan_activity_at is not None
+            and (_utc_now_naive() - orphan_activity_at) >= timedelta(seconds=RUN_STALL_TIMEOUT_SECONDS)
+        ):
+            failed = db.update_run_status(run.id, "failed")
+            _write_run_terminal_reason(
+                failed,
+                reason_code="queue_stalled",
+                reason_text=(
+                    f"Run remained in {current_phase.replace('_', '-')} with no active runtime agent, "
+                    "current task, or queued work before stall timeout elapsed."
+                ),
+            )
+            stop_run_runtime(failed)
+            return failed
+
         last_activity_at = _latest_runtime_activity_at(run)
+        mismatch_activity_at = last_activity_at
+        if workflow_activity_at is not None and (
+            mismatch_activity_at is None or workflow_activity_at > mismatch_activity_at
+        ):
+            mismatch_activity_at = workflow_activity_at
+        if (
+            current_phase.replace("_", "-") not in EARLY_PHASE_STALL_PHASES
+            and processing_agents
+            and mismatch_activity_at is not None
+            and (_utc_now_naive() - mismatch_activity_at) >= timedelta(seconds=PROCESSING_AGENT_MISMATCH_GRACE_SECONDS)
+            and processing_agents.isdisjoint(active_runtime_agents)
+        ):
+            assigned = ", ".join(sorted(processing_agents))
+            if active_runtime_agents:
+                active = ", ".join(sorted(active_runtime_agents))
+                reason_text = (
+                    f"Processing queue assignments ({assigned}) had no matching active runtime agent "
+                    f"after stall grace period elapsed (active agents: {active})."
+                )
+            else:
+                reason_text = (
+                    f"Processing queue assignments ({assigned}) had no matching active runtime agent "
+                    "after stall grace period elapsed."
+                )
+            failed = db.update_run_status(run.id, "failed")
+            _write_run_terminal_reason(
+                failed,
+                reason_code="queue_stalled",
+                reason_text=reason_text,
+            )
+            stop_run_runtime(failed)
+            return failed
+
         if last_activity_at is not None:
             log_age = _utc_now_naive() - last_activity_at
             if log_age >= timedelta(seconds=RUN_STALL_TIMEOUT_SECONDS):

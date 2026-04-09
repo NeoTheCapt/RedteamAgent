@@ -210,9 +210,59 @@ def _phase_from_task_prompt(prompt: str) -> str:
     return "unknown"
 
 
+def _parse_opencode_log_timestamp(value: str) -> str | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%d %H:%M:%S"):
+        try:
+            parsed = datetime.strptime(text, fmt)
+            return parsed.strftime("%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            continue
+    return None
+
+
+def _project_opencode_subagent_events(
+    *,
+    run_id: int,
+    run_root: Path,
+    scope_phase: str,
+    add_projected,
+) -> None:
+    log_dir = run_root / "opencode-home" / "log"
+    if not log_dir.exists():
+        return
+
+    creation_pattern = re.compile(
+        r"^INFO\s+(?P<created_at>\S+)\s+.*service=session\s+id=(?P<session_id>\S+)\s+.*?parentID=(?P<parent_id>\S+)\s+title=(?P<title>.+?)\s+permission=.+\s+created$"
+    )
+    agent_pattern = re.compile(r"@(?P<agent_name>[A-Za-z0-9_-]+)\s+subagent\)")
+
+    for log_path in sorted(log_dir.glob("*.log")):
+        for line in log_path.read_text(encoding="utf-8", errors="replace").splitlines():
+            match = creation_pattern.match(line.strip())
+            if not match:
+                continue
+            created_at = _parse_opencode_log_timestamp(match.group("created_at"))
+            if not created_at:
+                continue
+            title = match.group("title").strip()
+            agent_match = agent_pattern.search(title)
+            if not agent_match:
+                continue
+            agent_name = agent_match.group("agent_name").strip()
+            if not agent_name:
+                continue
+            phase = _agent_phase(agent_name)
+            if phase == "unknown":
+                phase = scope_phase
+            add_projected("task.started", phase, agent_name, agent_name, title, created_at)
+
+
 def _project_process_log_events(run_id: int, run_root: Path, events: list[Event]) -> list[Event]:
     process_log = run_root / "runtime" / "process.log"
-    if not process_log.exists():
+    if not process_log.exists() and not (run_root / "opencode-home" / "log").exists():
         return events
 
     projected: list[Event] = []
@@ -265,63 +315,71 @@ def _project_process_log_events(run_id: int, run_root: Path, events: list[Event]
         projected_keys.add(key)
         next_id += 1
 
-    for line in process_log.read_text(encoding="utf-8", errors="replace").splitlines():
-        stripped = line.strip()
-        if not stripped.startswith("{"):
-            continue
-        try:
-            payload = json.loads(stripped)
-        except json.JSONDecodeError:
-            continue
-        if payload.get("type") != "tool_use":
-            continue
+    if process_log.exists():
+        for line in process_log.read_text(encoding="utf-8", errors="replace").splitlines():
+            stripped = line.strip()
+            if not stripped.startswith("{"):
+                continue
+            try:
+                payload = json.loads(stripped)
+            except json.JSONDecodeError:
+                continue
+            if payload.get("type") != "tool_use":
+                continue
 
-        part = payload.get("part") or {}
-        tool_name = part.get("tool")
-        state = part.get("state") or {}
-        created_at = datetime.fromtimestamp(
-            (payload.get("timestamp") or 0) / 1000,
-            tz=timezone.utc,
-        ).strftime("%Y-%m-%d %H:%M:%S")
+            part = payload.get("part") or {}
+            tool_name = part.get("tool")
+            state = part.get("state") or {}
+            created_at = datetime.fromtimestamp(
+                (payload.get("timestamp") or 0) / 1000,
+                tz=timezone.utc,
+            ).strftime("%Y-%m-%d %H:%M:%S")
 
-        if tool_name != "task":
-            summary = (
-                state.get("input", {}).get("description")
-                or part.get("title")
-                or f"{tool_name} activity"
-            )
-            task_name = tool_name or "tool"
-            add_projected("task.started", scope_phase, task_name, "operator", summary, created_at)
+            if tool_name != "task":
+                summary = (
+                    state.get("input", {}).get("description")
+                    or part.get("title")
+                    or f"{tool_name} activity"
+                )
+                task_name = tool_name or "tool"
+                add_projected("task.started", scope_phase, task_name, "operator", summary, created_at)
+                add_projected(
+                    "task.completed",
+                    scope_phase,
+                    task_name,
+                    "operator",
+                    f"{summary} completed",
+                    created_at,
+                )
+                continue
+
+            task_input = state.get("input") or {}
+            agent_name = task_input.get("subagent_type")
+            if not agent_name:
+                continue
+
+            prompt = task_input.get("prompt") or ""
+            phase = _phase_from_task_prompt(prompt)
+            if phase == "unknown":
+                phase = scope_phase if scope_phase != "unknown" else _agent_phase(agent_name)
+            summary = task_input.get("description") or f"{agent_name} task"
+
+            add_projected("task.started", phase, agent_name, agent_name, summary, created_at)
             add_projected(
                 "task.completed",
-                scope_phase,
-                task_name,
-                "operator",
+                phase,
+                agent_name,
+                agent_name,
                 f"{summary} completed",
                 created_at,
             )
-            continue
 
-        task_input = state.get("input") or {}
-        agent_name = task_input.get("subagent_type")
-        if not agent_name:
-            continue
-
-        prompt = task_input.get("prompt") or ""
-        phase = _phase_from_task_prompt(prompt)
-        if phase == "unknown":
-            phase = scope_phase if scope_phase != "unknown" else _agent_phase(agent_name)
-        summary = task_input.get("description") or f"{agent_name} task"
-
-        add_projected("task.started", phase, agent_name, agent_name, summary, created_at)
-        add_projected(
-            "task.completed",
-            phase,
-            agent_name,
-            agent_name,
-            f"{summary} completed",
-            created_at,
-        )
+    _project_opencode_subagent_events(
+        run_id=run_id,
+        run_root=run_root,
+        scope_phase=scope_phase,
+        add_projected=add_projected,
+    )
 
     if not projected and indexed_events == events:
         return events

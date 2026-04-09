@@ -147,6 +147,10 @@ is_katana_noise_path() {
         return 0
     fi
 
+    if printf '%s' "$path_lower" | grep -qiE "['\"]\.concat\(|/\.concat\("; then
+        return 0
+    fi
+
     case "$path_lower" in
         *'$')
             return 0
