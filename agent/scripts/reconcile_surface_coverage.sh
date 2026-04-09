@@ -13,9 +13,9 @@ RECON_INGEST="$SCRIPT_DIR/recon_ingest.sh"
     exit 1
 }
 
-updates_tmp="$(mktemp "${TMPDIR:-/tmp}/surface-updates.XXXXXX.jsonl")"
-followups_tmp="$(mktemp "${TMPDIR:-/tmp}/surface-followups.XXXXXX.jsonl")"
-report_tmp="$(mktemp "${TMPDIR:-/tmp}/surface-report.XXXXXX.txt")"
+updates_tmp="$(mktemp "${TMPDIR:-/tmp}/surface-updates.XXXXXX")"
+followups_tmp="$(mktemp "${TMPDIR:-/tmp}/surface-followups.XXXXXX")"
+report_tmp="$(mktemp "${TMPDIR:-/tmp}/surface-report.XXXXXX")"
 trap 'rm -f "$updates_tmp" "$followups_tmp" "$report_tmp"' EXIT
 
 python3 - "$ENG_DIR" "$updates_tmp" "$followups_tmp" >"$report_tmp" <<'PY'
@@ -53,6 +53,62 @@ if surfaces_file.exists():
         if not raw:
             continue
         rows.append(json.loads(raw))
+
+source_analysis_dir = eng_dir / "scans" / "source-analysis"
+synthetic_route_surfaces = []
+seen_synthetic_route_targets = set()
+
+
+def normalize_source_analysis_route(route: str | None) -> str | None:
+    value = str(route or "").strip()
+    if not value:
+        return None
+    if value in {"*", "**", "/", "#/", "/#/"}:
+        return None
+    if any(token in value for token in (":", "{", "}")):
+        return None
+    if value.startswith(("http://", "https://")):
+        parsed = urlparse(value)
+        value = parsed.fragment.strip() or parsed.path.strip()
+        if not value:
+            return None
+    if value.startswith("/#/"):
+        value = "/#" + value[len("/#/"):]
+    elif value.startswith("#/"):
+        value = "/#" + value[len("#/"):]
+    elif value.startswith("/"):
+        value = "/#" + value
+    else:
+        value = "/#" + value.lstrip('#/')
+    return value
+
+
+if source_analysis_dir.exists():
+    for summary_path in sorted(source_analysis_dir.glob("page-batch-*-summary.json")):
+        try:
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        for route in summary.get("routes") or []:
+            normalized_route = normalize_source_analysis_route(route)
+            if not normalized_route:
+                continue
+            target = f"GET {normalized_route}"
+            if target in seen_synthetic_route_targets:
+                continue
+            seen_synthetic_route_targets.add(target)
+            synthetic_route_surfaces.append(
+                {
+                    "surface_type": "dynamic_render",
+                    "target": target,
+                    "source": "source-analysis-route-summary",
+                    "rationale": "source-analysis summary exposed a concrete SPA route that should be exercised as a page follow-up",
+                    "evidence_ref": str(summary_path.relative_to(eng_dir)),
+                    "status": "discovered",
+                }
+            )
+
+rows.extend(synthetic_route_surfaces)
 
 conn = sqlite3.connect(str(eng_dir / "cases.db"))
 conn.row_factory = sqlite3.Row
