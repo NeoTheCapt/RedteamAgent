@@ -23,7 +23,7 @@ from ..models.user import User
 from ..security import create_session_token, session_expiry_timestamp
 
 
-_ACTIVE_CONTAINER_SUPERVISORS: set[int] = set()
+_ACTIVE_CONTAINER_SUPERVISORS: dict[int, object] = {}
 _ACTIVE_CONTAINER_SUPERVISORS_LOCK = Lock()
 
 
@@ -2716,6 +2716,7 @@ def _maybe_auto_resume_run(
         user,
         log_follower=log_follower,
         log_handle=log_handle,
+        replace_existing=True,
     )
     return True
 
@@ -2758,11 +2759,13 @@ def _start_container_supervisor(
     *,
     log_follower: subprocess.Popen[bytes] | None = None,
     log_handle=None,
+    replace_existing: bool = False,
 ) -> bool:
+    supervisor_token = object()
     with _ACTIVE_CONTAINER_SUPERVISORS_LOCK:
-        if run.id in _ACTIVE_CONTAINER_SUPERVISORS:
+        if run.id in _ACTIVE_CONTAINER_SUPERVISORS and not replace_existing:
             return False
-        _ACTIVE_CONTAINER_SUPERVISORS.add(run.id)
+        _ACTIVE_CONTAINER_SUPERVISORS[run.id] = supervisor_token
 
     created_log_handle = False
     try:
@@ -2771,7 +2774,7 @@ def _start_container_supervisor(
             log_handle = open(process_log_path_for(run), "ab")
             created_log_handle = True
 
-        def _runner() -> None:
+        def _runner(_run: Run) -> None:
             try:
                 _supervise_container(
                     run,
@@ -2783,9 +2786,10 @@ def _start_container_supervisor(
                 )
             finally:
                 with _ACTIVE_CONTAINER_SUPERVISORS_LOCK:
-                    _ACTIVE_CONTAINER_SUPERVISORS.discard(run.id)
+                    if _ACTIVE_CONTAINER_SUPERVISORS.get(run.id) is supervisor_token:
+                        _ACTIVE_CONTAINER_SUPERVISORS.pop(run.id, None)
 
-        Thread(target=_runner, daemon=True).start()
+        Thread(target=_runner, args=(run,), daemon=True).start()
         return True
     except Exception:
         if created_log_handle and log_handle is not None:
@@ -2794,7 +2798,8 @@ def _start_container_supervisor(
             except Exception:
                 pass
         with _ACTIVE_CONTAINER_SUPERVISORS_LOCK:
-            _ACTIVE_CONTAINER_SUPERVISORS.discard(run.id)
+            if _ACTIVE_CONTAINER_SUPERVISORS.get(run.id) is supervisor_token:
+                _ACTIVE_CONTAINER_SUPERVISORS.pop(run.id, None)
         raise
 
 

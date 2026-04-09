@@ -3292,6 +3292,95 @@ def test_auto_resume_resets_budget_after_queue_progress(monkeypatch):
 
 
 
+def test_auto_resume_replaces_existing_supervisor_handoff(monkeypatch):
+    from app.services import launcher
+
+    client = TestClient(app)
+    token = register_and_login(client, "alice-resume-handoff")
+    project = create_project(client, token)
+
+    object.__setattr__(settings, "auto_launch_runs", False)
+    try:
+        run = create_run(client, token, project["id"], "https://resume-handoff.example")
+    finally:
+        object.__setattr__(settings, "auto_launch_runs", False)
+
+    latest = db.get_run_by_id(run["id"])
+    assert latest is not None
+    project_model = db.get_project_by_id(project["id"])
+    assert project_model is not None
+    user_model = db.get_user_by_id(project_model.user_id)
+    assert user_model is not None
+
+    workspace = Path(latest.engagement_root) / "workspace"
+    engagement_dir = workspace / "engagements" / "2026-03-30-015000-example-resume-handoff"
+    engagement_dir.mkdir(parents=True, exist_ok=True)
+    (workspace / "engagements" / ".active").write_text(
+        "engagements/2026-03-30-015000-example-resume-handoff\n",
+        encoding="utf-8",
+    )
+    (engagement_dir / "scope.json").write_text(
+        json.dumps(
+            {
+                "status": "in_progress",
+                "current_phase": "exploit",
+                "phases_completed": ["recon", "collect", "consume_test"],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    launched = []
+    started_threads: list[object] = []
+
+    class DummyThread:
+        def __init__(self, *, target, args=(), daemon=None):
+            self.target = target
+            self.args = args
+            started_threads.append(self)
+
+        def start(self):
+            return None
+
+    monkeypatch.setattr(
+        "app.services.launcher._launch_runtime_container",
+        lambda *args, **kwargs: launched.append("launched") or None,
+    )
+    monkeypatch.setattr("app.services.launcher.Thread", DummyThread)
+
+    with launcher._ACTIVE_CONTAINER_SUPERVISORS_LOCK:
+        launcher._ACTIVE_CONTAINER_SUPERVISORS.clear()
+
+    try:
+        assert launcher._start_container_supervisor(
+            latest,
+            project_model,
+            user_model,
+            log_follower=None,
+            log_handle=io.BytesIO(),
+        )
+        first_token = launcher._ACTIVE_CONTAINER_SUPERVISORS[latest.id]
+
+        assert launcher._maybe_auto_resume_run(
+            project_model,
+            latest,
+            user_model,
+            phase="exploit",
+            reason_code="runtime_disappeared",
+            reason_text="Runtime supervisor disappeared before the engagement reached a terminal state.",
+        )
+
+        second_token = launcher._ACTIVE_CONTAINER_SUPERVISORS[latest.id]
+        assert second_token is not first_token
+        assert launched == ["launched"]
+        assert len(started_threads) == 2
+    finally:
+        with launcher._ACTIVE_CONTAINER_SUPERVISORS_LOCK:
+            launcher._ACTIVE_CONTAINER_SUPERVISORS.clear()
+
+
+
 def test_auto_resume_requeues_orphaned_processing_cases_before_resume(monkeypatch):
     from app.services import launcher
 
