@@ -174,6 +174,7 @@ evaluate_local_benchmark_gate() {
   [[ -n "$metrics_json" ]] || return 0
   python3 - "$mapping_file" "$history_file" "$metrics_json" <<'PY'
 from pathlib import Path
+from statistics import median
 import json
 import sys
 
@@ -191,7 +192,15 @@ if history_path.exists():
         history = json.loads(history_path.read_text(encoding='utf-8'))
     except json.JSONDecodeError:
         history = {}
-previous = (((history.get('targets') or {}).get('http://127.0.0.1:8000') or {}).get('last_metrics') or {})
+
+target_state = ((history.get('targets') or {}).get('http://127.0.0.1:8000') or {})
+records = list(target_state.get('history') or [])
+if not records and target_state.get('last_metrics'):
+    records = [{
+        'updated_at': target_state.get('updated_at'),
+        'cycle_id': target_state.get('cycle_id'),
+        'metrics': target_state.get('last_metrics'),
+    }]
 
 reasons = []
 for field, metric_key in [
@@ -208,18 +217,34 @@ for field, metric_key in [
     if current < threshold:
         reasons.append(f"{metric_key}={current:.3f} < {threshold:.3f}")
 
+window = int(gate.get('trend_window', 5) or 5)
+min_points = int(gate.get('min_history_points', 3) or 3)
 max_regression = gate.get('max_regression') or {}
 for metric_key, allowed_drop in max_regression.items():
-    if metric_key not in metrics or metric_key not in previous:
+    values = []
+    for record in records[-window:]:
+        value = ((record or {}).get('metrics') or {}).get(metric_key)
+        if value in (None, ''):
+            continue
+        try:
+            values.append(float(value))
+        except ValueError:
+            continue
+    if metric_key not in metrics:
         continue
     try:
         current = float(metrics.get(metric_key, '0') or 0)
-        last = float(previous.get(metric_key, '0') or 0)
         allowed = float(allowed_drop)
     except ValueError:
         continue
-    if current < last - allowed:
-        reasons.append(f"{metric_key} regressed {last:.3f} -> {current:.3f} (allowed drop {allowed:.3f})")
+    if len(values) >= min_points:
+        baseline = median(values)
+        if current < baseline - allowed:
+            reasons.append(f"{metric_key} trended down vs rolling median {baseline:.3f} -> {current:.3f} (allowed drop {allowed:.3f}, window={min(len(values), window)})")
+    elif values:
+        baseline = values[-1]
+        if current < baseline - allowed:
+            reasons.append(f"{metric_key} regressed {baseline:.3f} -> {current:.3f} (allowed drop {allowed:.3f})")
 
 if reasons:
     print('; '.join(reasons))
@@ -248,10 +273,25 @@ if history_path.exists():
     except json.JSONDecodeError:
         history = {}
 payload = history.setdefault('targets', {})
-payload['http://127.0.0.1:8000'] = {
+current = payload.get('http://127.0.0.1:8000') or {}
+records = list(current.get('history') or [])
+if not records and current.get('last_metrics'):
+    records = [{
+        'updated_at': current.get('updated_at'),
+        'cycle_id': current.get('cycle_id'),
+        'metrics': current.get('last_metrics'),
+    }]
+records.append({
     'updated_at': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
     'cycle_id': cycle_id,
+    'metrics': metrics,
+})
+records = records[-10:]
+payload['http://127.0.0.1:8000'] = {
+    'updated_at': records[-1]['updated_at'],
+    'cycle_id': cycle_id,
     'last_metrics': metrics,
+    'history': records,
 }
 history_path.write_text(json.dumps(history, indent=2, ensure_ascii=False) + '\n', encoding='utf-8')
 PY

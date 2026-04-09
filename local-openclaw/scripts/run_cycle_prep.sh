@@ -140,6 +140,7 @@ append_benchmark_gate_snapshot() {
 
     python3 - "$context_file" "$mapping_file" "$history_file" >> "$prompt_file" <<'PY'
 from pathlib import Path
+from statistics import median
 import json
 import sys
 
@@ -171,7 +172,14 @@ if history_path.exists():
         history = json.loads(history_path.read_text(encoding='utf-8'))
     except json.JSONDecodeError:
         history = {}
-previous = (((history.get('targets') or {}).get('http://127.0.0.1:8000') or {}).get('last_metrics') or {})
+target_state = ((history.get('targets') or {}).get('http://127.0.0.1:8000') or {})
+records = list(target_state.get('history') or [])
+if not records and target_state.get('last_metrics'):
+    records = [{
+        'updated_at': target_state.get('updated_at'),
+        'cycle_id': target_state.get('cycle_id'),
+        'metrics': target_state.get('last_metrics'),
+    }]
 
 reasons = []
 for field, metric_key in [
@@ -184,14 +192,27 @@ for field, metric_key in [
     threshold = float(gate[field])
     if current < threshold:
         reasons.append(f"{metric_key}={current:.3f} < {threshold:.3f}")
+window = int(gate.get('trend_window', 5) or 5)
+min_points = int(gate.get('min_history_points', 3) or 3)
 for metric_key, allowed_drop in (gate.get('max_regression') or {}).items():
-    if metric_key not in metrics or metric_key not in previous:
+    if metric_key not in metrics:
         continue
     current = float(metrics.get(metric_key, '0') or 0)
-    last = float(previous.get(metric_key, '0') or 0)
     allowed = float(allowed_drop)
-    if current < last - allowed:
-        reasons.append(f"{metric_key} regressed {last:.3f} -> {current:.3f} (allowed drop {allowed:.3f})")
+    values = []
+    for record in records[-window:]:
+        value = ((record or {}).get('metrics') or {}).get(metric_key)
+        if value in (None, ''):
+            continue
+        values.append(float(value))
+    if len(values) >= min_points:
+        baseline = median(values)
+        if current < baseline - allowed:
+            reasons.append(f"{metric_key} trended down vs rolling median {baseline:.3f} -> {current:.3f} (allowed drop {allowed:.3f}, window={min(len(values), window)})")
+    elif values:
+        last = values[-1]
+        if current < last - allowed:
+            reasons.append(f"{metric_key} regressed {last:.3f} -> {current:.3f} (allowed drop {allowed:.3f})")
 
 print('\n## Runtime Benchmark Gate Snapshot\n')
 print('- Target: http://127.0.0.1:8000')
@@ -199,7 +220,7 @@ for key in ('precision', 'recall', 'f1', 'scenario_precision', 'scenario_recall'
     if key in metrics:
         print(f'- {key}: {metrics[key]}')
 if gate:
-    print(f"- Gate thresholds: min_scenario_precision={gate.get('min_scenario_precision', 'n/a')}, min_scenario_automation_actionable_recall={gate.get('min_scenario_automation_actionable_recall', 'n/a')}")
+    print(f"- Gate thresholds: min_scenario_precision={gate.get('min_scenario_precision', 'n/a')}, min_scenario_automation_actionable_recall={gate.get('min_scenario_automation_actionable_recall', 'n/a')}, trend_window={gate.get('trend_window', 'n/a')}, min_history_points={gate.get('min_history_points', 'n/a')}")
 if reasons:
     print('- Gate result: FAIL')
     print(f"- Gate reason: {'; '.join(reasons)}")
