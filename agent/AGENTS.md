@@ -110,9 +110,11 @@ PARALLEL: Independent tasks → parallel. Dependent → sequential.
    - after each dispatched subagent returns, immediately consume its `### Case Outcomes` and run the required `done` / `requeue` updates before the next fetch cycle
    - outcome-recording bash blocks may do `done` / `requeue` / stats updates, but MUST NOT also prefetch the next non-empty batch unless that SAME assistant turn will immediately launch the matching subagent task
    - do NOT hide the next non-empty fetch inside a "record outcomes" bash command and then leave the turn on commentary, a fresh `step_start`, or any other non-dispatch state; fetched cases may not sit in `processing` waiting for a later response
+   - NEVER combine outcome recording (`done`, `error`, `requeue`, `append_*`, queue stats, scope/findings/log updates) and `fetch_batch_to_file.sh` in the same bash/tool call. First record outcomes. Then do a dedicated fetch+dispatch step.
    - ALWAYS fetch via `./scripts/fetch_batch_to_file.sh "$DIR/cases.db" <type> <limit> <agent> "$BATCH_FILE"`; it writes the full JSON batch to disk and prints only compact `BATCH_*` metadata for the model
    - NEVER `cat "$BATCH_FILE"`, print raw fetched JSON, or paste full batch payloads back into the model context; dispatch from the saved file path instead
-   - immediately after a non-empty fetch, the SAME turn MUST launch the matching subagent task before any extra reads, summaries, todo updates, or stop checks
+   - immediately after a non-empty fetch, the SAME turn MUST launch the matching subagent task before any extra reads, summaries, todo updates, stop checks, or additional bash/tool calls
+   - if a tool result ends with `BATCH_COUNT > 0`, that assistant turn is not complete until the matching `task(...)` call has been issued; a fetch result alone never counts as progress
    - treat `fetch_batch_to_file.sh` + the matching subagent `task(...)` call as one atomic consume-test step; never stop after the fetch thinking the dispatch belongs to the next response
    Before leaving Test phase, run `./scripts/reconcile_surface_coverage.sh "$DIR" --ingest-followups` and then `./scripts/check_surface_coverage.sh "$DIR"`.
    `reconcile_surface_coverage.sh` auto-promotes already-validated surfaces to `covered`/`not_applicable` and can enqueue concrete follow-up cases for unresolved, requestable surfaces. If it adds follow-up cases, stay in consume-test and work that queue before checking coverage again.
