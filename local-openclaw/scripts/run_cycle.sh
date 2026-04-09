@@ -412,16 +412,31 @@ send_cycle_summary() {
     return 0
   fi
 
-  local fixed_issues local_benchmark_metrics local_benchmark_trend benchmark_summary_block
+  local fixed_issues local_benchmark_metrics local_benchmark_trend local_benchmark_gate_line local_benchmark_gate_eval benchmark_summary_block
   fixed_issues="$(extract_fixed_issues || true)"
   local_benchmark_metrics="$(extract_local_benchmark_metrics || true)"
   local_benchmark_trend="$(extract_local_benchmark_trend_summary || true)"
+  local_benchmark_gate_eval="$benchmark_gate_reason"
+  if [[ -z "$local_benchmark_gate_eval" ]]; then
+    local_benchmark_gate_eval="$(evaluate_local_benchmark_gate || true)"
+  fi
+  local_benchmark_gate_line=""
+  if [[ -n "$local_benchmark_metrics" || -n "$local_benchmark_trend" || -n "$local_benchmark_gate_eval" ]]; then
+    if [[ -n "$local_benchmark_gate_eval" ]]; then
+      local_benchmark_gate_line="Local benchmark gate: FAIL ($local_benchmark_gate_eval)"
+    else
+      local_benchmark_gate_line="Local benchmark gate: PASS"
+    fi
+  fi
   benchmark_summary_block=""
   if [[ -n "$local_benchmark_metrics" ]]; then
     benchmark_summary_block="$local_benchmark_metrics"$'\n'
   fi
   if [[ -n "$local_benchmark_trend" ]]; then
     benchmark_summary_block+="$local_benchmark_trend"$'\n'
+  fi
+  if [[ -n "$local_benchmark_gate_line" ]]; then
+    benchmark_summary_block+="$local_benchmark_gate_line"$'\n'
   fi
 
   local msg_file="$cycle_dir/summary-message.txt"
@@ -763,8 +778,8 @@ if [[ -n "$new_commit" ]]; then
   } >> "$report_path"
 fi
 
-update_local_benchmark_history || true
 send_cycle_summary
+update_local_benchmark_history || true
 log "cycle finished with status=$cycle_status report=$report_path"
 
 if [[ "$cycle_status" != "success" ]]; then
