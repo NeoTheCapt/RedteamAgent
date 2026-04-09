@@ -231,6 +231,52 @@ def split_path_query(path: str):
     return left, right
 
 
+def _placeholder_segment(segment: str) -> bool:
+    value = str(segment or "").strip()
+    if not value:
+        return False
+    if value == "...":
+        return True
+    if re.fullmatch(r"<[^>]+>", value):
+        return True
+    if re.fullmatch(r"\{[^}]+\}", value):
+        return True
+    if re.fullmatch(r"\{\{[^}]+\}\}", value):
+        return True
+    if re.fullmatch(r":[A-Za-z_][A-Za-z0-9_-]*", value):
+        return True
+    return False
+
+
+def materialize_request_path(path: str | None) -> str | None:
+    if path is None:
+        return None
+    clean_path, query = split_path_query(path)
+    clean_path = normalize_request_path(clean_path)
+
+    materialized_segments = []
+    for segment in clean_path.split("/"):
+        if _placeholder_segment(segment):
+            materialized_segments.append("1")
+        else:
+            materialized_segments.append(segment)
+    materialized_path = "/".join(materialized_segments)
+    if not materialized_path.startswith("/"):
+        materialized_path = "/" + materialized_path.lstrip("/")
+
+    if query:
+        query_pairs = []
+        for raw_pair in query.split("&"):
+            key, sep, value = raw_pair.partition("=")
+            replacement = value
+            if _placeholder_segment(value) or re.fullmatch(r"%3c[^/%\s]+%3e", value, re.IGNORECASE):
+                replacement = "1"
+            query_pairs.append(f"{key}={replacement}" if sep else key)
+        query = "&".join(query_pairs)
+
+    return f"{materialized_path}?{query}" if query else materialized_path
+
+
 def case_done(method: str, path: str, locale_scoped: bool = False) -> bool:
     for candidate in candidate_paths(path, locale_scoped=locale_scoped):
         clean_path, query = split_path_query(candidate)
@@ -311,14 +357,9 @@ def parse_target_request(target: str):
 
 
 def target_is_nonrequestable(target: str, path: str | None) -> bool:
-    value = normalize_target(target)
-    check = f"{value} {path or ''}".lower()
-    markers = [
-        "...",
-        "<",
-        ">",
-        "{",
-        "}",
+    value = normalize_target(target).lower()
+    path_value = str(path or "").lower()
+    structural_markers = [
         " -> ",
         " and ",
         " or ",
@@ -327,9 +368,18 @@ def target_is_nonrequestable(target: str, path: str | None) -> bool:
         "frontend routes ",
         "spa routes ",
     ]
-    if any(marker in check for marker in markers):
+    unresolved_path_markers = [
+        "...",
+        "<",
+        ">",
+        "{",
+        "}",
+    ]
+    if any(marker in value for marker in structural_markers):
         return True
-    if "*" in (path or "") or "*" in value:
+    if any(marker in path_value for marker in unresolved_path_markers):
+        return True
+    if "*" in path_value or "*" in value:
         return True
     return False
 
@@ -399,6 +449,8 @@ for row in rows:
         continue
 
     method, path, absolute_url, absolute_host, locale_scoped = parse_target_request(target)
+    if method and path:
+        path = materialize_request_path(path)
     decision = None
     reason = None
 
