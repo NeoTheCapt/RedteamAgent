@@ -1,0 +1,44 @@
+Use the workspace skill `scan-optimizer-loop`.
+
+Inputs to read before acting:
+
+- `/Users/cis/dev/projects/RedteamOpencode/local-openclaw/requirements/scan-optimizer-loop.md`
+- `/Users/cis/dev/projects/RedteamOpencode/local-openclaw/state/optimizer-state.json` if present
+- `/Users/cis/dev/projects/RedteamOpencode/local-openclaw/state/latest-context.md`
+
+Do one full unattended optimization cycle.
+
+Start by analyzing the latest fixed-target runs and their logs/artifacts before creating or deleting anything.
+
+If the current fixed-target runs are healthy and no confirmed actionable bug is found, skip this cycle and let them continue running.
+
+If a fixed-target run is terminal, abnormal, duplicated, or has been running longer than 15 minutes with confirmed buggy behavior, fix the repo bug first, then stop/delete the stale affected run(s) and their runtime/container, and create at most one fresh replacement run per affected target for verification.
+
+Do not create new runs if the latest fixed-target runs are still healthy and active. Keep observing healthy `queued` / `running` runs. When you need fresh verification runs after a fix, call `FORCE_REPLACE_ACTIVE_RUNS=1 /Users/cis/dev/projects/RedteamOpencode/local-openclaw/scripts/create_runs.sh` so stale active runs are replaced instead of reused.
+
+Requirements:
+
+- No questions.
+- No confirmation.
+- Fix every confirmed feasible issue discovered from the latest fixed-target runs.
+- Prioritize crawler correctness: inspect crawler output, `Observed path types`, source mix, explicit `katana` / `katana-xhr` usage signals, `cases.db`, `surfaces.jsonl`, and `katana_error.log` before declaring the run healthy.
+- Explicitly check whether `katana` and `katana-xhr` are contributing normally in `Observed path sources`, `cases.db` source counts, and `katana_output.jsonl`. If Katana output exists but neither source is landing, or if both are absent on a non-trivial run, treat that as a crawler-bug investigation trigger.
+- If a target benchmark evaluation is present in `latest-context.md`, explicitly assess the current run's finding quality using benchmark-driven precision / recall / F1 signals before declaring the automation healthy.
+- Treat recall / precision regressions in automated penetration findings as optimizer concerns, but improve them only through general detection, correlation, dedupe, execution, or reporting logic — never through target-specific hardcoded answers, challenge allowlists, or Juice-Shop-specific rules.
+- If `Observed path types` is too sparse, or most observed paths are not crawler-derived (`katana` / `katana-xhr`), treat that as a crawler-bug investigation trigger and dig deeper instead of skipping.
+- Run targeted verification for each fix.
+- Create exactly one local git commit for a bug-fix cycle.
+- If no confirmed actionable bug is found, make no code changes, create no new runs, and exit with the exact line `NO_ACTIONABLE_BUG_HEALTHY_RUNS`.
+- Do not push.
+- Keep all local loop artifacts under `local-openclaw/`.
+
+When the cycle is complete, print the final summary in English.
+
+Use this structure in English:
+
+1. the inspected run IDs
+2. the confirmed bugs fixed
+3. verification performed
+4. the local commit id
+
+Keep the section titles stable in English so the controller can reliably extract the fixed-issues section.

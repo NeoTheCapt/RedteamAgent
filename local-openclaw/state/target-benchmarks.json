@@ -1,0 +1,8 @@
+{
+  "targets": {
+    "http://127.0.0.1:8000": {
+      "benchmark": "../benchmarks/owasp-juice-shop-v19.md",
+      "label": "OWASP Juice Shop v19 benchmark"
+    }
+  }
+}
