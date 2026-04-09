@@ -5,7 +5,11 @@
       "label": "OWASP Juice Shop v19 benchmark",
       "healthy_skip_gate": {
         "min_scenario_precision": 0.30,
-        "min_scenario_automation_actionable_recall": 0.05
+        "min_scenario_automation_actionable_recall": 0.05,
+        "max_regression": {
+          "scenario_precision": 0.05,
+          "scenario_automation_actionable_recall": 0.02
+        }
       }
     }
   }

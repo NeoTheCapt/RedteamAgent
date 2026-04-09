@@ -133,7 +133,7 @@ for line in lines:
     if line.startswith('## Local Benchmark Evaluation'):
         inside = True
         continue
-    if inside and line.startswith('## '):
+    if inside and (line.startswith('## ') or line.startswith('#### ')):
         break
     if inside and line.startswith('- '):
         key, _, value = line[2:].partition(':')
@@ -167,21 +167,31 @@ PY
 
 evaluate_local_benchmark_gate() {
   local mapping_file="$STATE_DIR/target-benchmarks.json"
+  local history_file="$STATE_DIR/benchmark-metrics-history.json"
   local metrics_json
   [[ -f "$mapping_file" ]] || return 0
   metrics_json="$(extract_local_benchmark_metrics_json || true)"
   [[ -n "$metrics_json" ]] || return 0
-  python3 - "$mapping_file" "$metrics_json" <<'PY'
+  python3 - "$mapping_file" "$history_file" "$metrics_json" <<'PY'
 from pathlib import Path
 import json
 import sys
 
 mapping = json.loads(Path(sys.argv[1]).read_text(encoding='utf-8'))
-metrics = json.loads(sys.argv[2])
+history_path = Path(sys.argv[2])
+metrics = json.loads(sys.argv[3])
 entry = ((mapping.get('targets') or {}).get('http://127.0.0.1:8000') or {})
 gate = entry.get('healthy_skip_gate') or {}
 if not gate:
     raise SystemExit(0)
+
+history = {}
+if history_path.exists():
+    try:
+        history = json.loads(history_path.read_text(encoding='utf-8'))
+    except json.JSONDecodeError:
+        history = {}
+previous = (((history.get('targets') or {}).get('http://127.0.0.1:8000') or {}).get('last_metrics') or {})
 
 reasons = []
 for field, metric_key in [
@@ -198,9 +208,52 @@ for field, metric_key in [
     if current < threshold:
         reasons.append(f"{metric_key}={current:.3f} < {threshold:.3f}")
 
+max_regression = gate.get('max_regression') or {}
+for metric_key, allowed_drop in max_regression.items():
+    if metric_key not in metrics or metric_key not in previous:
+        continue
+    try:
+        current = float(metrics.get(metric_key, '0') or 0)
+        last = float(previous.get(metric_key, '0') or 0)
+        allowed = float(allowed_drop)
+    except ValueError:
+        continue
+    if current < last - allowed:
+        reasons.append(f"{metric_key} regressed {last:.3f} -> {current:.3f} (allowed drop {allowed:.3f})")
+
 if reasons:
     print('; '.join(reasons))
     raise SystemExit(1)
+PY
+}
+
+update_local_benchmark_history() {
+  local history_file="$STATE_DIR/benchmark-metrics-history.json"
+  local metrics_json
+  metrics_json="$(extract_local_benchmark_metrics_json || true)"
+  [[ -n "$metrics_json" ]] || return 0
+  python3 - "$history_file" "$metrics_json" "$cycle_id" <<'PY'
+from pathlib import Path
+import json
+import sys
+from datetime import datetime, timezone
+
+history_path = Path(sys.argv[1])
+metrics = json.loads(sys.argv[2])
+cycle_id = sys.argv[3]
+history = {}
+if history_path.exists():
+    try:
+        history = json.loads(history_path.read_text(encoding='utf-8'))
+    except json.JSONDecodeError:
+        history = {}
+payload = history.setdefault('targets', {})
+payload['http://127.0.0.1:8000'] = {
+    'updated_at': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+    'cycle_id': cycle_id,
+    'last_metrics': metrics,
+}
+history_path.write_text(json.dumps(history, indent=2, ensure_ascii=False) + '\n', encoding='utf-8')
 PY
 }
 
@@ -589,6 +642,7 @@ if [[ -n "$new_commit" ]]; then
   } >> "$report_path"
 fi
 
+update_local_benchmark_history || true
 send_cycle_summary
 log "cycle finished with status=$cycle_status report=$report_path"
 
