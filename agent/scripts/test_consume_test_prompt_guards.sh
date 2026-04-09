@@ -30,6 +30,14 @@ for file in "$OPERATOR_CORE" "$ENGAGE_CMD"; do
     echo "missing BATCH_COUNT completion guard in $file" >&2
     exit 1
   }
+  grep -Fq 'the very next advancing action MUST be the matching `task(...)` call for that same `BATCH_AGENT`/`BATCH_FILE`' "$file" || {
+    echo "missing immediate next-action dispatch contract in $file" >&2
+    exit 1
+  }
+  grep -Fq 'if you are not ready to launch the matching subagent immediately, do NOT fetch yet' "$file" || grep -Fq 'If you are not ready to launch the matching subagent immediately, do NOT fetch yet' "$file" || {
+    echo "missing do-not-fetch-until-ready guard in $file" >&2
+    exit 1
+  }
 done
 
 echo "PASS: consume-test prompt guards present in operator-core and /engage"
