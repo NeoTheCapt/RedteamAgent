@@ -550,7 +550,26 @@ def _reconcile_run_status(run: Run, project: Project | None = None, user: User |
 
         last_activity_at = _latest_runtime_activity_at(run)
         stale_processing_agents = _stale_processing_agents(_active_engagement_dir(run), active_runtime_agents)
-        if current_phase.replace("_", "-") not in EARLY_PHASE_STALL_PHASES and stale_processing_agents:
+        stale_processing_activity_at = last_activity_at
+        if workflow_activity_at is not None and (
+            stale_processing_activity_at is None or workflow_activity_at > stale_processing_activity_at
+        ):
+            stale_processing_activity_at = workflow_activity_at
+        if metadata_activity is not None and (
+            stale_processing_activity_at is None or metadata_activity > stale_processing_activity_at
+        ):
+            stale_processing_activity_at = metadata_activity
+        recent_processing_handoff = (
+            not active_runtime_agents
+            and stale_processing_activity_at is not None
+            and (_utc_now_naive() - stale_processing_activity_at)
+            < timedelta(seconds=PROCESSING_AGENT_MISMATCH_GRACE_SECONDS)
+        )
+        if (
+            current_phase.replace("_", "-") not in EARLY_PHASE_STALL_PHASES
+            and stale_processing_agents
+            and not recent_processing_handoff
+        ):
             assigned = ", ".join(sorted(stale_processing_agents))
             if active_runtime_agents:
                 active = ", ".join(sorted(active_runtime_agents))

@@ -1311,6 +1311,68 @@ def test_running_container_stall_reason_flags_stale_processing_subset_while_othe
 
 
 
+def test_running_container_stall_reason_allows_recent_processing_handoff_without_active_runtime_agent():
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "https://recent-processing-handoff.example")
+    db.update_run_status(run["id"], "running")
+
+    run_row = db.get_run_by_id(run["id"])
+    assert run_row is not None
+
+    run_root = Path(run["engagement_root"])
+    runtime_dir = run_root / "runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    process_log = runtime_dir / "process.log"
+    process_log.write_text("recent runtime activity\n", encoding="utf-8")
+
+    workspace = run_root / "workspace"
+    engagement_dir = workspace / "engagements" / "2026-04-09-140732-host-docker-internal"
+    engagement_dir.mkdir(parents=True, exist_ok=True)
+    (workspace / "engagements" / ".active").write_text(
+        "engagements/2026-04-09-140732-host-docker-internal\n",
+        encoding="utf-8",
+    )
+    scope_path = engagement_dir / "scope.json"
+    scope_path.write_text(
+        json.dumps(
+            {
+                "status": "in_progress",
+                "current_phase": "consume_test",
+                "phases_completed": ["recon", "collect"],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    log_path = engagement_dir / "log.md"
+    log_path.write_text("## [14:21] Analysis summary — vulnerability-analyst\n", encoding="utf-8")
+    with sqlite3.connect(engagement_dir / "cases.db") as connection:
+        connection.execute(
+            "CREATE TABLE cases (id INTEGER PRIMARY KEY AUTOINCREMENT, status TEXT NOT NULL, assigned_agent TEXT, consumed_at TEXT)"
+        )
+        connection.execute(
+            "INSERT INTO cases(id, status, assigned_agent, consumed_at) VALUES (10, 'processing', 'vulnerability-analyst', '2026-04-09 14:19:51')"
+        )
+        connection.commit()
+
+    (run_root / "run.json").write_text(json.dumps({"agents": []}) + "\n", encoding="utf-8")
+
+    import os
+
+    recent_epoch = datetime.now().timestamp() - 5
+    os.utime(process_log, (recent_epoch, recent_epoch))
+    os.utime(scope_path, (recent_epoch, recent_epoch))
+    os.utime(log_path, (recent_epoch, recent_epoch))
+    os.utime(engagement_dir / "cases.db", (recent_epoch, recent_epoch))
+
+    from app.services.launcher import _running_container_stall_reason
+
+    assert _running_container_stall_reason(run_row) is None
+
+
+
 def test_running_container_stall_reason_flags_undispatched_follow_on_fetch_even_with_recent_workflow_activity():
     client = TestClient(app)
     token = register_and_login(client, "alice")
