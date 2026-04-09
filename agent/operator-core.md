@@ -70,6 +70,7 @@ PARALLEL: Independent tasks → parallel. Dependent → sequential.
    - do NOT launch overlapping `task` calls inside the same consume-test pass, even when multiple fetched batch files are non-empty
    - never leave fetched cases in `processing` without a dispatched subagent task
    - after each dispatched subagent returns, immediately consume its `### Case Outcomes` and run the required `done` / `requeue` updates before the next fetch cycle
+   - if subagent output includes `REQUEUE_CANDIDATE` or clearly says an endpoint still has an untested higher-risk family, do NOT mark that case exhausted; requeue the same case (or a narrowed sibling follow-up) before the next fetch
    - outcome-recording bash blocks may do `done` / `requeue` / stats updates, but MUST NOT also prefetch the next non-empty batch unless that SAME assistant turn will immediately launch the matching subagent task
    - do NOT hide the next non-empty fetch inside a "record outcomes" bash command and then leave the turn on commentary, a fresh `step_start`, or any other non-dispatch state; fetched cases may not sit in `processing` waiting for a later response
    - NEVER combine outcome recording (`done`, `error`, `requeue`, `append_*`, queue stats, scope/findings/log updates) and `fetch_batch_to_file.sh` in the same bash/tool call. First record outcomes. Then do a dedicated fetch+dispatch step.
