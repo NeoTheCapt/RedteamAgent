@@ -469,21 +469,9 @@ for row in rows:
     elif target_is_nonrequestable(target, path):
         decision = "not_applicable"
         reason = "surface target is abstract or multi-step and cannot be exercised as one bounded request"
-    elif target == "POST /rest/user/login" and (validated_creds or finding_mentions("post /rest/user/login", "validated admin jwt", "hardcoded client-side test credentials allow authenticated admin access")):
-        decision = "covered"
-        reason = "login surface was validated during credential replay and admin JWT acquisition"
     elif method and path and case_done(method, path, locale_scoped=locale_scoped):
         decision = "covered"
         reason = "matching representative case already completed in the queue"
-    elif target == "GET /rest/user/security-question?email={email}" and case_done("GET", "/rest/user/security-question?email="):
-        decision = "covered"
-        reason = "security-question endpoint was already exercised as a bounded coverage check"
-    elif target == "GET /rest/admin/application-version" and finding_mentions("/rest/admin/application-version"):
-        decision = "covered"
-        reason = "admin application-version endpoint is already covered by recorded findings and completed API triage"
-    elif target == "GET /rest/repeat-notification" and (case_done("GET", "/rest/repeat-notification") or finding_mentions("/rest/repeat-notification")):
-        decision = "covered"
-        reason = "repeat-notification endpoint was already exercised during bounded API triage"
 
     if decision:
         updates.append({

@@ -1,26 +1,14 @@
-FROM debian:bookworm-slim AS katana-bin
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates curl unzip \
-    && rm -rf /var/lib/apt/lists/*
-
-ARG KATANA_VERSION=1.5.0
-ARG TARGETARCH
-RUN case "${TARGETARCH}" in \
-      amd64) KATANA_ARCH="amd64" ;; \
-      arm64) KATANA_ARCH="arm64" ;; \
-      *) echo "Unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
-    esac && \
-    curl -fsSL -o /tmp/katana.zip \
-      "https://github.com/projectdiscovery/katana/releases/download/v${KATANA_VERSION}/katana_${KATANA_VERSION}_linux_${KATANA_ARCH}.zip" && \
-    unzip -q /tmp/katana.zip -d /tmp/katana && \
-    install -m 0755 /tmp/katana/katana /usr/local/bin/katana
+FROM projectdiscovery/katana:latest AS katana-bin
 
 FROM kalilinux/kali-rolling:latest
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV REDTEAM_SKIP_PREREQ_CHECKS=1
 ENV REDTEAM_SKIP_DOCKER_IMAGE_CHECKS=1
+
+RUN printf 'Acquire::Retries "5";\nAcquire::http::Timeout "30";\nAcquire::https::Timeout "30";\n' > /etc/apt/apt.conf.d/99redteam-retries && \
+    rm -f /etc/apt/sources.list.d/kali.sources && \
+    printf 'deb http://http.kali.org/kali kali-rolling main contrib non-free non-free-firmware\n' > /etc/apt/sources.list
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     nodejs npm \
