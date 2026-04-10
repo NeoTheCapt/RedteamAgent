@@ -14,6 +14,14 @@ for file in "$VA_PROMPT" "$SA_PROMPT"; do
     echo "missing every-case accountability rule in $file" >&2
     exit 1
   }
+  grep -Fq 'After you emit `### Case Outcomes`, stop immediately and return that handoff to the operator.' "$file" || {
+    echo "missing immediate-return guard after case outcomes in $file" >&2
+    exit 1
+  }
+  grep -Fq 'Do not read more files' "$file" || {
+    echo "missing no-extra-work-after-outcomes guard in $file" >&2
+    exit 1
+  }
   grep -Fq 'DONE <id>' "$file" || {
     echo "missing DONE outcome format in $file" >&2
     exit 1

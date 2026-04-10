@@ -146,6 +146,9 @@ appear there exactly once using one of these forms:
 Do not omit any fetched case ID, do not list the same ID twice, and do not leave the section implied
 inside prose. Keep `### Case Outcomes` machine-readable so the operator can update queue state
 without reinterpretation.
+After you emit `### Case Outcomes`, stop immediately and return that handoff to the operator.
+Do not read more files, append more notes, launch more analysis steps, or continue iterating after
+the outcome section is written.
 
 === EXECUTION RULES ===
 
