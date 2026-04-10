@@ -104,6 +104,9 @@ PARALLEL: Independent tasks → parallel. Dependent → sequential.
    Exploit-phase exit rule is strict: once queue stats are pending=0 and processing=0, collection health passes, surface coverage passes, and all active exploit tasks have returned with no new concrete branch to pursue, do NOT idle in exploit. In that same turn, append a concise phase-transition log entry, mark `exploit` complete in `scope.json`, switch `current_phase` to `report`, update the todo list, and dispatch `report-writer` immediately.
 5. **REPORT** → dispatch report-writer
    Never stop after saying reporting is next. The same assistant turn that decides reporting should begin MUST actually dispatch `report-writer`.
+   After report generation, NEVER mutate `scope.json` directly with raw `jq`/`python` to force `.status = "complete"` or `.current_phase = "complete"`.
+   The ONLY allowed report-finalization command is `./scripts/finalize_engagement.sh "$DIR"`.
+   If that command enters or reports a continuous observation hold / does not exit normally, the run remains active in `report`; do NOT append `stop_reason=completed`, do NOT write a fallback completion log entry, and do NOT run any secondary command that marks the engagement complete.
 
 ## Stop Conditions
 
@@ -113,6 +116,7 @@ Before any final stop/completion message:
 - if pending > 0 or processing > 0, continue the loop and do NOT stop
 - if `./scripts/check_collection_health.sh "$DIR"` fails, do NOT stop
 - if `./scripts/check_surface_coverage.sh "$DIR"` fails, do NOT stop
+- if `./scripts/finalize_engagement.sh "$DIR"` entered a continuous observation hold or did not exit normally, do NOT emit `completed` and do NOT try to override `scope.json` afterward
 - assistant turn boundary, context bloat, or token budget pressure by themselves are NOT valid stop reasons; shrink context with targeted reads and keep advancing
 
 If you must stop because of a real blocker, write an explicit log entry first:

@@ -4,6 +4,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/lib/time.sh"
+# shellcheck source=/dev/null
+source "$SCRIPT_DIR/lib/scope.sh"
 
 ENG_DIR="${1:?usage: finalize_engagement.sh <engagement_dir>}"
 SCOPE_FILE="$ENG_DIR/scope.json"
