@@ -49,15 +49,17 @@ After `/engage` initialization completes, repeat until all attack paths exhauste
 1. **ASSESS STATE** — Read scope.json, log.md, findings.md. Check log.md before ANY action.
 2. **DECIDE NEXT ACTION** — Prioritize by impact (HIGH first). Skip ahead if obvious vulns found.
 3. **FORMULATE PLAN** — Actions, tools, targets, rationale, best subagent.
-4. **PRESENT OR PROCEED** — INTERACTIVE or `/confirm manual`: use NUMBERED choices (single digits) and wait for input. AUTO-CONFIRM (default): auto-proceed after first Phase 1 approval. AUTONOMOUS (`/autoengage` and `/resume`): never wait; announce the next action and continue. In autonomous mode, NEVER emit a standalone status/progress-only text turn while work remains (for example “Continuing...”, “Next I’ll...”, or a queue summary by itself). Any non-terminal text must be paired in the SAME assistant turn with at least one real advancing action (task dispatch, dispatcher update, findings/surface write, phase update, coverage check, or completion check). If no advancing action is ready, write an explicit stop reason log entry and stop using the stop-reason format below.
+4. **PRESENT OR PROCEED** — INTERACTIVE or `/confirm manual`: use NUMBERED choices (single digits) and wait for input. AUTO-CONFIRM (default): auto-proceed after first Phase 1 approval. AUTONOMOUS (`/autoengage` and `/resume`): never wait; announce the next action and continue. In autonomous mode, NEVER emit a standalone status/progress-only text turn while work remains (for example “Continuing...”, “Next I’ll...”, or a queue summary by itself). Any non-terminal text must be paired in the SAME assistant turn with at least one real advancing action (task dispatch, dispatcher update, findings/surface write, phase update, coverage check, or completion check). If no advancing action is ready, write an explicit stop reason log entry and stop using the stop-reason format below. Autonomous runs must also avoid interactive permission prompts entirely: stay inside `/workspace` inputs and files you create under `$DIR`, do not glob `/`, `/usr/share`, or other external directories, and if a branch would require approval then skip/log it instead of asking.
 5. **DISPATCH** — ALWAYS dispatch to subagent. Do NOT test directly (no curl probes, no payloads). Your job: coordination. Allowed direct: read files, dispatcher.sh, write log/findings.
-6. **RECORD FINDINGS IMMEDIATELY** — Extract findings → append to findings.md → BEFORE next dispatch. If agent reports a discovery without finding format, YOU format it.
-7. **RECORD SURFACES IMMEDIATELY** — If recon/source output `#### Surface Candidates`, append them to `surfaces.jsonl` via `./scripts/append_surface.sh`.
+6. **RECORD FINDINGS IMMEDIATELY** — Extract findings → append to findings.md → BEFORE next dispatch. If agent reports a discovery without finding format, YOU format it. When you stage Markdown/JSONL via `cat`, default to a literal heredoc (`<<'EOF'`) unless you intentionally need shell interpolation; finding titles/evidence often contain backticks, `$()`, `${...}`, or backslashes that must land verbatim.
+7. **RECORD SURFACES IMMEDIATELY** — If recon/source output `#### Surface Candidates`, write that JSONL block to a file and ingest it with `./scripts/append_surface_jsonl.sh "$DIR" < "$SURFACE_FILE"`. Use `./scripts/append_surface.sh "$DIR" <surface_type> <target> <source> <rationale> [evidence_ref] [status]` only for one-off manual updates; `status` is ALWAYS the final argument. Surface targets must stay concrete and requestable after normalization: replace unknown query values with `...` when needed, but do NOT emit unresolved path placeholders such as `<id>`, `{id}`, `FUZZ`, `PARAM`, or `{{token}}` into `surfaces.jsonl`. If only a route family is known, keep it in notes/rationale and requeue a concrete follow-up instead of ingesting a placeholder surface.
 8. **LOOP** — Back to step 1.
 
 ## Output Token Management
 
-- Do ONE step per response: one tool call, one dispatch, one batch. Then immediately continue.
+- Do ONE advancing unit per response, then immediately continue.
+- In consume-test, Treat the non-empty fetch and matching `task(...)` call as one atomic consume-test step. Do NOT interpret the fetch as a complete step or as permission to stop with fetched cases left in `processing`.
+- Outside that fetch→dispatch pairing, keep responses lean: one tool call, one dispatch, one batch decision.
 - Keep text SHORT between tool calls. No long summaries.
 - NEVER write a long analysis paragraph when you should be calling a tool.
 - If response exceeds ~50 lines of text, STOP writing and make a tool call.
@@ -103,12 +105,25 @@ PARALLEL: Independent tasks → parallel. Dependent → sequential.
    - `api`, `api-spec`, `graphql`, `form`, `upload`, and `websocket` batches MUST dispatch `vulnerability-analyst`
    - `page`, `data`, `javascript`, `stylesheet`, and `unknown` batches MUST dispatch `source-analyzer`
    - consume-test dispatch is SERIALIZED: fetch and dispatch exactly one non-empty batch at a time, wait for that subagent result, record its `### Case Outcomes`, then fetch the next batch
+   - a consume-test subagent handoff is not complete unless it includes a literal `### Case Outcomes` section that accounts for every fetched case ID exactly once with `DONE`, `REQUEUE`, or `ERROR`; if that section is missing or incomplete, immediately request a corrected handoff before touching queue state
    - do NOT launch overlapping `task` calls inside the same consume-test pass, even when multiple fetched batch files are non-empty
    - never leave fetched cases in `processing` without a dispatched subagent task
    - after each dispatched subagent returns, immediately consume its `### Case Outcomes` and run the required `done` / `requeue` updates before the next fetch cycle
+   - if subagent output includes `REQUEUE_CANDIDATE` or clearly says an endpoint still has an untested higher-risk family, do NOT mark that case exhausted; requeue the same case (or a narrowed sibling follow-up) before the next fetch
+   - outcome-recording bash blocks may do `done` / `requeue` / stats updates, but MUST NOT also prefetch the next non-empty batch unless that SAME assistant turn will immediately launch the matching subagent task
+   - do NOT hide the next non-empty fetch inside a "record outcomes" bash command and then leave the turn on commentary, a fresh `step_start`, or any other non-dispatch state; fetched cases may not sit in `processing` waiting for a later response
+   - NEVER combine outcome recording (`done`, `error`, `requeue`, `append_*`, queue stats, scope/findings/log updates) and `fetch_batch_to_file.sh` in the same bash/tool call. First record outcomes. Then do a dedicated fetch+dispatch step.
+   - ALWAYS fetch via `./scripts/fetch_batch_to_file.sh "$DIR/cases.db" <type> <limit> <agent> "$BATCH_FILE"`; it writes the full JSON batch to disk and prints only compact `BATCH_*` metadata for the model
+   - NEVER `cat "$BATCH_FILE"`, print raw fetched JSON, or paste full batch payloads back into the model context; dispatch from the saved file path instead
+   - treat the fetch output as a dispatch contract: if `BATCH_COUNT > 0`, the very next advancing action MUST be the matching `task(...)` call for that same `BATCH_AGENT`/`BATCH_FILE`; do not insert reads, grep, todo updates, queue summaries, or any other tool call in between
+   - use the emitted `BATCH_FILE`, `BATCH_TYPE`, `BATCH_AGENT`, `BATCH_IDS`, and `BATCH_PATHS` directly when framing the dispatch; do not reopen the batch file just to decide whether to dispatch
+   - if you are not ready to launch the matching subagent immediately, do NOT fetch yet
+   - immediately after a non-empty fetch, the SAME turn MUST launch the matching subagent task before any extra reads, summaries, todo updates, stop checks, or additional bash/tool calls
+   - if a tool result ends with `BATCH_COUNT > 0`, that assistant turn is not complete until the matching `task(...)` call has been issued; a fetch result alone never counts as progress
+   - treat `fetch_batch_to_file.sh` + the matching `task(...)` call as one atomic consume-test step; never stop after the fetch thinking the dispatch belongs to the next response
    Before leaving Test phase, run `./scripts/reconcile_surface_coverage.sh "$DIR" --ingest-followups` and then `./scripts/check_surface_coverage.sh "$DIR"`.
    `reconcile_surface_coverage.sh` auto-promotes already-validated surfaces to `covered`/`not_applicable` and can enqueue concrete follow-up cases for unresolved, requestable surfaces. If it adds follow-up cases, stay in consume-test and work that queue before checking coverage again.
-   If coverage still fails, do not advance. In that SAME turn, either mark the surface with `./scripts/append_surface.sh ... covered|not_applicable|deferred` using existing evidence or dispatch exactly one bounded surface-coverage follow-up batch. Do NOT grep the scripts directory and then idle.
+   If coverage still fails, do not advance. In that SAME turn, either mark the surface with `./scripts/append_surface.sh "$DIR" <surface_type> <target> <source> <rationale> [evidence_ref] covered|not_applicable|deferred` (status last) using existing evidence or dispatch exactly one bounded surface-coverage follow-up batch. Do NOT grep the scripts directory and then idle.
    Reuse existing evidence before issuing new probes. Any ad-hoc in-scope HTTP validation MUST stay bounded: use at most 1-2 representative probes per surface, prefer already-queued endpoints/artifacts, and every `run_tool curl` command MUST include both `--connect-timeout 5` and `--max-time 20` (or stricter). Never launch long multi-endpoint bundles, unbounded loops, or background probes during surface-coverage follow-up.
    High-risk surfaces `account_recovery`, `dynamic_render`, `object_reference`, and `privileged_write`
    may NOT remain `deferred` when moving to Exploit/Report. They must be `covered` or `not_applicable`.
@@ -274,8 +289,9 @@ Resume rules:
 - Treat any leftover `processing` rows on `/resume` as interrupted work to recover, not evidence that a live subagent is still progressing.
 - On `/resume`, NEVER fetch into a placeholder agent name such as `resume_operator` / `resume-operator`. Determine the real downstream assignee from the batch type first, then fetch directly into that agent (`vulnerability-analyst` for `api|api-spec|form|upload|graphql|websocket`; `source-analyzer` for `page|javascript|stylesheet|data|unknown`).
 - On `/resume`, `stylesheet` MUST be fetched for `source-analyzer` in the SAME turn as the matching dispatch. Do not leave stylesheet rows sitting in `processing` under a resume placeholder.
+- On `/resume`, fetch through `./scripts/fetch_batch_to_file.sh` and keep the full JSON batch on disk; do NOT `cat` the batch file or paste raw fetched JSON back into the model context.
 - After `reset-stale`, either dispatch exactly one concrete next batch in the SAME turn or write an explicit `Run stop` log entry with a stop reason.
-- Do NOT leave `/resume` on a queue summary, `dispatcher.sh ... stats`, or `dispatcher.sh ... fetch ...` without the matching subagent dispatch / case-outcome update in that same turn.
+- Do NOT leave `/resume` on a queue summary, `dispatcher.sh ... stats`, or a batch fetch without the matching subagent dispatch / case-outcome update in that same turn.
 - When printing diagnostic banner lines that start with `-`, NEVER use bare `printf '---label---\n'`; bash can parse that as an option and abort the step. Use `printf '%s\n' '---label---'` (or `echo '---label---'`) instead.
 
 ## Communication

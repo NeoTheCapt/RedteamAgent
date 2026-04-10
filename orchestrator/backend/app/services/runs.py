@@ -23,6 +23,7 @@ from .launcher import (
     _last_logged_stop_metadata,
     _latest_process_log_activity_at,
     _latest_undispatched_batch_fetch,
+    _latest_unresolved_permission_request_at,
     _maybe_auto_resume_run,
     _start_container_supervisor,
     _write_run_terminal_reason,
@@ -39,6 +40,7 @@ from .launcher import (
     _active_runtime_metadata_agents,
     _latest_runtime_metadata_activity_at,
     _run_metadata_has_current_task,
+    _stale_processing_agents,
 )
 
 ALLOWED_STATUSES = {"queued", "running", "completed", "failed"}
@@ -50,6 +52,7 @@ RUN_STARTUP_GRACE_SECONDS = 90
 RUN_STALL_TIMEOUT_SECONDS = 900
 PROCESSING_AGENT_MISMATCH_GRACE_SECONDS = 120
 PENDING_QUEUE_DISPATCH_GRACE_SECONDS = 120
+PERMISSION_REQUEST_GRACE_SECONDS = 60
 # Real targets can spend several minutes in autonomous initialization/recon before the
 # first queue item or observed path lands. Keep the early watchdog long enough to avoid
 # killing active slow-start recon just as the first subagent/task dispatch begins.
@@ -360,6 +363,22 @@ def _sync_run_updated_at_from_activity(run: Run, *candidates: datetime | None) -
     return db.set_run_updated_at(run.id, _format_db_timestamp(latest_candidate))
 
 
+def _reattach_live_runtime_supervisor(
+    run: Run,
+    *,
+    project: Project | None,
+    user: User | None,
+    runtime_pid: int | None,
+) -> None:
+    if project is None or user is None:
+        return
+    if run.status != "running":
+        return
+    if runtime_pid in {None, RUNTIME_PID_LOOKUP_UNAVAILABLE}:
+        return
+    _start_container_supervisor(run, project, user)
+
+
 def _reconcile_run_status(run: Run, project: Project | None = None, user: User | None = None) -> Run:
     normalize_active_scope(run)
     pid = locate_runtime_pid(run)
@@ -429,10 +448,33 @@ def _reconcile_run_status(run: Run, project: Project | None = None, user: User |
 
         active_runtime_agents = _active_runtime_agents(run)
         processing_agents = _load_processing_agents(scope_path)
+        opencode_logs_root = opencode_home_root_for(run) / "log"
+        permission_log_paths = [process_log_path_for(run)]
+        if opencode_logs_root.exists():
+            permission_log_paths.extend(sorted(opencode_logs_root.glob("*.log")))
+        latest_permission_request_at = _latest_unresolved_permission_request_at(*permission_log_paths)
         orphaned_fetch = _latest_undispatched_batch_fetch(
             process_log_path_for(run),
-            opencode_logs_root=opencode_home_root_for(run) / "log",
+            opencode_logs_root=opencode_logs_root,
         )
+        if (
+            current_phase.replace("_", "-") not in EARLY_PHASE_STALL_PHASES
+            and latest_permission_request_at is not None
+            and (_utc_now_naive() - _utc_datetime_from_timestamp(latest_permission_request_at))
+            >= timedelta(seconds=PERMISSION_REQUEST_GRACE_SECONDS)
+        ):
+            failed = db.update_run_status(run.id, "failed")
+            _write_run_terminal_reason(
+                failed,
+                reason_code="queue_stalled",
+                reason_text=(
+                    "Autonomous runtime requested interactive permission approval and never resolved it; "
+                    "unattended runs must stay within workspace-local inputs or fail fast instead of waiting forever."
+                ),
+            )
+            stop_run_runtime(failed)
+            return failed
+
         if (
             current_phase.replace("_", "-") not in EARLY_PHASE_STALL_PHASES
             and pending_cases > 0
@@ -507,6 +549,48 @@ def _reconcile_run_status(run: Run, project: Project | None = None, user: User |
             return failed
 
         last_activity_at = _latest_runtime_activity_at(run)
+        stale_processing_agents = _stale_processing_agents(_active_engagement_dir(run), active_runtime_agents)
+        stale_processing_activity_at = last_activity_at
+        if workflow_activity_at is not None and (
+            stale_processing_activity_at is None or workflow_activity_at > stale_processing_activity_at
+        ):
+            stale_processing_activity_at = workflow_activity_at
+        if metadata_activity is not None and (
+            stale_processing_activity_at is None or metadata_activity > stale_processing_activity_at
+        ):
+            stale_processing_activity_at = metadata_activity
+        recent_processing_handoff = (
+            not active_runtime_agents
+            and stale_processing_activity_at is not None
+            and (_utc_now_naive() - stale_processing_activity_at)
+            < timedelta(seconds=PROCESSING_AGENT_MISMATCH_GRACE_SECONDS)
+        )
+        if (
+            current_phase.replace("_", "-") not in EARLY_PHASE_STALL_PHASES
+            and stale_processing_agents
+            and not recent_processing_handoff
+        ):
+            assigned = ", ".join(sorted(stale_processing_agents))
+            if active_runtime_agents:
+                active = ", ".join(sorted(active_runtime_agents))
+                reason_text = (
+                    f"Processing queue assignments ({assigned}) had no matching active runtime agent "
+                    f"after stall grace period elapsed (active agents: {active})."
+                )
+            else:
+                reason_text = (
+                    f"Processing queue assignments ({assigned}) had no matching active runtime agent "
+                    "after stall grace period elapsed."
+                )
+            failed = db.update_run_status(run.id, "failed")
+            _write_run_terminal_reason(
+                failed,
+                reason_code="queue_stalled",
+                reason_text=reason_text,
+            )
+            stop_run_runtime(failed)
+            return failed
+
         mismatch_activity_at = last_activity_at
         if workflow_activity_at is not None and (
             mismatch_activity_at is None or workflow_activity_at > mismatch_activity_at
@@ -577,12 +661,14 @@ def _reconcile_run_status(run: Run, project: Project | None = None, user: User |
         if run.status != "running":
             refreshed = db.update_run_status(run.id, "running")
             _clear_run_terminal_reason(refreshed)
+            _reattach_live_runtime_supervisor(refreshed, project=project, user=user, runtime_pid=pid)
             if project is not None and user is not None:
                 from .run_summary import refresh_run_metadata_projection
 
                 refresh_run_metadata_projection(refreshed, project, user)
             return refreshed
         _clear_run_terminal_reason(run)
+        _reattach_live_runtime_supervisor(run, project=project, user=user, runtime_pid=pid)
         if project is not None and user is not None:
             from .run_summary import refresh_run_metadata_projection
 
@@ -655,10 +741,7 @@ def recover_active_run_supervisors_on_startup() -> None:
             continue
 
         runtime_pid = locate_runtime_pid(reconciled)
-        if runtime_pid in {None, RUNTIME_PID_LOOKUP_UNAVAILABLE}:
-            continue
-
-        _start_container_supervisor(reconciled, project, user)
+        _reattach_live_runtime_supervisor(reconciled, project=project, user=user, runtime_pid=runtime_pid)
 
 
 def list_runs_for_project(project_id: int, user: User) -> list[Run]:

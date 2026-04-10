@@ -36,6 +36,18 @@ crawler_health_report() {
     "$ROOT_DIR/scripts/crawler_health_report.sh" "$run_id" "$label"
 }
 
+benchmark_findings_report() {
+    local snapshot_json="$1"
+    local label="$2"
+    local mapping_file="$STATE_DIR/target-benchmarks.json"
+    [[ -f "$mapping_file" ]] || return 0
+    printf '%s\n' "$snapshot_json" | python3 "$ROOT_DIR/scripts/findings_benchmark_eval.py" \
+        --mapping "$mapping_file" \
+        --root-dir "$ROOT_DIR" \
+        --openclaw-bin "${OPENCLAW_BIN:-openclaw}" \
+        --label "$label"
+}
+
 okx_id="$(jq -r '[ .[] | select(.target=="https://www.okx.com") ] | last.id // empty' "$latest_runs_json")"
 local_id="$(jq -r '[ .[] | select(.target=="http://127.0.0.1:8000") ] | last.id // empty' "$latest_runs_json")"
 fixed_target_state_json="$(jq \
@@ -104,6 +116,10 @@ fixed_target_state_json="$(jq \
         echo
         crawler_health_report "$okx_id" "OKX"
         echo
+        echo "## OKX Benchmark Evaluation"
+        echo
+        benchmark_findings_report "$okx_snapshot" "OKX Benchmark Evaluation"
+        echo
     fi
     if [[ -n "$local_id" ]]; then
         local_snapshot="$(run_context_snapshot "$local_id")"
@@ -124,6 +140,10 @@ fixed_target_state_json="$(jq \
         orchestrator_events "$local_id" | jq '.'
         echo
         crawler_health_report "$local_id" "Local"
+        echo
+        echo "## Local Benchmark Evaluation"
+        echo
+        benchmark_findings_report "$local_snapshot" "Local Benchmark Evaluation"
         echo
     fi
 } > "$latest_context_md"

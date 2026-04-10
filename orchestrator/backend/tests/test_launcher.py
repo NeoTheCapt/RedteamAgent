@@ -1,6 +1,6 @@
 import io
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 import subprocess
@@ -471,6 +471,81 @@ def test_normalize_scope_file_deduplicates_completed_phases_in_order():
 
 
 
+def test_supervise_container_refreshes_live_run_metadata_projection_on_heartbeat(monkeypatch):
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "https://projection.example")
+    db.update_run_status(run["id"], "running")
+
+    run_root = Path(run["engagement_root"])
+    workspace = run_root / "workspace"
+    engagement_dir = workspace / "engagements" / "2026-03-30-000003-projection"
+    engagement_dir.mkdir(parents=True, exist_ok=True)
+    (workspace / "engagements" / ".active").write_text(
+        "engagements/2026-03-30-000003-projection\n",
+        encoding="utf-8",
+    )
+    (engagement_dir / "scope.json").write_text(
+        json.dumps(
+            {
+                "status": "in_progress",
+                "current_phase": "consume_test",
+                "phases_completed": ["recon", "collect"],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (engagement_dir / "log.md").write_text("## [14:03] Source analysis summary — source-analyzer\n", encoding="utf-8")
+    with sqlite3.connect(engagement_dir / "cases.db") as connection:
+        connection.execute(
+            "CREATE TABLE cases (id INTEGER PRIMARY KEY AUTOINCREMENT, status TEXT NOT NULL, assigned_agent TEXT)"
+        )
+        connection.executemany(
+            "INSERT INTO cases(status, assigned_agent) VALUES (?, ?)",
+            [("pending", None), ("processing", "source-analyzer")],
+        )
+        connection.commit()
+
+    stale_timestamp = "2026-03-25 00:00:00"
+    db.set_run_updated_at(run["id"], stale_timestamp)
+
+    project_model = db.get_project_by_id(project["id"])
+    user_model = db.get_user_by_token(token, datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S"))
+    run_model = db.get_run_by_id(run["id"])
+    assert project_model is not None
+    assert user_model is not None
+    assert run_model is not None
+
+    monkeypatch.setattr("app.services.launcher._container_status", lambda _name: "running")
+    monkeypatch.setattr("app.services.launcher._ensure_runtime_log_follower", lambda *args, **kwargs: None)
+    monkeypatch.setattr("app.services.launcher._running_container_stall_reason", lambda _run: None)
+
+    def stop_after_first_heartbeat(_seconds):
+        raise RuntimeError("stop-after-heartbeat")
+
+    monkeypatch.setattr("app.services.launcher.time.sleep", stop_after_first_heartbeat)
+
+    from app.services.launcher import _supervise_container
+
+    try:
+        _supervise_container(run_model, project_model, user_model, "container-123", None, io.BytesIO())
+        raise AssertionError("expected heartbeat loop to stop test execution")
+    except RuntimeError as exc:
+        assert str(exc) == "stop-after-heartbeat"
+
+    refreshed = db.get_run_by_id(run["id"])
+    assert refreshed is not None
+    assert refreshed.updated_at != stale_timestamp
+
+    metadata = json.loads((run_root / "run.json").read_text(encoding="utf-8"))
+    assert metadata["updated_at"] == refreshed.updated_at
+    assert metadata["current_phase"] == "consume-test"
+    assert metadata["current_action"]["summary"] == "Processing 1 queued case(s)"
+
+
+
 def test_supervise_container_stops_live_stalled_runtime(monkeypatch):
     client = TestClient(app)
     token = register_and_login(client, "alice")
@@ -543,6 +618,54 @@ def test_supervise_container_stops_live_stalled_runtime(monkeypatch):
     metadata = json.loads((run_root / "run.json").read_text(encoding="utf-8"))
     assert metadata["stop_reason_code"] == "queue_stalled"
     assert metadata["stop_reason_text"] == "Runtime produced no new output before stall timeout elapsed."
+
+
+def test_start_container_supervisor_ignores_deleted_run_terminal_races(monkeypatch):
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "https://deleted-race.example")
+    db.update_run_status(run["id"], "running")
+
+    run_row = db.get_run_by_id(run["id"])
+    assert run_row is not None
+    project_row = db.get_project_by_id(project["id"])
+    assert project_row is not None
+    user_row = db.get_user_by_id(project_row.user_id)
+    assert user_row is not None
+
+    class InlineThread:
+        def __init__(self, *, target, args=(), daemon=None):
+            self._target = target
+            self._args = args
+            self.daemon = daemon
+
+        def start(self):
+            self._target(*self._args)
+
+    monkeypatch.setattr("app.services.launcher.Thread", InlineThread)
+
+    def deleted_run_race(*args, **kwargs):
+        db.delete_run(run_row.id)
+        raise AssertionError("run disappeared before terminal status update")
+
+    monkeypatch.setattr("app.services.launcher._supervise_container", deleted_run_race)
+
+    from app.services import launcher
+
+    with launcher._ACTIVE_CONTAINER_SUPERVISORS_LOCK:
+        launcher._ACTIVE_CONTAINER_SUPERVISORS.clear()
+
+    assert launcher._start_container_supervisor(
+        run_row,
+        project_row,
+        user_row,
+        log_handle=io.BytesIO(),
+    )
+
+    assert db.get_run_by_id(run_row.id) is None
+    with launcher._ACTIVE_CONTAINER_SUPERVISORS_LOCK:
+        assert run_row.id not in launcher._ACTIVE_CONTAINER_SUPERVISORS
 
 
 def test_running_container_stall_reason_keeps_early_collect_alive_when_rw_cases_db_is_locked_but_readonly_fallback_succeeds(monkeypatch):
@@ -847,7 +970,7 @@ def test_running_container_stall_reason_keeps_processing_case_alive_when_active_
 
 
 
-def test_running_container_stall_reason_treats_open_subagent_session_logs_as_active_runtime_agents():
+def test_running_container_stall_reason_treats_recent_open_subagent_session_logs_as_active_runtime_agents():
     client = TestClient(app)
     token = register_and_login(client, "alice")
     project = create_project(client, token)
@@ -896,9 +1019,11 @@ def test_running_container_stall_reason_treats_open_subagent_session_logs_as_act
     log_dir = run_root / "opencode-home" / "log"
     log_dir.mkdir(parents=True, exist_ok=True)
     opencode_log = log_dir / "2026-03-31T000000.log"
+    recent_created_at = datetime.now(tz=UTC).replace(microsecond=0)
+    recent_stream_at = recent_created_at + timedelta(seconds=1)
     opencode_log.write_text(
-        "INFO 2026-03-31T00:00:00 service=session id=ses_testsubagent parentID=ses_parent cwd=/tmp title=Analyze API batch (@vulnerability-analyst subagent) permissionProfile=default model=openai/gpt-5.4 created\n"
-        "INFO 2026-03-31T00:00:01 service=llm sessionID=ses_testsubagent agent=vulnerability-analyst mode=subagent stream\n",
+        f"INFO {recent_created_at.strftime('%Y-%m-%dT%H:%M:%S')} service=session id=ses_testsubagent parentID=ses_parent cwd=/tmp title=Analyze API batch (@vulnerability-analyst subagent) permissionProfile=default model=openai/gpt-5.4 created\n"
+        f"INFO {recent_stream_at.strftime('%Y-%m-%dT%H:%M:%S')} service=llm sessionID=ses_testsubagent agent=vulnerability-analyst mode=subagent stream\n",
         encoding="utf-8",
     )
 
@@ -913,6 +1038,162 @@ def test_running_container_stall_reason_treats_open_subagent_session_logs_as_act
     from app.services.launcher import _running_container_stall_reason
 
     assert _running_container_stall_reason(run_row) is None
+
+
+
+def test_running_container_stall_reason_ignores_stale_open_subagent_session_logs_after_runtime_timeout():
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "https://opencode-subagent-stale.example")
+    db.update_run_status(run["id"], "running")
+
+    run_row = db.get_run_by_id(run["id"])
+    assert run_row is not None
+
+    run_root = Path(run["engagement_root"])
+    runtime_dir = run_root / "runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    process_log = runtime_dir / "process.log"
+    process_log.write_text("stale processing assignment waiting on subagent\n", encoding="utf-8")
+
+    workspace = run_root / "workspace"
+    engagement_dir = workspace / "engagements" / "2026-03-31-000000-opencode-subagent-stale"
+    engagement_dir.mkdir(parents=True, exist_ok=True)
+    (workspace / "engagements" / ".active").write_text(
+        "engagements/2026-03-31-000000-opencode-subagent-stale\n",
+        encoding="utf-8",
+    )
+    scope_path = engagement_dir / "scope.json"
+    scope_path.write_text(
+        json.dumps(
+            {
+                "status": "in_progress",
+                "current_phase": "consume_test",
+                "phases_completed": ["recon", "collect"],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    with sqlite3.connect(engagement_dir / "cases.db") as connection:
+        connection.execute(
+            "CREATE TABLE cases (id INTEGER PRIMARY KEY AUTOINCREMENT, status TEXT NOT NULL, assigned_agent TEXT)"
+        )
+        connection.execute(
+            "INSERT INTO cases(status, assigned_agent) VALUES ('processing', 'vulnerability-analyst')"
+        )
+        connection.commit()
+
+    (run_root / "run.json").write_text(json.dumps({"agents": []}) + "\n", encoding="utf-8")
+
+    log_dir = run_root / "opencode-home" / "log"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    opencode_log = log_dir / "2026-03-31T000000.log"
+    stale_created_at = datetime.now(tz=UTC).replace(microsecond=0) - timedelta(seconds=1000)
+    stale_stream_at = stale_created_at + timedelta(seconds=1)
+    opencode_log.write_text(
+        f"INFO {stale_created_at.strftime('%Y-%m-%dT%H:%M:%S')} service=session id=ses_testsubagent parentID=ses_parent cwd=/tmp title=Analyze API batch (@vulnerability-analyst subagent) permissionProfile=default model=openai/gpt-5.4 created\n"
+        f"INFO {stale_stream_at.strftime('%Y-%m-%dT%H:%M:%S')} service=llm sessionID=ses_testsubagent agent=vulnerability-analyst mode=subagent stream\n",
+        encoding="utf-8",
+    )
+
+    import os
+
+    stale_runtime_epoch = datetime.now().timestamp() - 130
+    os.utime(process_log, (stale_runtime_epoch, stale_runtime_epoch))
+    os.utime(scope_path, (stale_runtime_epoch, stale_runtime_epoch))
+    os.utime(engagement_dir / "cases.db", (stale_runtime_epoch, stale_runtime_epoch))
+    os.utime(opencode_log, (stale_runtime_epoch, stale_runtime_epoch))
+
+    from app.services.launcher import _running_container_stall_reason
+
+    assert _running_container_stall_reason(run_row) == (
+        "consume_test",
+        "queue_stalled",
+        "Processing queue assignments (vulnerability-analyst) had no matching active runtime agent after stall grace period elapsed.",
+    )
+
+
+
+def test_running_container_stall_reason_flags_unresolved_permission_prompt_in_autonomous_runtime():
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "https://permission-stall.example")
+    db.update_run_status(run["id"], "running")
+
+    run_row = db.get_run_by_id(run["id"])
+    assert run_row is not None
+
+    run_root = Path(run["engagement_root"])
+    runtime_dir = run_root / "runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    (runtime_dir / "process.log").write_text("permission prompt pending\n", encoding="utf-8")
+
+    workspace = run_root / "workspace"
+    engagement_dir = workspace / "engagements" / "2026-03-31-000000-permission-stall"
+    engagement_dir.mkdir(parents=True, exist_ok=True)
+    (workspace / "engagements" / ".active").write_text(
+        "engagements/2026-03-31-000000-permission-stall\n",
+        encoding="utf-8",
+    )
+    (engagement_dir / "scope.json").write_text(
+        json.dumps(
+            {
+                "status": "in_progress",
+                "current_phase": "exploit",
+                "phases_completed": ["recon", "collect", "consume_test"],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    with sqlite3.connect(engagement_dir / "cases.db") as connection:
+        connection.execute(
+            "CREATE TABLE cases (id INTEGER PRIMARY KEY AUTOINCREMENT, status TEXT NOT NULL, assigned_agent TEXT)"
+        )
+        connection.execute("INSERT INTO cases(status, assigned_agent) VALUES ('pending', NULL)")
+        connection.commit()
+
+    permission_asked_at = datetime.now(tz=UTC).replace(microsecond=0) - timedelta(seconds=90)
+    (run_root / "run.json").write_text(
+        json.dumps(
+            {
+                "agents": [
+                    {
+                        "agent_name": "exploit-developer",
+                        "status": "active",
+                        "updated_at": permission_asked_at.strftime("%Y-%m-%d %H:%M:%S"),
+                    }
+                ]
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    log_dir = run_root / "opencode-home" / "log"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    opencode_log = log_dir / "2026-03-31T000000.log"
+    opencode_log.write_text(
+        "\n".join(
+            [
+                f"INFO {permission_asked_at.strftime('%Y-%m-%dT%H:%M:%S')} service=permission id=per_blocked permission=external_directory patterns=[\"/usr/share/*\"] asking",
+                f"INFO {permission_asked_at.strftime('%Y-%m-%dT%H:%M:%S')} service=bus type=permission.asked publishing",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    from app.services.launcher import _running_container_stall_reason
+
+    assert _running_container_stall_reason(run_row) == (
+        "exploit",
+        "queue_stalled",
+        "Autonomous runtime requested interactive permission approval and never resolved it; unattended runs must stay within workspace-local inputs or fail fast instead of waiting forever.",
+    )
 
 
 
@@ -1068,6 +1349,153 @@ def test_running_container_stall_reason_waits_for_recent_workflow_activity_befor
 
 
 
+def test_running_container_stall_reason_flags_stale_processing_subset_while_other_agent_stays_active():
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "https://mixed-processing-agents.example")
+    db.update_run_status(run["id"], "running")
+
+    run_row = db.get_run_by_id(run["id"])
+    assert run_row is not None
+
+    run_root = Path(run["engagement_root"])
+    runtime_dir = run_root / "runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    process_log = runtime_dir / "process.log"
+    process_log.write_text("recent runtime activity\n", encoding="utf-8")
+
+    workspace = run_root / "workspace"
+    engagement_dir = workspace / "engagements" / "2026-04-09-132832-host-docker-internal"
+    engagement_dir.mkdir(parents=True, exist_ok=True)
+    (workspace / "engagements" / ".active").write_text(
+        "engagements/2026-04-09-132832-host-docker-internal\n",
+        encoding="utf-8",
+    )
+    scope_path = engagement_dir / "scope.json"
+    scope_path.write_text(
+        json.dumps(
+            {
+                "status": "in_progress",
+                "current_phase": "consume_test",
+                "phases_completed": ["recon", "collect"],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    log_path = engagement_dir / "log.md"
+    log_path.write_text("## [14:03] Source analysis summary — source-analyzer\n", encoding="utf-8")
+    with sqlite3.connect(engagement_dir / "cases.db") as connection:
+        connection.execute(
+            "CREATE TABLE cases (id INTEGER PRIMARY KEY AUTOINCREMENT, status TEXT NOT NULL, assigned_agent TEXT, consumed_at TEXT)"
+        )
+        connection.execute(
+            "INSERT INTO cases(id, status, assigned_agent, consumed_at) VALUES (205, 'processing', 'vulnerability-analyst', '2026-04-09 13:49:39')"
+        )
+        for case_id in (1, 25, 64, 80):
+            connection.execute(
+                "INSERT INTO cases(id, status, assigned_agent, consumed_at) VALUES (?, 'processing', 'source-analyzer', '2026-04-09 14:03:59')",
+                (case_id,),
+            )
+        connection.commit()
+
+    recent_source_activity = datetime.fromtimestamp(datetime.now().timestamp() - 5, tz=UTC).strftime(
+        "%Y-%m-%d %H:%M:%S"
+    )
+    (run_root / "run.json").write_text(
+        json.dumps(
+            {
+                "agents": [
+                    {"agent_name": "source-analyzer", "status": "active", "updated_at": recent_source_activity},
+                ]
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    import os
+
+    recent_epoch = datetime.now().timestamp() - 5
+    old_epoch = datetime.now().timestamp() - 130
+    os.utime(process_log, (recent_epoch, recent_epoch))
+    os.utime(scope_path, (recent_epoch, recent_epoch))
+    os.utime(log_path, (recent_epoch, recent_epoch))
+    os.utime(engagement_dir / "cases.db", (recent_epoch, recent_epoch))
+
+    from app.services.launcher import _running_container_stall_reason
+
+    assert _running_container_stall_reason(run_row) == (
+        "consume_test",
+        "queue_stalled",
+        "Processing queue assignments (vulnerability-analyst) had no matching active runtime agent after stall grace period elapsed (active agents: source-analyzer).",
+    )
+
+
+
+def test_running_container_stall_reason_allows_recent_processing_handoff_without_active_runtime_agent():
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "https://recent-processing-handoff.example")
+    db.update_run_status(run["id"], "running")
+
+    run_row = db.get_run_by_id(run["id"])
+    assert run_row is not None
+
+    run_root = Path(run["engagement_root"])
+    runtime_dir = run_root / "runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    process_log = runtime_dir / "process.log"
+    process_log.write_text("recent runtime activity\n", encoding="utf-8")
+
+    workspace = run_root / "workspace"
+    engagement_dir = workspace / "engagements" / "2026-04-09-140732-host-docker-internal"
+    engagement_dir.mkdir(parents=True, exist_ok=True)
+    (workspace / "engagements" / ".active").write_text(
+        "engagements/2026-04-09-140732-host-docker-internal\n",
+        encoding="utf-8",
+    )
+    scope_path = engagement_dir / "scope.json"
+    scope_path.write_text(
+        json.dumps(
+            {
+                "status": "in_progress",
+                "current_phase": "consume_test",
+                "phases_completed": ["recon", "collect"],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    log_path = engagement_dir / "log.md"
+    log_path.write_text("## [14:21] Analysis summary — vulnerability-analyst\n", encoding="utf-8")
+    with sqlite3.connect(engagement_dir / "cases.db") as connection:
+        connection.execute(
+            "CREATE TABLE cases (id INTEGER PRIMARY KEY AUTOINCREMENT, status TEXT NOT NULL, assigned_agent TEXT, consumed_at TEXT)"
+        )
+        connection.execute(
+            "INSERT INTO cases(id, status, assigned_agent, consumed_at) VALUES (10, 'processing', 'vulnerability-analyst', '2026-04-09 14:19:51')"
+        )
+        connection.commit()
+
+    (run_root / "run.json").write_text(json.dumps({"agents": []}) + "\n", encoding="utf-8")
+
+    import os
+
+    recent_epoch = datetime.now().timestamp() - 5
+    os.utime(process_log, (recent_epoch, recent_epoch))
+    os.utime(scope_path, (recent_epoch, recent_epoch))
+    os.utime(log_path, (recent_epoch, recent_epoch))
+    os.utime(engagement_dir / "cases.db", (recent_epoch, recent_epoch))
+
+    from app.services.launcher import _running_container_stall_reason
+
+    assert _running_container_stall_reason(run_row) is None
+
+
+
 def test_running_container_stall_reason_flags_undispatched_follow_on_fetch_even_with_recent_workflow_activity():
     client = TestClient(app)
     token = register_and_login(client, "alice")
@@ -1157,6 +1585,104 @@ def test_running_container_stall_reason_flags_undispatched_follow_on_fetch_even_
         "consume_test",
         "queue_stalled",
         "Fetched non-empty page batch for source-analyzer (ids: 1,23,62,73) but no matching task dispatch followed before stall grace period elapsed.",
+    )
+
+
+
+def test_running_container_stall_reason_ignores_stale_metadata_active_agent_for_orphaned_follow_on_fetch():
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "https://stale-metadata-active-agent.example")
+    db.update_run_status(run["id"], "running")
+
+    run_row = db.get_run_by_id(run["id"])
+    assert run_row is not None
+
+    run_root = Path(run["engagement_root"])
+    runtime_dir = run_root / "runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    process_log = runtime_dir / "process.log"
+    fetch_timestamp_ms = int((datetime.now().timestamp() - 130) * 1000)
+    process_log.write_text(
+        json.dumps(
+            {
+                "type": "tool_use",
+                "timestamp": fetch_timestamp_ms,
+                "part": {
+                    "tool": "bash",
+                    "state": {
+                        "output": "BATCH_FILE=/workspace/engagements/demo/scans/operator/page_batch_001.json\nBATCH_TYPE=page\nBATCH_AGENT=source-analyzer\nBATCH_COUNT=5\nBATCH_IDS=1,25,64,80,88\n"
+                    },
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    workspace = run_root / "workspace"
+    engagement_dir = workspace / "engagements" / "2026-04-09-132832-host-docker-internal"
+    engagement_dir.mkdir(parents=True, exist_ok=True)
+    (workspace / "engagements" / ".active").write_text(
+        "engagements/2026-04-09-132832-host-docker-internal\n",
+        encoding="utf-8",
+    )
+    scope_path = engagement_dir / "scope.json"
+    scope_path.write_text(
+        json.dumps(
+            {
+                "status": "in_progress",
+                "current_phase": "consume_test",
+                "phases_completed": ["recon", "collect"],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    log_path = engagement_dir / "log.md"
+    log_path.write_text("## [13:54] Data batch recorded — source-analyzer\n", encoding="utf-8")
+    with sqlite3.connect(engagement_dir / "cases.db") as connection:
+        connection.execute(
+            "CREATE TABLE cases (id INTEGER PRIMARY KEY AUTOINCREMENT, status TEXT NOT NULL, assigned_agent TEXT)"
+        )
+        for case_id in (1, 25, 64, 80, 88):
+            connection.execute(
+                "INSERT INTO cases(id, status, assigned_agent) VALUES (?, 'processing', 'source-analyzer')",
+                (case_id,),
+            )
+        connection.commit()
+
+    stale_updated_at = datetime.fromtimestamp(datetime.now().timestamp() - 8 * 3600, tz=UTC).strftime(
+        "%Y-%m-%d %H:%M:%S"
+    )
+    (run_root / "run.json").write_text(
+        json.dumps(
+            {
+                "agents": [
+                    {"agent_name": "source-analyzer", "status": "active", "updated_at": stale_updated_at},
+                ]
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    import os
+
+    old_epoch = datetime.now().timestamp() - 130
+    fresh_epoch = datetime.now().timestamp() - 5
+    os.utime(process_log, (old_epoch, old_epoch))
+    os.utime(scope_path, (old_epoch, old_epoch))
+    os.utime(engagement_dir / "cases.db", (old_epoch, old_epoch))
+    os.utime(log_path, (fresh_epoch, fresh_epoch))
+
+    from app.services.launcher import _running_container_stall_reason
+
+    assert _running_container_stall_reason(run_row) == (
+        "consume_test",
+        "queue_stalled",
+        "Fetched non-empty page batch for source-analyzer (ids: 1,25,64,80,88) but no matching task dispatch followed before stall grace period elapsed.",
     )
 
 
@@ -2781,6 +3307,50 @@ def test_auto_launch_injects_project_model_and_provider_env(monkeypatch):
     assert "OPENAI_API_KEY=sk-live-test" in joined
     assert "OPENAI_BASE_URL=https://api.openai.com/v1" in joined
     assert "OPENAI_MODEL=gpt-5.4" in joined
+
+
+def test_start_run_runtime_passes_continuous_observation_env(monkeypatch):
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project_response = client.post(
+        "/projects",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "name": "ContinuousObservation",
+            "env_json": '{"REDTEAM_CONTINUOUS_TARGETS":"https://www.okx.com","OBSERVATION_SECONDS":"300"}',
+        },
+    )
+    assert project_response.status_code == 201
+    project = project_response.json()
+
+    captured: dict[str, list[str]] = {}
+
+    class FakeLogFollower:
+        def poll(self):
+            return 0
+
+    def fake_run(command, **kwargs):
+        if command[:3] == ["docker", "run", "-d"]:
+            captured["command"] = command
+            return subprocess.CompletedProcess(command, 0, stdout="container-123\n", stderr="")
+        if command[:3] == ["docker", "rm", "-f"]:
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("app.services.launcher.subprocess.run", fake_run)
+    monkeypatch.setattr("app.services.launcher.subprocess.Popen", lambda *args, **kwargs: FakeLogFollower())
+    monkeypatch.setattr("app.services.launcher.Thread", lambda *args, **kwargs: SimpleNamespace(start=lambda: None))
+    object.__setattr__(settings, "auto_launch_runs", True)
+
+    try:
+        run = create_run(client, token, project["id"], "https://www.okx.com")
+    finally:
+        object.__setattr__(settings, "auto_launch_runs", False)
+
+    assert run["status"] == "running"
+    joined = " ".join(captured["command"])
+    assert "REDTEAM_CONTINUOUS_TARGETS=https://www.okx.com" in joined
+    assert "OBSERVATION_SECONDS=300" in joined
 
 
 def test_start_run_runtime_rewrites_loopback_target_for_container_command(monkeypatch):

@@ -1,0 +1,18 @@
+{
+  "targets": {
+    "http://127.0.0.1:8000": {
+      "benchmark": "../benchmarks/owasp-juice-shop-v19.md",
+      "label": "OWASP Juice Shop v19 benchmark",
+      "healthy_skip_gate": {
+        "min_scenario_precision": 0.30,
+        "min_scenario_automation_actionable_recall": 0.05,
+        "trend_window": 5,
+        "min_history_points": 3,
+        "max_regression": {
+          "scenario_precision": 0.05,
+          "scenario_automation_actionable_recall": 0.02
+        }
+      }
+    }
+  }
+}

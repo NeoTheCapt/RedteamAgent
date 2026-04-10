@@ -27,6 +27,13 @@ _ACTIVE_CONTAINER_SUPERVISORS: dict[int, object] = {}
 _ACTIVE_CONTAINER_SUPERVISORS_LOCK = Lock()
 
 
+def _run_deleted_during_supervision(run: Run, exc: BaseException) -> bool:
+    return (
+        isinstance(exc, (db.RunNotFoundError, AssertionError, sqlite3.IntegrityError))
+        and db.get_run_by_id(run.id) is None
+    )
+
+
 def runtime_root_for(run: Run) -> Path:
     return Path(run.engagement_root) / "runtime"
 
@@ -119,6 +126,7 @@ _AUTO_RESUME_LIMIT = 3
 RUN_STALL_TIMEOUT_SECONDS = 900
 PROCESSING_AGENT_MISMATCH_GRACE_SECONDS = 120
 PENDING_QUEUE_DISPATCH_GRACE_SECONDS = 120
+PERMISSION_REQUEST_GRACE_SECONDS = 60
 # Real targets can spend several minutes in autonomous initialization/recon before the
 # first queue item or observed path lands. Keep the live launcher watchdog aligned with
 # the API reconciler so we do not fail healthy slow-start recon while subagent dispatch
@@ -599,6 +607,8 @@ _SUBAGENT_SESSION_TITLE_PATTERN = re.compile(r"title=.*?\(@(?P<agent>[A-Za-z0-9_
 _SUBAGENT_STREAM_PATTERN = re.compile(r"service=llm\b.*?\bagent=(?P<agent>[A-Za-z0-9_-]+)\b.*?\bmode=subagent\b")
 _SUBAGENT_SESSION_ID_PATTERN = re.compile(r"\b(?:id|sessionID)=(?P<session>ses_[A-Za-z0-9]+)\b")
 _INLINE_SESSION_CREATED_AT_PATTERN = re.compile(r'"created":\s*(\d{10,13})')
+_PERMISSION_REQUEST_ID_PATTERN = re.compile(r"\bid=(per_[A-Za-z0-9]+)\b")
+_PERMISSION_REQUEST_RESOLVED_PATTERN = re.compile(r"\b(approved|allowed|granted|denied|rejected|cancel(?:led)?|resolved|answered|completed)\b", re.IGNORECASE)
 _RUNTIME_ACTIVITY_FUTURE_SKEW_SECONDS = 5 * 60
 
 
@@ -648,6 +658,40 @@ def _latest_process_log_activity_at(path: Path, *, max_lines: int = 400) -> floa
     return _path_mtime(path)
 
 
+def _latest_unresolved_permission_request_at(*paths: Path, max_lines: int = 800) -> float | None:
+    pending_requests: dict[str, float] = {}
+
+    for path in paths:
+        if not path.exists() or not path.is_file():
+            continue
+        try:
+            with path.open("r", encoding="utf-8", errors="replace") as handle:
+                lines = deque(handle, maxlen=max_lines)
+        except OSError:
+            continue
+
+        for raw_line in lines:
+            stripped = raw_line.strip()
+            if "service=permission" not in stripped:
+                continue
+            request_match = _PERMISSION_REQUEST_ID_PATTERN.search(stripped)
+            if request_match is None:
+                continue
+            request_id = request_match.group(1)
+            line_timestamp = _extract_text_log_timestamp(stripped)
+            if " asking" in stripped:
+                if _runtime_activity_candidate_is_valid(line_timestamp):
+                    pending_requests[request_id] = float(line_timestamp)
+                continue
+            if request_id in pending_requests and _PERMISSION_REQUEST_RESOLVED_PATTERN.search(stripped):
+                pending_requests.pop(request_id, None)
+
+    if not pending_requests:
+        return None
+    return max(pending_requests.values())
+
+
+
 def _latest_nonempty_fetch_from_output(candidate_output: str) -> dict[str, object] | None:
     latest_fetch: dict[str, object] | None = None
     for block_match in _FETCH_BATCH_BLOCK_PATTERN.finditer(candidate_output):
@@ -689,12 +733,25 @@ def _extract_text_log_timestamp(line: str) -> float | None:
 
 
 
-def _opencode_logs_active_subagent_agents(log_root: Path) -> set[str]:
+def _opencode_logs_active_subagent_agents(
+    log_root: Path,
+    *,
+    active_window_seconds: int = RUN_STALL_TIMEOUT_SECONDS,
+) -> set[str]:
     if not log_root.exists() or not log_root.is_dir():
         return set()
 
     session_agents: dict[str, str] = {}
+    session_last_activity: dict[str, float] = {}
     active_sessions: set[str] = set()
+    now = time.time()
+
+    def _remember_session_activity(session_id: str, candidate: float | None) -> None:
+        if not session_id or not _runtime_activity_candidate_is_valid(candidate):
+            return
+        previous = session_last_activity.get(session_id)
+        if previous is None or float(candidate) > previous:
+            session_last_activity[session_id] = float(candidate)
 
     for path in sorted(log_root.glob("*.log")):
         try:
@@ -704,12 +761,16 @@ def _opencode_logs_active_subagent_agents(log_root: Path) -> set[str]:
                     if not stripped:
                         continue
 
+                    line_timestamp = _extract_text_log_timestamp(stripped)
+
                     if "service=session.prompt" in stripped and (
                         "exiting loop" in stripped or stripped.endswith(" cancel") or " cancel" in stripped
                     ):
                         match = _SUBAGENT_SESSION_ID_PATTERN.search(stripped)
                         if match is not None:
-                            active_sessions.discard(match.group("session"))
+                            session_id = match.group("session")
+                            _remember_session_activity(session_id, line_timestamp)
+                            active_sessions.discard(session_id)
                         continue
 
                     if "service=llm" in stripped and "mode=subagent" in stripped:
@@ -718,6 +779,7 @@ def _opencode_logs_active_subagent_agents(log_root: Path) -> set[str]:
                         if stream_match is not None and session_match is not None:
                             session_id = session_match.group("session")
                             session_agents[session_id] = stream_match.group("agent")
+                            _remember_session_activity(session_id, line_timestamp)
                             active_sessions.add(session_id)
                         continue
 
@@ -727,11 +789,30 @@ def _opencode_logs_active_subagent_agents(log_root: Path) -> set[str]:
                         if title_match is not None and session_match is not None:
                             session_id = session_match.group("session")
                             session_agents[session_id] = title_match.group("agent")
+                            created_match = _INLINE_SESSION_CREATED_AT_PATTERN.search(stripped)
+                            created_timestamp = None
+                            if created_match is not None:
+                                try:
+                                    raw_created = int(created_match.group(1))
+                                except ValueError:
+                                    raw_created = 0
+                                if raw_created > 0:
+                                    created_timestamp = raw_created / 1000 if raw_created >= 10**12 else float(raw_created)
+                            _remember_session_activity(session_id, created_timestamp or line_timestamp)
                             active_sessions.add(session_id)
         except OSError:
             continue
 
-    return {session_agents[session_id] for session_id in active_sessions if session_agents.get(session_id)}
+    active_agents: set[str] = set()
+    for session_id in active_sessions:
+        agent_name = session_agents.get(session_id)
+        last_activity = session_last_activity.get(session_id)
+        if not agent_name or last_activity is None:
+            continue
+        if now - last_activity > active_window_seconds:
+            continue
+        active_agents.add(agent_name)
+    return active_agents
 
 
 
@@ -970,6 +1051,52 @@ def _load_running_processing_agents(engagement_dir: Path | None) -> set[str]:
     return {agent for agent in raw_agents if agent}
 
 
+def _stale_processing_agents(
+    engagement_dir: Path | None,
+    active_runtime_agents: set[str],
+    *,
+    stale_after_seconds: int = PROCESSING_AGENT_MISMATCH_GRACE_SECONDS,
+) -> set[str]:
+    if engagement_dir is None:
+        return set()
+
+    cases_db = engagement_dir / "cases.db"
+    if not cases_db.exists():
+        return set()
+
+    def _reader(connection: sqlite3.Connection) -> list[tuple[str, str | None]]:
+        column_rows = connection.execute("PRAGMA table_info(cases)").fetchall()
+        column_names = {str(row[1]) for row in column_rows if len(row) > 1}
+        if "assigned_agent" not in column_names or "consumed_at" not in column_names:
+            return []
+        rows = connection.execute(
+            "SELECT assigned_agent, consumed_at FROM cases WHERE status = 'processing' AND assigned_agent IS NOT NULL"
+        ).fetchall()
+        return [(str(row[0] or "").strip(), str(row[1] or "").strip() or None) for row in rows]
+
+    rows = _read_sqlite_with_fallback(cases_db, _reader, [])
+    if not rows:
+        return set()
+
+    now = time.time()
+    latest_consumed_at: dict[str, float] = {}
+    for agent_name, consumed_at in rows:
+        if not agent_name or agent_name in active_runtime_agents:
+            continue
+        parsed = _parse_runtime_activity_timestamp(consumed_at)
+        if not _runtime_activity_candidate_is_valid(parsed):
+            continue
+        latest = latest_consumed_at.get(agent_name)
+        if latest is None or float(parsed) > latest:
+            latest_consumed_at[agent_name] = float(parsed)
+
+    return {
+        agent_name
+        for agent_name, consumed_at in latest_consumed_at.items()
+        if (now - consumed_at) >= stale_after_seconds
+    }
+
+
 def _recover_orphaned_processing_cases(run: Run, engagement_dir: Path | None) -> tuple[int, set[str]]:
     if engagement_dir is None:
         return (0, set())
@@ -1016,6 +1143,7 @@ def _recover_orphaned_processing_cases(run: Run, engagement_dir: Path | None) ->
 def _active_runtime_metadata_agents(run: Run) -> set[str]:
     payload = _read_run_metadata(run)
     active_agents: set[str] = set()
+    now = time.time()
     for item in payload.get("agents") or []:
         if not isinstance(item, dict):
             continue
@@ -1025,9 +1153,12 @@ def _active_runtime_metadata_agents(run: Run) -> set[str]:
         # queue-backed "active" agents from processing cases even when no live
         # task/runtime event exists. Those synthetic cards intentionally have an
         # empty updated_at. Launcher stall recovery must only treat agents with
-        # substantive runtime activity as active, otherwise orphaned processing
-        # assignments can mask queue stalls forever.
-        if not str(item.get("updated_at") or "").strip():
+        # substantive and recent runtime activity as active, otherwise stale
+        # queue-backed cards can mask orphaned processing forever.
+        updated_at = _parse_runtime_activity_timestamp(item.get("updated_at"))
+        if not _runtime_activity_candidate_is_valid(updated_at):
+            continue
+        if (now - float(updated_at)) > PROCESSING_AGENT_MISMATCH_GRACE_SECONDS:
             continue
         agent_name = str(item.get("agent_name") or item.get("task_name") or "").strip()
         if agent_name:
@@ -1094,10 +1225,26 @@ def _running_container_stall_reason(run: Run) -> tuple[str, str, str] | None:
     active_runtime_agents = _active_runtime_agents(run)
     has_current_task = _run_metadata_has_current_task(run)
     processing_agents = _load_running_processing_agents(engagement_dir)
+    opencode_logs_root = opencode_home_root_for(run) / "log"
+    permission_log_paths = [process_log_path_for(run)]
+    if opencode_logs_root.exists():
+        permission_log_paths.extend(sorted(opencode_logs_root.glob("*.log")))
+    latest_permission_request_at = _latest_unresolved_permission_request_at(*permission_log_paths)
     orphaned_fetch = _latest_undispatched_batch_fetch(
         process_log_path_for(run),
-        opencode_logs_root=opencode_home_root_for(run) / "log",
+        opencode_logs_root=opencode_logs_root,
     )
+    if (
+        current_phase not in EARLY_PHASE_STALL_PHASES
+        and latest_permission_request_at is not None
+        and (time.time() - latest_permission_request_at) >= PERMISSION_REQUEST_GRACE_SECONDS
+    ):
+        return (
+            current_phase,
+            "queue_stalled",
+            "Autonomous runtime requested interactive permission approval and never resolved it; unattended runs must stay within workspace-local inputs or fail fast instead of waiting forever.",
+        )
+
     if (
         current_phase not in EARLY_PHASE_STALL_PHASES
         and pending_cases > 0
@@ -1151,6 +1298,40 @@ def _running_container_stall_reason(run: Run) -> tuple[str, str, str] | None:
             current_phase,
             "queue_stalled",
             f"Run remained in {current_phase.replace('_', '-')} with no active runtime agent, current task, or queued work before stall timeout elapsed.",
+        )
+
+    stale_processing_agents = _stale_processing_agents(engagement_dir, active_runtime_agents)
+    stale_processing_activity_at = runtime_activity_at
+    if workflow_activity_at is not None and (
+        stale_processing_activity_at is None or workflow_activity_at > stale_processing_activity_at
+    ):
+        stale_processing_activity_at = workflow_activity_at
+    if metadata_activity_at is not None and (
+        stale_processing_activity_at is None or metadata_activity_at > stale_processing_activity_at
+    ):
+        stale_processing_activity_at = metadata_activity_at
+    recent_processing_handoff = (
+        not active_runtime_agents
+        and stale_processing_activity_at is not None
+        and (time.time() - stale_processing_activity_at) < PROCESSING_AGENT_MISMATCH_GRACE_SECONDS
+    )
+    if current_phase not in EARLY_PHASE_STALL_PHASES and stale_processing_agents and not recent_processing_handoff:
+        assigned = ", ".join(sorted(stale_processing_agents))
+        if active_runtime_agents:
+            active = ", ".join(sorted(active_runtime_agents))
+            reason = (
+                f"Processing queue assignments ({assigned}) had no matching active runtime agent "
+                f"after stall grace period elapsed (active agents: {active})."
+            )
+        else:
+            reason = (
+                f"Processing queue assignments ({assigned}) had no matching active runtime agent "
+                "after stall grace period elapsed."
+            )
+        return (
+            current_phase,
+            "queue_stalled",
+            reason,
         )
 
     if runtime_activity_at is not None:
@@ -2342,6 +2523,16 @@ def _append_runtime_event(run: Run, event_type: str, phase: str, summary: str) -
         return
 
 
+def _refresh_live_run_metadata_projection(run: Run, project: Project, user: User) -> None:
+    try:
+        refreshed = db.get_run_by_id(run.id) or run
+        from .run_summary import refresh_run_metadata_projection
+
+        refresh_run_metadata_projection(refreshed, project, user)
+    except Exception:
+        return
+
+
 def _write_process_metadata(run: Run, process: subprocess.Popen[bytes]) -> None:
     metadata = {
         "run_id": run.id,
@@ -2805,6 +2996,9 @@ def _launch_runtime_container(
     passthrough_keys = [
         "REDTEAM_OPENCODE_MODEL",
         "REDTEAM_OPENCODE_SMALL_MODEL",
+        "REDTEAM_CONTINUOUS_TARGETS",
+        "CONTINUOUS_OBSERVATION_TARGETS",
+        "OBSERVATION_SECONDS",
         "OPENAI_API_KEY",
         "OPENAI_BASE_URL",
         "OPENAI_MODEL",
@@ -3009,6 +3203,11 @@ def _start_container_supervisor(
                     log_follower,
                     log_handle,
                 )
+            except Exception as exc:
+                if _run_deleted_during_supervision(run, exc):
+                    _close_log_streams(log_follower, log_handle)
+                    return
+                raise
             finally:
                 with _ACTIVE_CONTAINER_SUPERVISORS_LOCK:
                     if _ACTIVE_CONTAINER_SUPERVISORS.get(run.id) is supervisor_token:
@@ -3045,6 +3244,7 @@ def _supervise_container(
             log_follower = _ensure_runtime_log_follower(run, log_follower, log_handle)
             phase, summary = _heartbeat_context(run)
             _append_runtime_event(run, "run.heartbeat", phase, summary)
+            _refresh_live_run_metadata_projection(run, project, user)
 
             live_stall = _running_container_stall_reason(run)
             if live_stall is not None:
