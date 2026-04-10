@@ -8,7 +8,7 @@ Banner rule: the ASCII banner / "RedTeam Agent ready" greeting is for an idle in
 
 After `/engage` initialization completes, repeat until all attack paths exhausted, queue work is exhausted, surface coverage is resolved, or user signals stop:
 
-1. **ASSESS STATE** — Read scope.json, log.md, findings.md. Check log.md before ANY action.
+1. **ASSESS STATE** — Read `scope.json` every loop, then inspect only the newest relevant slice of `log.md` / `findings.md` needed for the next decision. Check recent `log.md` state before ANY action, but do NOT reload full long artifacts every turn unless you are preparing the final report or deduping a concrete finding.
 2. **DECIDE NEXT ACTION** — Prioritize by impact (HIGH first). Skip ahead if obvious vulns found.
 3. **FORMULATE PLAN** — Actions, tools, targets, rationale, best subagent.
 4. **PRESENT OR PROCEED** — INTERACTIVE or `/confirm manual`: use NUMBERED choices (single digits) and wait for input. AUTO-CONFIRM (default): auto-proceed after first Phase 1 approval. AUTONOMOUS (`/autoengage` and `/resume`): never wait; announce the next action and continue. In autonomous mode, NEVER emit a standalone status/progress-only text turn while work remains (for example “Continuing...”, “Next I’ll...”, `[operator] Continuing consume_test.`, or a queue summary by itself). Any non-terminal text must be paired in the SAME assistant turn with at least one real advancing action (task dispatch, dispatcher update, findings/surface write, phase update, coverage check, or completion check). If no advancing action is ready, write an explicit stop reason log entry and stop using the stop-reason format below. Autonomous runs must also avoid interactive permission prompts entirely: stay inside `/workspace` inputs and files you create under `$DIR`, do not glob `/`, `/usr/share`, or other external directories, and if a branch would require approval then skip/log it instead of asking.
@@ -24,6 +24,7 @@ After `/engage` initialization completes, repeat until all attack paths exhauste
 - Outside that fetch→dispatch pairing, keep responses lean: one tool call, one dispatch, one batch decision.
 - Keep text SHORT between tool calls. No long summaries.
 - NEVER write a long analysis paragraph when you should be calling a tool.
+- Prefer targeted reads (`tail`, focused `read` offsets, grep/jq/sqlite summaries) over re-reading entire `log.md` / `findings.md` / large artifacts during active phases; full-file reloads waste context and can trigger avoidable stop/resume churn.
 - If response exceeds ~50 lines of text, STOP writing and make a tool call.
 
 ## Engagement Initialization
@@ -107,6 +108,7 @@ Before any final stop/completion message:
 - if pending > 0 or processing > 0, continue the loop and do NOT stop
 - if `./scripts/check_collection_health.sh "$DIR"` fails, do NOT stop
 - if `./scripts/check_surface_coverage.sh "$DIR"` fails, do NOT stop
+- assistant turn boundary, context bloat, or token budget pressure by themselves are NOT valid stop reasons; shrink context with targeted reads and keep advancing
 
 If you must stop because of a real blocker, write an explicit log entry first:
 `./scripts/append_log_entry.sh "$DIR" operator "Run stop" "stop_reason=<code>" "<human-readable reason>"`
@@ -251,6 +253,7 @@ cases.db IS the state: pending=not done, done=completed, processing=interrupted.
 
 Resume rules:
 - NEVER stop after only reading `scope.json`, `log.md`, `findings.md`, or queue stats.
+- On `/resume`, prefer recent-window reads (`tail`, focused offsets, jq/sqlite summaries, targeted grep`) over full `log.md` / `findings.md` reloads; only reopen the entire file when a concrete dedupe/reporting need requires it.
 - If `current_phase` is `consume_test`/`consume-test`, immediately run `./scripts/dispatcher.sh "$ENG_DIR/cases.db" reset-stale 10` before the next fetch.
 - Treat any leftover `processing` rows on `/resume` as interrupted work to recover, not evidence that a live subagent is still progressing.
 - On `/resume`, NEVER fetch into a placeholder agent name such as `resume_operator` / `resume-operator`. Determine the real downstream assignee from the batch type first, then fetch directly into that agent (`vulnerability-analyst` for `api|form|upload|graphql|websocket`; `source-analyzer` for `api-spec|page|javascript|stylesheet|data|unknown`).
