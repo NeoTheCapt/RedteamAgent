@@ -31,6 +31,144 @@ sql() {
   sqlite3 "$DB" ".timeout 5000" "$1"
 }
 
+normalize_id_list() {
+  if (($# == 0)); then
+    echo "ERROR: id_list must contain at least one numeric ID" >&2
+    exit 1
+  fi
+
+  local token
+  local normalized=()
+  for token in "$@"; do
+    token="${token// /}"
+    token="${token#,}"
+    token="${token%,}"
+    [[ -z "$token" ]] && continue
+    IFS=',' read -r -a parts <<< "$token"
+    local part
+    for part in "${parts[@]}"; do
+      [[ -z "$part" ]] && continue
+      if ! [[ "$part" =~ ^[0-9]+$ ]]; then
+        echo "ERROR: id_list must contain only numeric IDs separated by commas or spaces" >&2
+        exit 1
+      fi
+      normalized+=("$part")
+    done
+  done
+
+  if ((${#normalized[@]} == 0)); then
+    echo "ERROR: id_list must contain at least one numeric ID" >&2
+    exit 1
+  fi
+
+  local joined
+  printf -v joined '%s,' "${normalized[@]}"
+  echo "${joined%,}"
+}
+
+fetch_priority_order_clause() {
+  local queue_type="$(_source_queue_lower "${1:-}")"
+
+  cat <<'EOF'
+ORDER BY
+  (
+    CASE lower(source)
+      WHEN 'exploit-developer' THEN 500
+      WHEN 'katana-xhr' THEN 460
+      WHEN 'katana' THEN 430
+      WHEN 'vulnerability-analyst' THEN 380
+      WHEN 'source-analyzer' THEN 280
+      WHEN 'recon-specialist' THEN 220
+      ELSE 0
+    END
+    + CASE upper(method)
+        WHEN 'POST' THEN 180
+        WHEN 'PUT' THEN 170
+        WHEN 'PATCH' THEN 160
+        WHEN 'DELETE' THEN 150
+        ELSE 0
+      END
+    + CASE WHEN query_params IS NOT NULL AND query_params NOT IN ('', '{}', 'null') THEN 40 ELSE 0 END
+    + CASE WHEN body_params IS NOT NULL AND body_params NOT IN ('', '{}', 'null') THEN 70 ELSE 0 END
+    + CASE
+        WHEN lower(coalesce(nullif(url_path, ''), url)) LIKE '%/admin%'
+          OR lower(coalesce(nullif(url_path, ''), url)) LIKE '%administration%'
+          OR lower(coalesce(nullif(url_path, ''), url)) LIKE '%/manage%'
+          OR lower(coalesce(nullif(url_path, ''), url)) LIKE '%/config%'
+        THEN 180 ELSE 0
+      END
+    + CASE
+        WHEN lower(coalesce(nullif(url_path, ''), url)) LIKE '%login%'
+          OR lower(coalesce(nullif(url_path, ''), url)) LIKE '%logout%'
+          OR lower(coalesce(nullif(url_path, ''), url)) LIKE '%signin%'
+          OR lower(coalesce(nullif(url_path, ''), url)) LIKE '%signup%'
+          OR lower(coalesce(nullif(url_path, ''), url)) LIKE '%register%'
+          OR lower(coalesce(nullif(url_path, ''), url)) LIKE '%auth%'
+          OR lower(coalesce(nullif(url_path, ''), url)) LIKE '%session%'
+          OR lower(coalesce(nullif(url_path, ''), url)) LIKE '%token%'
+          OR lower(coalesce(nullif(url_path, ''), url)) LIKE '%jwt%'
+          OR lower(coalesce(nullif(url_path, ''), url)) LIKE '%whoami%'
+          OR lower(coalesce(nullif(url_path, ''), url)) LIKE '%profile%'
+          OR lower(coalesce(nullif(url_path, ''), url)) LIKE '%password%'
+          OR lower(coalesce(nullif(url_path, ''), url)) LIKE '%reset%'
+          OR lower(coalesce(nullif(url_path, ''), url)) LIKE '%recover%'
+          OR lower(coalesce(nullif(url_path, ''), url)) LIKE '%forgot%'
+          OR lower(coalesce(nullif(url_path, ''), url)) LIKE '%security%'
+          OR lower(coalesce(nullif(url_path, ''), url)) LIKE '%verify%'
+          OR lower(coalesce(nullif(url_path, ''), url)) LIKE '%2fa%'
+          OR lower(coalesce(nullif(url_path, ''), url)) LIKE '%mfa%'
+          OR lower(coalesce(nullif(url_path, ''), url)) LIKE '%otp%'
+        THEN 170 ELSE 0
+      END
+    + CASE
+        WHEN lower(coalesce(nullif(url_path, ''), url)) LIKE '%wallet%'
+          OR lower(coalesce(nullif(url_path, ''), url)) LIKE '%payment%'
+          OR lower(coalesce(nullif(url_path, ''), url)) LIKE '%payout%'
+          OR lower(coalesce(nullif(url_path, ''), url)) LIKE '%billing%'
+          OR lower(coalesce(nullif(url_path, ''), url)) LIKE '%invoice%'
+          OR lower(coalesce(nullif(url_path, ''), url)) LIKE '%bank%'
+          OR lower(coalesce(nullif(url_path, ''), url)) LIKE '%card%'
+          OR lower(coalesce(nullif(url_path, ''), url)) LIKE '%address%'
+          OR lower(coalesce(nullif(url_path, ''), url)) LIKE '%order%'
+          OR lower(coalesce(nullif(url_path, ''), url)) LIKE '%account%'
+          OR lower(coalesce(nullif(url_path, ''), url)) LIKE '%kyc%'
+        THEN 150 ELSE 0
+      END
+    + CASE
+        WHEN lower(coalesce(nullif(url_path, ''), url)) LIKE '%upload%'
+          OR lower(coalesce(nullif(url_path, ''), url)) LIKE '%file%'
+          OR lower(coalesce(nullif(url_path, ''), url)) LIKE '%document%'
+          OR lower(coalesce(nullif(url_path, ''), url)) LIKE '%export%'
+          OR lower(coalesce(nullif(url_path, ''), url)) LIKE '%import%'
+          OR lower(coalesce(nullif(url_path, ''), url)) LIKE '%backup%'
+          OR lower(coalesce(nullif(url_path, ''), url)) LIKE '%report%'
+        THEN 130 ELSE 0
+      END
+    + CASE
+        WHEN lower(coalesce(nullif(url_path, ''), url)) LIKE '%graphql%'
+          OR lower(coalesce(nullif(url_path, ''), url)) LIKE '%swagger%'
+          OR lower(coalesce(nullif(url_path, ''), url)) LIKE '%openapi%'
+          OR lower(coalesce(nullif(url_path, ''), url)) LIKE '%api-doc%'
+        THEN 90 ELSE 0
+      END
+    + CASE
+        WHEN lower(coalesce(nullif(url_path, ''), url)) LIKE '%search%'
+          OR lower(coalesce(nullif(url_path, ''), url)) LIKE '%query%'
+          OR lower(coalesce(nullif(url_path, ''), url)) LIKE '%filter%'
+        THEN 25 ELSE 0
+      END
+  ) DESC,
+  id ASC
+EOF
+
+  case "$queue_type" in
+    api|graphql|form|upload|websocket|api-spec)
+      ;;
+    page|data|javascript|stylesheet|unknown|*)
+      ;;
+  esac
+}
+
 # Auto-migrate: add retry_count column if missing
 sql "ALTER TABLE cases ADD COLUMN retry_count INTEGER DEFAULT 0;" 2>/dev/null || true
 
@@ -66,6 +204,8 @@ case "$ACTION" in
       exit 0
     fi
 
+    ORDER_CLAUSE="$(fetch_priority_order_clause "$TYPE")"
+
     sqlite3 "$DB" ".timeout 5000" -json "
       UPDATE cases
       SET status = 'processing',
@@ -74,6 +214,7 @@ case "$ACTION" in
       WHERE id IN (
         SELECT id FROM cases
         WHERE status = 'pending' AND type = '${TYPE}'
+        ${ORDER_CLAUSE}
         LIMIT ${LIMIT}
       )
       RETURNING *;
@@ -81,23 +222,15 @@ case "$ACTION" in
     ;;
 
   done)
-    ID_LIST="${3:?Missing id_list argument}"
-    # Validate ID_LIST contains only digits and commas
-    if ! [[ "$ID_LIST" =~ ^[0-9,]+$ ]]; then
-      echo "ERROR: id_list must contain only numeric IDs separated by commas" >&2
-      exit 1
-    fi
+    shift 2
+    ID_LIST="$(normalize_id_list "$@")"
     sql "UPDATE cases SET status='done' WHERE id IN (${ID_LIST});"
     echo "Marked done: ${ID_LIST}"
     ;;
 
   error)
-    ID_LIST="${3:?Missing id_list argument}"
-    # Validate ID_LIST contains only digits and commas
-    if ! [[ "$ID_LIST" =~ ^[0-9,]+$ ]]; then
-      echo "ERROR: id_list must contain only numeric IDs separated by commas" >&2
-      exit 1
-    fi
+    shift 2
+    ID_LIST="$(normalize_id_list "$@")"
     sql "UPDATE cases SET status='error', retry_count = COALESCE(retry_count,0) + 1 WHERE id IN (${ID_LIST});"
     echo "Marked error: ${ID_LIST}"
     ;;

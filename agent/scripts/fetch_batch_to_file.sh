@@ -18,10 +18,11 @@ fi
 if [[ "$OUT_FILE_RAW" = /* ]]; then
     OUT_FILE="$OUT_FILE_RAW"
 else
-    OUT_FILE="$(cd "$(dirname "$OUT_FILE_RAW")" 2>/dev/null && pwd)/$(basename "$OUT_FILE_RAW")"
+    OUT_FILE="$(pwd)/$OUT_FILE_RAW"
 fi
 
 mkdir -p "$(dirname "$OUT_FILE")"
+OUT_FILE="$(cd "$(dirname "$OUT_FILE")" && pwd)/$(basename "$OUT_FILE")"
 
 stderr_file="$(mktemp "${TMPDIR:-/tmp}/fetch-batch-stderr.XXXXXX")"
 trap 'rm -f "$stderr_file"' EXIT

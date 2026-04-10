@@ -19,6 +19,10 @@ class UsernameAlreadyExistsError(Exception):
     pass
 
 
+class RunNotFoundError(Exception):
+    pass
+
+
 _INIT_LOCK = threading.Lock()
 _INITIALIZED_DB_PATH: Path | None = None
 _DB_OPEN_RETRY_ATTEMPTS = 5
@@ -480,7 +484,8 @@ def update_run_status(run_id: int, status: str) -> Run:
             """,
             (run_id,),
         ).fetchone()
-        assert row is not None
+        if row is None:
+            raise RunNotFoundError(f"Run {run_id} not found")
         run = Run.from_row(row)
 
     _write_run_metadata(run)
@@ -505,7 +510,8 @@ def set_run_updated_at(run_id: int, updated_at: str) -> Run:
             """,
             (run_id,),
         ).fetchone()
-        assert row is not None
+        if row is None:
+            raise RunNotFoundError(f"Run {run_id} not found")
         run = Run.from_row(row)
 
     _write_run_metadata(run)

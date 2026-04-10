@@ -13,13 +13,14 @@ RECON_INGEST="$SCRIPT_DIR/recon_ingest.sh"
     exit 1
 }
 
-updates_tmp="$(mktemp "${TMPDIR:-/tmp}/surface-updates.XXXXXX.jsonl")"
-followups_tmp="$(mktemp "${TMPDIR:-/tmp}/surface-followups.XXXXXX.jsonl")"
-report_tmp="$(mktemp "${TMPDIR:-/tmp}/surface-report.XXXXXX.txt")"
+updates_tmp="$(mktemp "${TMPDIR:-/tmp}/surface-updates.XXXXXX")"
+followups_tmp="$(mktemp "${TMPDIR:-/tmp}/surface-followups.XXXXXX")"
+report_tmp="$(mktemp "${TMPDIR:-/tmp}/surface-report.XXXXXX")"
 trap 'rm -f "$updates_tmp" "$followups_tmp" "$report_tmp"' EXIT
 
 python3 - "$ENG_DIR" "$updates_tmp" "$followups_tmp" >"$report_tmp" <<'PY'
 import json
+import re
 import sqlite3
 import sys
 from pathlib import Path
@@ -53,6 +54,62 @@ if surfaces_file.exists():
             continue
         rows.append(json.loads(raw))
 
+source_analysis_dir = eng_dir / "scans" / "source-analysis"
+synthetic_route_surfaces = []
+seen_synthetic_route_targets = set()
+
+
+def normalize_source_analysis_route(route: str | None) -> str | None:
+    value = str(route or "").strip()
+    if not value:
+        return None
+    if value in {"*", "**", "/", "#/", "/#/"}:
+        return None
+    if any(token in value for token in (":", "{", "}")):
+        return None
+    if value.startswith(("http://", "https://")):
+        parsed = urlparse(value)
+        value = parsed.fragment.strip() or parsed.path.strip()
+        if not value:
+            return None
+    if value.startswith("/#/"):
+        value = "/#" + value[len("/#/"):]
+    elif value.startswith("#/"):
+        value = "/#" + value[len("#/"):]
+    elif value.startswith("/"):
+        value = "/#" + value
+    else:
+        value = "/#" + value.lstrip('#/')
+    return value
+
+
+if source_analysis_dir.exists():
+    for summary_path in sorted(source_analysis_dir.glob("page-batch-*-summary.json")):
+        try:
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        for route in summary.get("routes") or []:
+            normalized_route = normalize_source_analysis_route(route)
+            if not normalized_route:
+                continue
+            target = f"GET {normalized_route}"
+            if target in seen_synthetic_route_targets:
+                continue
+            seen_synthetic_route_targets.add(target)
+            synthetic_route_surfaces.append(
+                {
+                    "surface_type": "dynamic_render",
+                    "target": target,
+                    "source": "source-analysis-route-summary",
+                    "rationale": "source-analysis summary exposed a concrete SPA route that should be exercised as a page follow-up",
+                    "evidence_ref": str(summary_path.relative_to(eng_dir)),
+                    "status": "discovered",
+                }
+            )
+
+rows.extend(synthetic_route_surfaces)
+
 conn = sqlite3.connect(str(eng_dir / "cases.db"))
 conn.row_factory = sqlite3.Row
 case_rows = conn.execute(
@@ -64,9 +121,25 @@ all_case_keys = set()
 done_case_keys = set()
 done_paths = set()
 done_query_keys = set()
+known_locale_prefixes = []
+seen_locale_prefixes = set()
+
+
+def remember_locale_prefix(url_path: str | None):
+    value = str(url_path or "").strip()
+    match = re.match(r"^/([a-z]{2}(?:[-_][a-z]{2})?)(?:/|$)", value, re.IGNORECASE)
+    if not match:
+        return
+    prefix = f"/{match.group(1).lower()}"
+    if prefix not in seen_locale_prefixes:
+        seen_locale_prefixes.add(prefix)
+        known_locale_prefixes.append(prefix)
+
+
 for row in case_rows:
     method = (row["method"] or "GET").upper()
     url_path = row["url_path"] or "/"
+    remember_locale_prefix(url_path)
     query_raw = row["query_params"] or "{}"
     try:
         query_obj = json.loads(query_raw)
@@ -80,9 +153,51 @@ for row in case_rows:
         for key in query_obj.keys():
             done_query_keys.add((method, url_path, str(key)))
 
+for row in rows:
+    target = " ".join(str(row.get("target") or "").strip().split())
+    if not target:
+        continue
+    if target.startswith(("GET /", "POST /", "PUT /", "DELETE /", "PATCH /", "HEAD /", "OPTIONS /")):
+        _, surface_path = target.split(" ", 1)
+        remember_locale_prefix(surface_path)
+    elif "://" in target and target.startswith(("GET ", "POST ", "PUT ", "DELETE ", "PATCH ", "HEAD ", "OPTIONS ")):
+        _, absolute_target = target.split(" ", 1)
+        remember_locale_prefix(urlparse(absolute_target).path)
+
 
 def normalize_target(target: str) -> str:
     return " ".join((target or "").strip().split())
+
+
+def normalize_request_path(path: str) -> str:
+    value = str(path or "").strip()
+    if not value:
+        return "/"
+    if not value.startswith("/"):
+        value = "/" + value.lstrip("/")
+    return value
+
+
+def candidate_paths(path: str, locale_scoped: bool = False):
+    clean_path, query = split_path_query(path)
+    clean_path = normalize_request_path(clean_path)
+    candidates = []
+    if locale_scoped:
+        for prefix in known_locale_prefixes:
+            if clean_path == "/":
+                candidate = prefix
+            else:
+                candidate = f"{prefix}{clean_path}"
+            candidates.append(candidate)
+    candidates.append(clean_path)
+    deduped = []
+    seen = set()
+    for candidate in candidates:
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        deduped.append(f"{candidate}?{query}" if query else candidate)
+    return deduped
 
 
 def extract_first_method_and_path(target: str):
@@ -116,21 +231,83 @@ def split_path_query(path: str):
     return left, right
 
 
-def case_done(method: str, path: str) -> bool:
+def _placeholder_segment(segment: str) -> bool:
+    value = str(segment or "").strip()
+    if not value:
+        return False
+    if value == "...":
+        return True
+    if re.fullmatch(r"<[^>]+>", value):
+        return True
+    if re.fullmatch(r"\{[^}]+\}", value):
+        return True
+    if re.fullmatch(r"\{\{[^}]+\}\}", value):
+        return True
+    if re.fullmatch(r":[A-Za-z_][A-Za-z0-9_-]*", value):
+        return True
+    return False
+
+
+def materialize_request_path(path: str | None) -> str | None:
+    if path is None:
+        return None
     clean_path, query = split_path_query(path)
-    if "{" in clean_path or "}" in clean_path:
-        return False
-    if query and "{" in query and "}" in query:
-        key = query.split("=", 1)[0].strip()
-        return (method, clean_path, key) in done_query_keys
-    return (method, clean_path) in done_case_keys
+    clean_path = normalize_request_path(clean_path)
+
+    materialized_segments = []
+    for segment in clean_path.split("/"):
+        if _placeholder_segment(segment):
+            materialized_segments.append("1")
+        else:
+            materialized_segments.append(segment)
+    materialized_path = "/".join(materialized_segments)
+    if not materialized_path.startswith("/"):
+        materialized_path = "/" + materialized_path.lstrip("/")
+
+    if query:
+        query_pairs = []
+        for raw_pair in query.split("&"):
+            key, sep, value = raw_pair.partition("=")
+            replacement = value
+            if _placeholder_segment(value) or re.fullmatch(r"%3c[^/%\s]+%3e", value, re.IGNORECASE):
+                replacement = "1"
+            query_pairs.append(f"{key}={replacement}" if sep else key)
+        query = "&".join(query_pairs)
+
+    return f"{materialized_path}?{query}" if query else materialized_path
 
 
-def case_exists(method: str, path: str) -> bool:
-    clean_path, _ = split_path_query(path)
-    if "{" in clean_path or "}" in clean_path:
-        return False
-    return (method, clean_path) in all_case_keys
+def case_done(method: str, path: str, locale_scoped: bool = False) -> bool:
+    for candidate in candidate_paths(path, locale_scoped=locale_scoped):
+        clean_path, query = split_path_query(candidate)
+        if "{" in clean_path or "}" in clean_path:
+            continue
+        if query and "{" in query and "}" in query:
+            key = query.split("=", 1)[0].strip()
+            if (method, clean_path, key) in done_query_keys:
+                return True
+            continue
+        if (method, clean_path) in done_case_keys:
+            return True
+    return False
+
+
+def case_exists(method: str, path: str, locale_scoped: bool = False) -> bool:
+    for candidate in candidate_paths(path, locale_scoped=locale_scoped):
+        clean_path, _ = split_path_query(candidate)
+        if "{" in clean_path or "}" in clean_path:
+            continue
+        if (method, clean_path) in all_case_keys:
+            return True
+    return False
+
+
+def first_missing_candidate_path(method: str, path: str, locale_scoped: bool = False) -> str:
+    candidates = candidate_paths(path, locale_scoped=locale_scoped)
+    for candidate in candidates:
+        if not case_exists(method, candidate):
+            return candidate
+    return candidates[0]
 
 
 def host_in_scope(host: str | None) -> bool:
@@ -152,7 +329,7 @@ def host_in_scope(host: str | None) -> bool:
 def parse_target_request(target: str):
     target = normalize_target(target)
     if not target:
-        return None, None, None, None
+        return None, None, None, None, False
     parts = target.split(" ", 1)
     if len(parts) == 2 and parts[0].upper() in {"GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"}:
         method = parts[0].upper()
@@ -161,28 +338,28 @@ def parse_target_request(target: str):
         method = None
         rest = target
 
+    locale_scoped = False
+    if rest.startswith("locale-scoped "):
+        locale_scoped = True
+        rest = rest[len("locale-scoped "):].strip()
+
     if rest.startswith(("http://", "https://")):
         parsed = urlparse(rest)
         path = parsed.path or "/"
         if parsed.query:
             path = f"{path}?{parsed.query}"
-        return method or "GET", path, rest, (parsed.hostname or "").lower()
+        return method or "GET", path, rest, (parsed.hostname or "").lower(), locale_scoped
 
     if method:
-        return method, rest, None, None
+        return method, rest, None, None, locale_scoped
 
-    return None, None, None, None
+    return None, None, None, None, locale_scoped
 
 
 def target_is_nonrequestable(target: str, path: str | None) -> bool:
-    value = normalize_target(target)
-    check = f"{value} {path or ''}".lower()
-    markers = [
-        "...",
-        "<",
-        ">",
-        "{",
-        "}",
+    value = normalize_target(target).lower()
+    path_value = str(path or "").lower()
+    structural_markers = [
         " -> ",
         " and ",
         " or ",
@@ -191,9 +368,18 @@ def target_is_nonrequestable(target: str, path: str | None) -> bool:
         "frontend routes ",
         "spa routes ",
     ]
-    if any(marker in check for marker in markers):
+    unresolved_path_markers = [
+        "...",
+        "<",
+        ">",
+        "{",
+        "}",
+    ]
+    if any(marker in value for marker in structural_markers):
         return True
-    if "*" in (path or "") or "*" in value:
+    if any(marker in path_value for marker in unresolved_path_markers):
+        return True
+    if "*" in path_value or "*" in value:
         return True
     return False
 
@@ -226,6 +412,7 @@ def followup_type(method: str, path: str) -> str:
 
 def build_followup(method: str, path: str, target: str, absolute_url: str | None = None):
     clean_path, query = split_path_query(path)
+    clean_path = normalize_request_path(clean_path)
     if absolute_url:
         parsed = urlparse(absolute_url)
         full_url = urlunparse((parsed.scheme, parsed.netloc, clean_path, "", query, ""))
@@ -261,7 +448,9 @@ for row in rows:
     if status != "discovered" or not target:
         continue
 
-    method, path, absolute_url, absolute_host = parse_target_request(target)
+    method, path, absolute_url, absolute_host, locale_scoped = parse_target_request(target)
+    if method and path:
+        path = materialize_request_path(path)
     decision = None
     reason = None
 
@@ -283,7 +472,7 @@ for row in rows:
     elif target == "POST /rest/user/login" and (validated_creds or finding_mentions("post /rest/user/login", "validated admin jwt", "hardcoded client-side test credentials allow authenticated admin access")):
         decision = "covered"
         reason = "login surface was validated during credential replay and admin JWT acquisition"
-    elif method and path and case_done(method, path):
+    elif method and path and case_done(method, path, locale_scoped=locale_scoped):
         decision = "covered"
         reason = "matching representative case already completed in the queue"
     elif target == "GET /rest/user/security-question?email={email}" and case_done("GET", "/rest/user/security-question?email="):
@@ -307,9 +496,11 @@ for row in rows:
         })
         continue
 
-    if method and path and not case_exists(method, path) and (method, path) not in seen_followups:
-        followups.append(build_followup(method, path, target, absolute_url))
-        seen_followups.add((method, path))
+    if method and path and not case_exists(method, path, locale_scoped=locale_scoped):
+        followup_path = first_missing_candidate_path(method, path, locale_scoped=locale_scoped)
+        if (method, followup_path) not in seen_followups:
+            followups.append(build_followup(method, followup_path, target, absolute_url if not locale_scoped else None))
+            seen_followups.add((method, followup_path))
         remaining.append(f"{surface_type} | {target}")
         continue
 
