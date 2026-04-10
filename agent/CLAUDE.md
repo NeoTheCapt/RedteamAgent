@@ -288,6 +288,7 @@ Resume rules:
 - On `/resume`, NEVER fetch into a placeholder agent name such as `resume_operator` / `resume-operator`. Determine the real downstream assignee from the batch type first, then fetch directly into that agent (`vulnerability-analyst` for `api|form|upload|graphql|websocket`; `source-analyzer` for `api-spec|page|javascript|stylesheet|data|unknown`).
 - On `/resume`, `stylesheet` MUST be fetched for `source-analyzer` in the SAME turn as the matching dispatch. Do not leave stylesheet rows sitting in `processing` under a resume placeholder.
 - On `/resume`, fetch through `./scripts/fetch_batch_to_file.sh` and keep the full JSON batch on disk; do NOT `cat` the batch file or paste raw fetched JSON back into the model context.
+- For queue summaries, prefer `./scripts/dispatcher.sh "$ENG_DIR/cases.db" stats` over hand-written sqlite queries; if custom SQL is truly needed, inspect the schema first and use `url_path` (never a nonexistent `path` column).
 - After `reset-stale`, either dispatch exactly one concrete next batch in the SAME turn or write an explicit `Run stop` log entry with a stop reason.
 - Do NOT leave `/resume` on a queue summary, `dispatcher.sh ... stats`, or a batch fetch without the matching subagent dispatch / case-outcome update in that same turn.
 - When printing diagnostic banner lines that start with `-`, NEVER use bare `printf '---label---\n'`; bash can parse that as an option and abort the step. Use `printf '%s\n' '---label---'` (or `echo '---label---'`) instead.

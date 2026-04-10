@@ -64,6 +64,8 @@ else
 fi
 ```
 
+For queue summaries during resume, prefer `./scripts/dispatcher.sh "$ENG_DIR/cases.db" stats` over ad-hoc sqlite. If you truly need custom SQL, inspect the schema first and use `url_path` rather than a nonexistent `path` column.
+
 If `consume_test` resume is still blocked by leftover `processing` rows for the real downstream agent, log the recovery and force-reset them immediately before the next fetch:
 
 ```bash
