@@ -29,6 +29,54 @@ _source_queue_is_high_signal_page() {
     return 1
 }
 
+_source_queue_is_repo_artifact_path() {
+    local path_lower="$(_source_queue_lower "$1")"
+    [[ "$path_lower" =~ ^/(ftp|downloads?|downloads-public|artifacts?|assets?|backups?|exports?|dumps?|files?)(/|$) ]]
+}
+
+_source_queue_has_sensitive_doc_keyword() {
+    local value_lower="$(_source_queue_lower "$1")"
+    [[ "$value_lower" =~ (auth|credential|secret|token|password|passwd|key|config|settings|backup|dump|export|incident|security|admin|account|wallet|payment|invoice|access|recover|reset|support) ]]
+}
+
+_source_queue_is_high_signal_repo_artifact() {
+    local path_lower="$(_source_queue_lower "$1")"
+    local basename_lower="${path_lower##*/}"
+    local stem_lower="$basename_lower"
+
+    # Strip one layer of backup-ish wrapper suffix so `config.json.bak` still
+    # evaluates like the underlying structured artifact, while `notes.md.bak`
+    # can still be suppressed as low-yield prose.
+    stem_lower="${stem_lower%.bak}"
+    stem_lower="${stem_lower%.backup}"
+    stem_lower="${stem_lower%.old}"
+    stem_lower="${stem_lower%.orig}"
+    stem_lower="${stem_lower%.save}"
+    stem_lower="${stem_lower%.swp}"
+    stem_lower="${stem_lower%.tmp}"
+
+    [[ "$basename_lower" =~ \.(kdbx|sqlite|db|sql|dump|ya?ml|toml|ini|cfg|conf|env|pem|key|crt|cer|p12|pfx|ovpn|ppk|plist|json)(\.|$) ]] && return 0
+    [[ "$basename_lower" =~ \.(zip|tar|tgz|gz|bz2|xz|7z|rar)(\.|$) ]] && return 0
+    [[ "$basename_lower" =~ \.(bak|backup|old|orig|save|swp|tmp)(\.|$) ]] && [[ "$stem_lower" =~ \.(json|ya?ml|toml|ini|cfg|conf|env|sql|db|sqlite|kdbx|pem|key|crt|cer|p12|pfx|ovpn|ppk|plist)(\.|$) ]] && return 0
+
+    if [[ "$basename_lower" =~ \.(md|markdown|txt|text|csv|tsv|url|webloc|rtf|doc|docx|pdf)(\.|$) ]]; then
+        _source_queue_has_sensitive_doc_keyword "$basename_lower"
+        return $?
+    fi
+
+    if [[ "$basename_lower" =~ \.(bak|backup|old|orig|save|swp|tmp)(\.|$) ]]; then
+        if [[ "$stem_lower" =~ \.(md|markdown|txt|text|csv|tsv|url|webloc|rtf|doc|docx|pdf)(\.|$) ]]; then
+            _source_queue_has_sensitive_doc_keyword "$stem_lower"
+            return $?
+        fi
+        _source_queue_has_sensitive_doc_keyword "$stem_lower"
+        return $?
+    fi
+
+    _source_queue_has_sensitive_doc_keyword "$basename_lower"
+    return $?
+}
+
 _source_queue_is_high_signal_data() {
     local path_lower="$(_source_queue_lower "$1")"
 
@@ -40,10 +88,14 @@ _source_queue_is_high_signal_data() {
     [[ "$path_lower" =~ (^|/)(assetlinks\.json|apple-app-site-association|manifest\.json|crossdomain\.xml|clientaccesspolicy\.xml)$ ]] && return 0
     [[ "$path_lower" =~ (^|/)(config|settings|app-config|bootstrap|runtime)(\.|-|_|/|$) ]] && return 0
 
-    # Keep concrete artifact paths from exposed file repositories. These routinely
-    # produce the highest-value follow-up cases (backups, KeePass stores, configs,
-    # leaked docs) but were previously dropped as generic data files.
-    [[ "$path_lower" =~ ^/(ftp|downloads?|downloads-public|artifacts?|assets?|backups?|exports?|dumps?|files?)(/|$) ]] && return 0
+    # Exposed file-repository paths are valuable, but only the high-signal subset
+    # should enter the serialized source-analysis queue. Otherwise generic docs and
+    # link files starve API follow-up work and tank recall.
+    if _source_queue_is_repo_artifact_path "$path_lower"; then
+        _source_queue_is_high_signal_repo_artifact "$path_lower"
+        return $?
+    fi
+
     [[ "$path_lower" =~ \.(bak|backup|old|orig|save|swp|tmp|kdbx|sqlite|db|sql|dump|log|ya?ml|toml|ini|cfg|conf|env|pem|key|crt|cer|p12|pfx|ovpn|ppk|pyc|plist)(\.|$) ]] && return 0
     return 1
 }
