@@ -27,6 +27,13 @@ _ACTIVE_CONTAINER_SUPERVISORS: dict[int, object] = {}
 _ACTIVE_CONTAINER_SUPERVISORS_LOCK = Lock()
 
 
+def _run_deleted_during_supervision(run: Run, exc: BaseException) -> bool:
+    return (
+        isinstance(exc, (db.RunNotFoundError, AssertionError, sqlite3.IntegrityError))
+        and db.get_run_by_id(run.id) is None
+    )
+
+
 def runtime_root_for(run: Run) -> Path:
     return Path(run.engagement_root) / "runtime"
 
@@ -3196,6 +3203,11 @@ def _start_container_supervisor(
                     log_follower,
                     log_handle,
                 )
+            except Exception as exc:
+                if _run_deleted_during_supervision(run, exc):
+                    _close_log_streams(log_follower, log_handle)
+                    return
+                raise
             finally:
                 with _ACTIVE_CONTAINER_SUPERVISORS_LOCK:
                     if _ACTIVE_CONTAINER_SUPERVISORS.get(run.id) is supervisor_token:
