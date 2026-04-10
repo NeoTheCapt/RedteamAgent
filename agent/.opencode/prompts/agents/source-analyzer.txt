@@ -136,7 +136,7 @@ paths during unattended runs.
 
 Output: case IDs analyzed, NEW ENDPOINTS as JSON lines for requeue:
   {"method":"GET","url":"https://target/api/found?limit=10","url_path":"/api/found","type":"api","source":"source-analyzer","query_params":{"limit":"10"},"body_params":{},"path_params":{}}
-  {"method":"POST","url":"https://target/rest/user/login","url_path":"/rest/user/login","type":"api","source":"source-analyzer","query_params":{},"body_params":{"email":"demo@target.local","password":"Password123!"},"path_params":{}}
+  {"method":"POST","url":"https://target/api/auth/login","url_path":"/api/auth/login","type":"api","source":"source-analyzer","query_params":{},"body_params":{"email":"user@example.com","password":"discovered_password"},"path_params":{}}
 Plus any secrets/tokens for findings.md.
 Your final handoff MUST end with a literal `### Case Outcomes` section. Every input case ID must
 appear there exactly once using one of these forms:

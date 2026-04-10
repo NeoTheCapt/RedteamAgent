@@ -10,7 +10,7 @@
 /opencode.json
 /tools/
 /local-openclaw/
-/tests/
+/tests/orchestrator/
 /orchestrator/backend/data/
 docs/**
 !docs/
