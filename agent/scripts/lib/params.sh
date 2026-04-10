@@ -154,8 +154,9 @@ extract_cookie_params() {
 
 # generate_params_sig <query_params_json> <body_params_json> [url]
 # Generate a dedup signature: md5 hash of lowercased origin + sorted parameter KEY names.
-# Include underscore-prefixed control-marker values (for example `_followup`) so
-# agent-internal follow-up variants do not collapse into the same queue entry.
+# Preserve underscore-prefixed control-marker values (for example `_followup`) and
+# concrete redirect/URL-like follow-up values so bounded source-driven variants do
+# not collapse into one queue entry.
 # Requests on different origins/ports must not collapse into the same queue entry.
 generate_params_sig() {
   local query_json="${1:-"{}"}"
@@ -165,21 +166,45 @@ generate_params_sig() {
   origin="$(extract_url_origin "$url")"
 
   # Merge keys from both JSON objects, sort, and join with the request origin.
-  # Preserve underscore-prefixed control markers with values so bounded follow-up
-  # probes can coexist without exploding normal user-input permutations.
+  # Preserve underscore-prefixed control markers with values so agent-internal
+  # follow-up probes can coexist, and pin concrete redirect/URL-style values so
+  # meaningful bounded follow-ups (for example redirect destinations or return URLs)
+  # do not dedupe away.
   local dedup_material
   dedup_material=$(printf '%s\n%s\n%s' "$query_json" "$body_json" "$origin" | jq -Rs '
+    def is_control_key:
+      startswith("_");
+
+    def is_redirectish_key:
+      ascii_downcase
+      | test("^(next|return|returnto|return_to|redirect|redirectto|redirect_to|redir|to|url|uri|dest|destination|continue|callback|target)$");
+
+    def is_urlish_value:
+      type == "string"
+      and test("^(?:[A-Za-z][A-Za-z0-9+.-]*:)?//|^/|^\\./|^\\.\\./");
+
+    def value_pins($label):
+      to_entries
+      | map(
+          select(
+            (.key | is_control_key)
+            or (.key | is_redirectish_key)
+            or (.value | is_urlish_value)
+          )
+          | "\($label):\(.key)=\(.value | tojson)"
+        )
+      | sort
+      | join(",");
+
     split("\n") as $parts
     | ($parts[0] | fromjson? // {}) as $q
     | ($parts[1] | fromjson? // {}) as $b
     | ($parts[2] // "") as $origin
-    | ($q | to_entries | map(select(.key | startswith("_")) | "\(.key)=\(.value | tojson)") | sort | join(",")) as $q_controls
-    | ($b | to_entries | map(select(.key | startswith("_")) | "\(.key)=\(.value | tojson)") | sort | join(",")) as $b_controls
     | [
         $origin,
         ((($q | keys) + ($b | keys)) | unique | join(",")),
-        $q_controls,
-        $b_controls
+        ($q | value_pins("q")),
+        ($b | value_pins("b"))
       ]
     | join("|")
   ')

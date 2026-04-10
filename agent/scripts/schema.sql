@@ -43,7 +43,8 @@ CREATE TABLE IF NOT EXISTS cases (
     created_at TEXT DEFAULT (datetime('now')),
     consumed_at TEXT,
 
-    -- Dedup signature: hash of sorted query/body param KEYS (not values)
+    -- Dedup signature: hash of origin + sorted param keys, plus bounded
+    -- high-signal follow-up values (underscore control markers and redirect/URL-like values)
     params_key_sig TEXT,
 
     UNIQUE(method, url_path, params_key_sig)

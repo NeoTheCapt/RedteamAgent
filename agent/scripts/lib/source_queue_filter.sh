@@ -21,6 +21,7 @@ _source_queue_is_high_signal_page() {
 
     [[ "$path_lower" =~ (^|/)(account|auth|login|register|signin|signup|logout)(/|$) ]] && return 0
     [[ "$path_lower" =~ (^|/)(forgot|forget|reset|recover|recovery|security-reset|security|verify|verification|mfa|otp|2fa|protect|security-assistant)(/|$) ]] && return 0
+    [[ "$path_lower" =~ (^|/)(redirect|redirector|redir|bounce|goto|jump|out|away)(/|$) ]] && return 0
     [[ "$path_lower" =~ (^|/)support-center/channel-verification(/|$) ]] && return 0
     [[ "$path_lower" =~ (^|/)(broker|sub-account|subaccount|oauth|wallet|watchlist|trade|asset|defi)(/|$) ]] && return 0
     [[ "$path_lower" =~ (^|/)(docs-v[0-9]+|api-docs?|swagger|openapi)(/|$) ]] && return 0
