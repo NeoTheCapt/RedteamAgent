@@ -174,7 +174,9 @@ without reinterpretation.
 11. CONTENT VALIDATION: Before analyzing any downloaded file:
    - Verify file type matches expectation (use `file` command or check first bytes)
    - If a .js/.json/.pyc file contains "<!DOCTYPE html>", it is an SPA catch-all — skip it
+   - If a .js/.css/.json artifact contains XML/HTML object-storage errors such as `NoSuchKey` or `AccessDenied`, treat it as a bad fetch path / stale object reference, not as real source content
    - If multiple files have identical byte sizes, they are likely the same SPA fallback
+   - When a manifest or chunk map lists relative asset paths, preserve those paths exactly; do NOT prepend guessed version directories or CDN subpaths unless the manifest itself proves that base
    Never report findings from HTML error pages misidentified as source files.
 12. SURFACE DISCOVERY: When bundles, routes, specs, or secrets clearly expose a high-risk flow,
     emit it under `#### Surface Candidates`. Allowed `surface_type` values:
