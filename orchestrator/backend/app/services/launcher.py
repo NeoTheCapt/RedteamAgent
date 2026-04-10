@@ -127,6 +127,10 @@ RUN_STALL_TIMEOUT_SECONDS = 900
 PROCESSING_AGENT_MISMATCH_GRACE_SECONDS = 120
 PENDING_QUEUE_DISPATCH_GRACE_SECONDS = 120
 PERMISSION_REQUEST_GRACE_SECONDS = 60
+AUTO_RESUME_STALL_GRACE_SECONDS = max(
+    PROCESSING_AGENT_MISMATCH_GRACE_SECONDS,
+    PENDING_QUEUE_DISPATCH_GRACE_SECONDS,
+)
 # Real targets can spend several minutes in autonomous initialization/recon before the
 # first queue item or observed path lands. Keep the live launcher watchdog aligned with
 # the API reconciler so we do not fail healthy slow-start recon while subagent dispatch
@@ -1196,6 +1200,17 @@ def _latest_runtime_metadata_activity_at(run: Run) -> float | None:
     return latest
 
 
+def _auto_resume_stall_guard_active(run: Run) -> bool:
+    value = _read_run_metadata(run).get("auto_resume_started_at")
+    try:
+        started_at = float(value or 0.0)
+    except (TypeError, ValueError):
+        return False
+    if started_at <= 0:
+        return False
+    return (time.time() - started_at) < AUTO_RESUME_STALL_GRACE_SECONDS
+
+
 def _running_container_stall_reason(run: Run) -> tuple[str, str, str] | None:
     engagement_dir = _active_engagement_dir(run)
     current_phase, total_cases, pending_cases, processing_cases = _load_running_queue_state(engagement_dir)
@@ -1227,6 +1242,7 @@ def _running_container_stall_reason(run: Run) -> tuple[str, str, str] | None:
 
     runtime_activity_at = _latest_running_runtime_activity_at(run)
     metadata_activity_at = _latest_runtime_metadata_activity_at(run)
+    auto_resume_guard_active = _auto_resume_stall_guard_active(run)
     active_runtime_agents = _active_runtime_agents(run)
     has_current_task = _run_metadata_has_current_task(run)
     processing_agents = _load_running_processing_agents(engagement_dir)
@@ -1255,6 +1271,7 @@ def _running_container_stall_reason(run: Run) -> tuple[str, str, str] | None:
         and pending_cases > 0
         and processing_cases == 0
         and not active_runtime_agents
+        and not auto_resume_guard_active
         and workflow_age is not None
         and workflow_age >= PENDING_QUEUE_DISPATCH_GRACE_SECONDS
     ):
@@ -1269,6 +1286,7 @@ def _running_container_stall_reason(run: Run) -> tuple[str, str, str] | None:
         and orphaned_fetch is not None
         and str(orphaned_fetch.get("agent") or "") in processing_agents
         and str(orphaned_fetch.get("agent") or "") not in active_runtime_agents
+        and not auto_resume_guard_active
         and (time.time() - float(orphaned_fetch.get("timestamp") or 0.0)) >= PROCESSING_AGENT_MISMATCH_GRACE_SECONDS
     ):
         batch_type = str(orphaned_fetch.get("batch_type") or "queue")
@@ -1317,8 +1335,13 @@ def _running_container_stall_reason(run: Run) -> tuple[str, str, str] | None:
         stale_processing_activity_at = metadata_activity_at
     recent_processing_handoff = (
         not active_runtime_agents
-        and stale_processing_activity_at is not None
-        and (time.time() - stale_processing_activity_at) < PROCESSING_AGENT_MISMATCH_GRACE_SECONDS
+        and (
+            auto_resume_guard_active
+            or (
+                stale_processing_activity_at is not None
+                and (time.time() - stale_processing_activity_at) < PROCESSING_AGENT_MISMATCH_GRACE_SECONDS
+            )
+        )
     )
     if current_phase not in EARLY_PHASE_STALL_PHASES and stale_processing_agents and not recent_processing_handoff:
         assigned = ", ".join(sorted(stale_processing_agents))
@@ -3164,6 +3187,7 @@ def _maybe_auto_resume_run(
             )
 
     next_attempt = attempt + 1
+    _update_run_metadata(run, auto_resume_started_at=time.time())
     _set_auto_resume_count(run, next_attempt)
     _set_auto_resume_progress(run, resolved_count)
     _append_runtime_event(

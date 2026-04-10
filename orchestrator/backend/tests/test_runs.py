@@ -864,6 +864,96 @@ def test_list_runs_marks_pending_queue_stall_failed_even_if_only_exploit_artifac
     assert "pending queue items remained undispatched" in metadata["stop_reason_text"]
 
 
+def test_list_runs_keeps_recent_auto_resume_pending_queue_alive(monkeypatch):
+    client = TestClient(app)
+    token = register_and_login(client, "alice-auto-resume-list")
+    project = create_project(client, token)
+
+    create_run = client.post(
+        f"/projects/{project['id']}/runs",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"target": "https://example.com"},
+    )
+    assert create_run.status_code == 201
+    run = create_run.json()
+    db.update_run_status(run["id"], "running")
+
+    run_root = Path(run["engagement_root"])
+    runtime_dir = run_root / "runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    process_log = runtime_dir / "process.log"
+    process_log.write_text("resume requested\n", encoding="utf-8")
+    old_epoch = datetime.now().timestamp() - 240
+    os.utime(process_log, (old_epoch, old_epoch))
+
+    workspace = run_root / "workspace"
+    engagement_dir = workspace / "engagements" / "2026-03-28-000001-auto-resume"
+    engagement_dir.mkdir(parents=True, exist_ok=True)
+    (workspace / "engagements" / ".active").write_text(
+        "engagements/2026-03-28-000001-auto-resume\n",
+        encoding="utf-8",
+    )
+    scope_path = engagement_dir / "scope.json"
+    scope_path.write_text(
+        json.dumps(
+            {
+                "status": "in_progress",
+                "current_phase": "consume_test",
+                "phases_completed": ["recon", "collect"],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    os.utime(scope_path, (old_epoch, old_epoch))
+    log_path = engagement_dir / "log.md"
+    log_path.write_text("resume handoff in progress\n", encoding="utf-8")
+    os.utime(log_path, (old_epoch, old_epoch))
+    with sqlite3.connect(engagement_dir / "cases.db") as connection:
+        connection.execute(
+            "CREATE TABLE cases (id INTEGER PRIMARY KEY AUTOINCREMENT, status TEXT NOT NULL)"
+        )
+        connection.executemany(
+            "INSERT INTO cases(status) VALUES (?)",
+            [("pending",), ("done",)],
+        )
+        connection.commit()
+    os.utime(engagement_dir / "cases.db", (old_epoch, old_epoch))
+
+    (run_root / "run.json").write_text(
+        json.dumps(
+            {
+                "current_phase": "consume_test",
+                "current_task_name": None,
+                "current_agent_name": None,
+                "auto_resume_started_at": datetime.now().timestamp(),
+                "agents": [
+                    {
+                        "agent_name": "operator",
+                        "phase": "consume_test",
+                        "status": "active",
+                        "updated_at": "2026-03-28 00:00:01",
+                    }
+                ],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr("app.services.runs.locate_runtime_pid", lambda _run: 12345)
+    stopped: list[int] = []
+    monkeypatch.setattr("app.services.runs.stop_run_runtime", lambda reconciled_run: stopped.append(reconciled_run.id))
+
+    runs_response = client.get(
+        f"/projects/{project['id']}/runs",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert runs_response.status_code == 200
+    assert runs_response.json()[0]["status"] == "running"
+    assert stopped == []
+
+
 def test_list_runs_marks_corrupt_cases_db_failed(monkeypatch):
     client = TestClient(app)
     token = register_and_login(client, "alice")

@@ -4211,3 +4211,80 @@ def test_auto_resume_requeues_orphaned_processing_cases_before_resume(monkeypatc
         and "Re-queued 1 orphaned processing case(s) from source-analyzer before /resume." in event.summary
         for event in events
     )
+
+
+def test_running_container_stall_reason_grants_dispatch_grace_after_auto_resume():
+    client = TestClient(app)
+    token = register_and_login(client, "alice-auto-resume-grace")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "https://resume-grace.example")
+    db.update_run_status(run["id"], "running")
+
+    run_row = db.get_run_by_id(run["id"])
+    assert run_row is not None
+
+    run_root = Path(run_row.engagement_root)
+    process_log = run_root / "runtime" / "process.log"
+    process_log.parent.mkdir(parents=True, exist_ok=True)
+    process_log.write_text("resume dispatched\n", encoding="utf-8")
+
+    workspace = run_root / "workspace"
+    engagement_dir = workspace / "engagements" / "2026-04-02-093000-auto-resume-grace"
+    engagement_dir.mkdir(parents=True, exist_ok=True)
+    (workspace / "engagements" / ".active").write_text(
+        "engagements/2026-04-02-093000-auto-resume-grace\n",
+        encoding="utf-8",
+    )
+    scope_path = engagement_dir / "scope.json"
+    scope_path.write_text(
+        json.dumps(
+            {
+                "status": "in_progress",
+                "current_phase": "consume_test",
+                "phases_completed": ["recon", "collect"],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    log_path = engagement_dir / "log.md"
+    log_path.write_text("waiting for resumed dispatch\n", encoding="utf-8")
+    with sqlite3.connect(engagement_dir / "cases.db") as connection:
+        connection.execute(
+            "CREATE TABLE cases (id INTEGER PRIMARY KEY AUTOINCREMENT, status TEXT NOT NULL)"
+        )
+        connection.execute("INSERT INTO cases(status) VALUES ('pending')")
+        connection.commit()
+
+    import os
+
+    old_epoch = datetime.now().timestamp() - 240
+    os.utime(process_log, (old_epoch, old_epoch))
+    os.utime(scope_path, (old_epoch, old_epoch))
+    os.utime(log_path, (old_epoch, old_epoch))
+    os.utime(engagement_dir / "cases.db", (old_epoch, old_epoch))
+
+    (run_root / "run.json").write_text(
+        json.dumps(
+            {
+                "current_phase": "consume_test",
+                "current_task_name": None,
+                "current_agent_name": None,
+                "auto_resume_started_at": datetime.now().timestamp(),
+                "agents": [
+                    {
+                        "agent_name": "operator",
+                        "phase": "consume_test",
+                        "status": "active",
+                        "updated_at": "2026-04-02 09:33:10",
+                    }
+                ],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    from app.services.launcher import _running_container_stall_reason
+
+    assert _running_container_stall_reason(run_row) is None

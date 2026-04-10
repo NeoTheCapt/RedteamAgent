@@ -41,6 +41,7 @@ from .launcher import (
     _latest_runtime_metadata_activity_at,
     _run_metadata_has_current_task,
     _stale_processing_agents,
+    _auto_resume_stall_guard_active,
 )
 
 ALLOWED_STATUSES = {"queued", "running", "completed", "failed"}
@@ -447,6 +448,7 @@ def _reconcile_run_status(run: Run, project: Project | None = None, user: User |
                 return failed
 
         active_runtime_agents = _active_runtime_agents(run)
+        auto_resume_guard_active = _auto_resume_stall_guard_active(run)
         processing_agents = _load_processing_agents(scope_path)
         opencode_logs_root = opencode_home_root_for(run) / "log"
         permission_log_paths = [process_log_path_for(run)]
@@ -480,6 +482,7 @@ def _reconcile_run_status(run: Run, project: Project | None = None, user: User |
             and pending_cases > 0
             and processing_cases == 0
             and not active_runtime_agents
+            and not auto_resume_guard_active
             and workflow_activity_at is not None
             and (_utc_now_naive() - workflow_activity_at) >= timedelta(seconds=PENDING_QUEUE_DISPATCH_GRACE_SECONDS)
         ):
@@ -497,6 +500,7 @@ def _reconcile_run_status(run: Run, project: Project | None = None, user: User |
             and orphaned_fetch is not None
             and str(orphaned_fetch.get("agent") or "") in processing_agents
             and str(orphaned_fetch.get("agent") or "") not in active_runtime_agents
+            and not auto_resume_guard_active
             and (_utc_now_naive() - _utc_datetime_from_timestamp(float(orphaned_fetch.get("timestamp") or 0.0)))
             >= timedelta(seconds=PROCESSING_AGENT_MISMATCH_GRACE_SECONDS)
         ):
@@ -561,9 +565,14 @@ def _reconcile_run_status(run: Run, project: Project | None = None, user: User |
             stale_processing_activity_at = metadata_activity
         recent_processing_handoff = (
             not active_runtime_agents
-            and stale_processing_activity_at is not None
-            and (_utc_now_naive() - stale_processing_activity_at)
-            < timedelta(seconds=PROCESSING_AGENT_MISMATCH_GRACE_SECONDS)
+            and (
+                auto_resume_guard_active
+                or (
+                    stale_processing_activity_at is not None
+                    and (_utc_now_naive() - stale_processing_activity_at)
+                    < timedelta(seconds=PROCESSING_AGENT_MISMATCH_GRACE_SECONDS)
+                )
+            )
         )
         if (
             current_phase.replace("_", "-") not in EARLY_PHASE_STALL_PHASES
