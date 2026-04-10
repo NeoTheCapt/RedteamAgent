@@ -25,6 +25,8 @@ When the task already provides a saved batch file or engagement workspace artifa
 - For `page` batches, read the saved HTML/headers first, then only the specific JS/CSS files referenced by that page.
 - Do **not** dump or `read` entire large/minified bundles into context. Use targeted searches with strict caps (`grep -n -m`, `sed -n`, `head`, `tail`, `jq`) and keep only the matched lines you need.
 - If a JS/CSS bundle is large or minified, treat it like an index: extract concrete routes/endpoints/secrets with bounded regex passes instead of broad whole-file scans.
+- When a saved manifest (`asset-manifest.json`, chunk map, preload map, SSR config) lists JS/CSS asset paths, preserve the manifest path exactly as written unless the file itself proves a different absolute base. Do **not** prepend nearby version directories, CDN prefixes, or guessed parent paths just because adjacent config exposes a `versionUrls` map.
+- If a fetched `.js`/`.css`/`.json` artifact contains XML/HTML object-storage errors such as `NoSuchKey`, `AccessDenied`, or SPA fallback markup, treat that as a retrieval-path problem rather than real source content. Reconstruct follow-up URLs from the manifest/root HTML exactly, prefer relative-path joins over guessed version prefixes, and clearly mark stale placeholder artifacts as exhausted.
 - Avoid the `file` utility in runtime containers; rely on headers, file extensions, `wc -c`, or tiny Python snippets if you need type/size hints.
 - Stop after a few bounded passes per artifact and return concise structured results. Do not spend the whole task spelunking one huge bundle.
 
