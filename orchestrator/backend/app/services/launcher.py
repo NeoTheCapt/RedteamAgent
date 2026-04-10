@@ -449,6 +449,11 @@ def _normalize_scope_file(scope_path: Path, *, run: Run | None = None) -> dict[s
             payload["phases_completed"] = normalized
             changed = True
 
+    if _promote_completed_scope_from_artifacts(scope_path, payload):
+        changed = True
+        current_phase = _canonical_phase_name(payload.get("current_phase"))
+        status_name = _canonical_scope_status(payload.get("status"))
+
     if status_name == "complete" and not str(payload.get("end_time") or "").strip():
         ended_at = str(getattr(run, "updated_at", "") or "").strip()
         if ended_at:
@@ -1430,6 +1435,56 @@ def _last_logged_stop_metadata(log_path: Path) -> tuple[str, str]:
 
 def _last_logged_stop_reason(log_path: Path) -> str:
     return _last_logged_stop_metadata(log_path)[1]
+
+
+def _promote_completed_scope_from_artifacts(scope_path: Path, payload: dict[str, object]) -> bool:
+    status_name = _canonical_scope_status(payload.get("status"))
+    if status_name != "complete":
+        return False
+
+    current_phase = _canonical_phase_name(payload.get("current_phase"))
+    phases_completed_raw = payload.get("phases_completed")
+    if isinstance(phases_completed_raw, list):
+        phases_completed = [
+            _canonical_phase_name(item)
+            for item in phases_completed_raw
+            if _canonical_phase_name(item)
+        ]
+    else:
+        phases_completed = []
+
+    if current_phase == "complete" and "report" in phases_completed:
+        return False
+
+    engagement_dir = scope_path.parent
+    log_path = engagement_dir / "log.md"
+    report_path = engagement_dir / "report.md"
+    cases_db = engagement_dir / "cases.db"
+    surfaces_path = engagement_dir / "surfaces.jsonl"
+
+    reason_code, _reason_text = _last_logged_stop_metadata(log_path)
+    if reason_code != "completed":
+        return False
+    if not report_path.exists():
+        return False
+    if not _report_has_substantive_content(report_path.read_text(encoding="utf-8", errors="replace")):
+        return False
+
+    pending_cases, processing_cases = _count_remaining_cases(cases_db)
+    if pending_cases or processing_cases:
+        return False
+    if not _surface_completion_ok(surfaces_path):
+        return False
+
+    changed = False
+    if current_phase != "complete":
+        payload["current_phase"] = "complete"
+        changed = True
+    if "report" not in phases_completed:
+        phases_completed.append("report")
+        payload["phases_completed"] = phases_completed
+        changed = True
+    return changed
 
 
 _REPORT_REQUIRED_SECTIONS = (

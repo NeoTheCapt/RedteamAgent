@@ -2992,7 +2992,26 @@ def test_engagement_completion_state_accepts_completed_status_alias():
         + "\n",
         encoding="utf-8",
     )
-    (engagement_dir / "report.md").write_text("# report\n", encoding="utf-8")
+    (engagement_dir / "report.md").write_text(
+        "# Penetration Test Report\n\n"
+        "**Date**: 2026-03-28 — Completed\n"
+        "**Target**: https://example.com  **Scope**: example.com, *.example.com  **Status**: Completed\n\n"
+        "## Executive Summary\n"
+        "- Target: https://example.com\n"
+        "- Confirmed findings: 0 total\n\n"
+        "## Scope and Methodology\n"
+        "- Completed phases: recon, collect, consume_test, exploit, report\n\n"
+        "## Findings\n"
+        "No confirmed findings were recorded in findings.md.\n\n"
+        "## Attack Narrative\n"
+        "The engagement followed the recorded orchestrator workflow and completed reporting successfully.\n\n"
+        "## Recommendations\n"
+        "- Continue monitoring.\n\n"
+        "## Appendix\n"
+        "- cases.db rows: 2\n"
+        "- surfaces.jsonl rows: 0\n",
+        encoding="utf-8",
+    )
     (engagement_dir / "surfaces.jsonl").write_text("", encoding="utf-8")
     with sqlite3.connect(engagement_dir / "cases.db") as connection:
         connection.execute(
@@ -3013,6 +3032,84 @@ def test_engagement_completion_state_accepts_completed_status_alias():
 
     normalized = json.loads((engagement_dir / "scope.json").read_text(encoding="utf-8"))
     assert normalized["status"] == "complete"
+
+
+def test_engagement_completion_state_repairs_completed_report_scope_from_log():
+    client = TestClient(app)
+    token = register_and_login(client, "alice-repair-report-scope")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "https://example.com")
+
+    run_root = Path(run["engagement_root"])
+    workspace = run_root / "workspace"
+    engagement_dir = workspace / "engagements" / "2026-03-30-000000-example"
+    engagement_dir.mkdir(parents=True, exist_ok=True)
+    (workspace / "engagements" / ".active").write_text(
+        "engagements/2026-03-30-000000-example\n",
+        encoding="utf-8",
+    )
+    (engagement_dir / "scope.json").write_text(
+        json.dumps(
+            {
+                "status": "complete",
+                "current_phase": "report",
+                "phases_completed": ["recon", "collect", "consume_test", "exploit"],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (engagement_dir / "log.md").write_text(
+        "# Engagement Log\n\n"
+        "## [04:15] Report complete — operator\n\n"
+        "**Action**: phase 5 report\n"
+        "**Result**: persisted final report to report.md and closing engagement after final queue/coverage verification\n\n"
+        "## [04:15] Run stop — operator\n\n"
+        "**Action**: stop_reason=completed\n"
+        "**Result**: engagement complete; queue empty, collection healthy, surface coverage passed, exploit/report phases finished\n",
+        encoding="utf-8",
+    )
+    (engagement_dir / "report.md").write_text(
+        "# Penetration Test Report\n\n"
+        "**Date**: 2026-03-30 — Completed\n"
+        "**Target**: https://example.com  **Scope**: example.com, *.example.com  **Status**: Completed\n\n"
+        "## Executive Summary\n"
+        "- Target: https://example.com\n"
+        "- Confirmed findings: 0 total\n\n"
+        "## Scope and Methodology\n"
+        "- Completed phases: recon, collect, consume_test, exploit\n\n"
+        "## Findings\n"
+        "No confirmed findings were recorded in findings.md.\n\n"
+        "## Attack Narrative\n"
+        "The engagement followed the recorded orchestrator workflow and completed reporting successfully.\n\n"
+        "## Recommendations\n"
+        "- Continue monitoring.\n\n"
+        "## Appendix\n"
+        "- cases.db rows: 2\n"
+        "- surfaces.jsonl rows: 0\n",
+        encoding="utf-8",
+    )
+    (engagement_dir / "surfaces.jsonl").write_text("", encoding="utf-8")
+    with sqlite3.connect(engagement_dir / "cases.db") as connection:
+        connection.execute(
+            "CREATE TABLE cases (id INTEGER PRIMARY KEY AUTOINCREMENT, status TEXT NOT NULL)"
+        )
+        connection.executemany(
+            "INSERT INTO cases(status) VALUES (?)",
+            [("done",), ("error",)],
+        )
+        connection.commit()
+
+    from app import db as app_db
+    from app.services.launcher import engagement_completion_state
+
+    latest = app_db.get_run_by_id(run["id"])
+    assert latest is not None
+    assert engagement_completion_state(latest) == (True, "Engagement completed and finalized.")
+
+    normalized = json.loads((engagement_dir / "scope.json").read_text(encoding="utf-8"))
+    assert normalized["current_phase"] == "complete"
+    assert normalized["phases_completed"] == ["recon", "collect", "consume_test", "exploit", "report"]
 
 
 def test_normalize_active_scope_marks_completed_report_and_log_headers(monkeypatch):
