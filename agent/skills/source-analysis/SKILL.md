@@ -77,7 +77,7 @@ run_tool curl -sL "https://TARGET/openapi.json" -o $DIR/scans/openapi.json
 ./scripts/dispatcher.sh "$ENGAGEMENT_DIR/cases.db" stats
 ```
 
-This creates `api-spec` cases that should be routed to `vulnerability-analyst`.
+This creates `api-spec` cases that should stay with `source-analyzer` long enough to resolve docs/spec carriers into concrete API cases for `vulnerability-analyst`.
 
 ### 6. Source Map Analysis
 Fetch `.map` only when there is an explicit source map reference or saved map artifact. Do not brute-force nonexistent maps.

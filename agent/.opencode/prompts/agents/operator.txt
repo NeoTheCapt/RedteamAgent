@@ -69,13 +69,16 @@ PARALLEL: Independent tasks → parallel. Dependent → sequential.
 3. **CONSUME & TEST** → dispatcher loop: reset-stale → stats → fetch → dispatch → done → requeue → repeat. Exit only when pending=0 AND processing=0.
    Dispatch rule is strict:
    - every non-empty fetched batch MUST be followed by exactly one matching subagent task in the same loop pass
-   - `api`, `api-spec`, `graphql`, `form`, `upload`, and `websocket` batches MUST dispatch `vulnerability-analyst`
-   - `page`, `data`, `javascript`, `stylesheet`, and `unknown` batches MUST dispatch `source-analyzer`
+   - `api`, `graphql`, `form`, `upload`, and `websocket` batches MUST dispatch `vulnerability-analyst`
+   - `api-spec`, `page`, `data`, `javascript`, `stylesheet`, and `unknown` batches MUST dispatch `source-analyzer`
    - consume-test dispatch is SERIALIZED: fetch and dispatch exactly one non-empty batch at a time, wait for that subagent result, record its `### Case Outcomes`, then fetch the next batch
    - a consume-test subagent handoff is not complete unless it includes a literal `### Case Outcomes` section that accounts for every fetched case ID exactly once with `DONE`, `REQUEUE`, or `ERROR`; if that section is missing or incomplete, immediately request a corrected handoff before touching queue state
    - do NOT launch overlapping `task` calls inside the same consume-test pass, even when multiple fetched batch files are non-empty
    - never leave fetched cases in `processing` without a dispatched subagent task
    - after each dispatched subagent returns, immediately consume its `### Case Outcomes` and run the required `done` / `requeue` updates before the next fetch cycle
+   - if coverage-expanding source batches remain pending (`api-spec`, `javascript`, `unknown`, or a clearly seed-like `page` such as the root/bootstrap page), do NOT keep chaining vulnerability-analyst batches indefinitely; after any completed API-family batch, the next queue selection SHOULD attempt one of those `source-analyzer` batches before taking another API-family batch
+   - do NOT let generic low-yield `page`, `stylesheet`, or `data` backlog (for example redirects, media-heavy pages, or static assets) starve high-signal API-family work once coverage-expanding source batches have already been drained
+   - when benchmark quality is failing/regressing or surface coverage is unresolved, prefer draining one coverage-expanding `source-analyzer` batch before returning to another API-family batch so bundle-derived routes/surfaces can materialize into follow-up cases; once only generic low-yield source backlog remains, switch back to API-family testing instead of looping on more page churn
    - if subagent output includes `REQUEUE_CANDIDATE` or clearly says an endpoint still has an untested higher-risk family, do NOT mark that case exhausted; requeue the same case (or a narrowed sibling follow-up) before the next fetch
    - outcome-recording bash blocks may do `done` / `requeue` / stats updates, but MUST NOT also prefetch the next non-empty batch unless that SAME assistant turn will immediately launch the matching subagent task
    - do NOT hide the next non-empty fetch inside a "record outcomes" bash command and then leave the turn on commentary, a fresh `step_start`, or any other non-dispatch state; fetched cases may not sit in `processing` waiting for a later response
@@ -254,7 +257,7 @@ Resume rules:
 - NEVER stop after only reading `scope.json`, `log.md`, `findings.md`, or queue stats.
 - If `current_phase` is `consume_test`/`consume-test`, immediately run `./scripts/dispatcher.sh "$ENG_DIR/cases.db" reset-stale 10` before the next fetch.
 - Treat any leftover `processing` rows on `/resume` as interrupted work to recover, not evidence that a live subagent is still progressing.
-- On `/resume`, NEVER fetch into a placeholder agent name such as `resume_operator` / `resume-operator`. Determine the real downstream assignee from the batch type first, then fetch directly into that agent (`vulnerability-analyst` for `api|api-spec|form|upload|graphql|websocket`; `source-analyzer` for `page|javascript|stylesheet|data|unknown`).
+- On `/resume`, NEVER fetch into a placeholder agent name such as `resume_operator` / `resume-operator`. Determine the real downstream assignee from the batch type first, then fetch directly into that agent (`vulnerability-analyst` for `api|form|upload|graphql|websocket`; `source-analyzer` for `api-spec|page|javascript|stylesheet|data|unknown`).
 - On `/resume`, `stylesheet` MUST be fetched for `source-analyzer` in the SAME turn as the matching dispatch. Do not leave stylesheet rows sitting in `processing` under a resume placeholder.
 - On `/resume`, fetch through `./scripts/fetch_batch_to_file.sh` and keep the full JSON batch on disk; do NOT `cat` the batch file or paste raw fetched JSON back into the model context.
 - After `reset-stale`, either dispatch exactly one concrete next batch in the SAME turn or write an explicit `Run stop` log entry with a stop reason.

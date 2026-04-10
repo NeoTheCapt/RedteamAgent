@@ -101,8 +101,8 @@ Determine resume point from `scope.json`, `cases.db`, and queue state:
 If resuming `consume_test`, the fetch/dispatch contract is strict:
 - decide the REAL downstream agent before the fetch
 - NEVER fetch into `resume_operator`, `resume-operator`, or any other placeholder assignee
-- `api|api-spec|form|upload|graphql|websocket` → fetch for `vulnerability-analyst`
-- `page|javascript|stylesheet|data|unknown` → fetch for `source-analyzer`
+- `api|form|upload|graphql|websocket` → fetch for `vulnerability-analyst`
+- `api-spec|page|javascript|stylesheet|data|unknown` → fetch for `source-analyzer`
 - `stylesheet` MUST route to `source-analyzer` in the SAME turn; do not leave stylesheet rows parked in `processing`
 - if any coverage-expanding `api-spec|javascript|unknown` rows remain pending, or a clearly seed-like root/bootstrap `page` is still unreviewed, attempt one of those `source-analyzer` fetches before taking another API-family batch
 - do NOT let generic low-yield `page|stylesheet|data` backlog starve high-signal API-family testing once the coverage-expanding source backlog has already been drained
@@ -119,7 +119,7 @@ DB="$ENG_DIR/cases.db"
 BATCH_FILE="$ENG_DIR/scans/resume-batch.json"
 : > "$BATCH_FILE"
 for spec in \
-  'api-spec vulnerability-analyst' \
+  'api-spec source-analyzer' \
   'javascript source-analyzer' \
   'unknown source-analyzer' \
   'api vulnerability-analyst' \

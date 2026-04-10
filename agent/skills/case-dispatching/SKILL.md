@@ -17,7 +17,7 @@ Guides consumption of the case queue — fetching batches from `cases.db`, routi
 ## The Consumption Loop
 
 **CRITICAL: Fetch cases by type SEPARATELY. Route per table below. NEVER mix types.
-NEVER send page/js/css/data to vulnerability-analyst. NEVER send api/form/upload to source-analyzer.**
+NEVER send page/js/css/data to vulnerability-analyst. NEVER send concrete api/form/upload/graphql/websocket cases to source-analyzer. Route `api-spec` to source-analyzer so docs/spec carriers can expand into concrete API cases first.**
 
 Each iteration:
 ```
@@ -25,8 +25,8 @@ Each iteration:
 2. Check stats: ./scripts/dispatcher.sh $DB stats
 3. Fetch and route by type (SERIALIZED: exactly one non-empty batch per loop pass):
 
-   vulnerability-analyst: api, api-spec, form, upload, graphql, websocket
-   source-analyzer: page, javascript, stylesheet, data, unknown
+   vulnerability-analyst: api, form, upload, graphql, websocket
+   source-analyzer: api-spec, page, javascript, stylesheet, data, unknown
 
    ./scripts/dispatcher.sh $DB fetch <type> 10 <agent_name>
    - choose the REAL downstream assignee before fetching; never park a batch under `resume_operator`, `resume-operator`, or any other placeholder assignee
@@ -48,7 +48,7 @@ Each iteration:
 | Type | Agent | Type | Agent |
 |------|-------|------|-------|
 | api | vulnerability-analyst | page | source-analyzer |
-| api-spec | vulnerability-analyst | page | source-analyzer |
+| api-spec | source-analyzer | page | source-analyzer |
 | form | vulnerability-analyst | javascript | source-analyzer |
 | upload | vulnerability-analyst | stylesheet | source-analyzer |
 | graphql | vulnerability-analyst | data | source-analyzer |
