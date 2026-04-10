@@ -69,18 +69,19 @@ def normalize_source_analysis_route(route: str | None) -> str | None:
         return None
     if value.startswith(("http://", "https://")):
         parsed = urlparse(value)
-        value = parsed.fragment.strip() or parsed.path.strip()
+        if parsed.fragment:
+            value = parsed.fragment.strip()
+        else:
+            value = parsed.path.strip()
         if not value:
             return None
     if value.startswith("/#/"):
-        value = "/#" + value[len("/#/"):]
-    elif value.startswith("#/"):
-        value = "/#" + value[len("#/"):]
-    elif value.startswith("/"):
-        value = "/#" + value
-    else:
-        value = "/#" + value.lstrip('#/')
-    return value
+        return value
+    if value.startswith("#/"):
+        return "/" + value
+    if value.startswith("/"):
+        return "/#" + value
+    return "/#/" + value.lstrip('#/')
 
 
 if source_analysis_dir.exists():
@@ -345,13 +346,21 @@ def parse_target_request(target: str):
 
     if rest.startswith(("http://", "https://")):
         parsed = urlparse(rest)
-        path = parsed.path or "/"
-        if parsed.query:
-            path = f"{path}?{parsed.query}"
+        fragment_path = normalize_source_analysis_route(f"#/{parsed.fragment.lstrip('/')}" if parsed.fragment and not parsed.fragment.startswith('#/') else parsed.fragment)
+        if fragment_path:
+            path = fragment_path
+        else:
+            path = parsed.path or "/"
+            if parsed.query:
+                path = f"{path}?{parsed.query}"
         return method or "GET", path, rest, (parsed.hostname or "").lower(), locale_scoped
 
     if method:
         return method, rest, None, None, locale_scoped
+
+    if rest.startswith("/") or rest.startswith("#/"):
+        inferred_path = normalize_source_analysis_route(rest) if "#" in rest else rest
+        return "GET", inferred_path or rest, None, None, locale_scoped
 
     return None, None, None, None, locale_scoped
 
@@ -454,10 +463,7 @@ for row in rows:
     decision = None
     reason = None
 
-    if target.startswith("GET /#/"):
-        decision = "not_applicable"
-        reason = "client-side fragment route; already represented by reviewed SPA shell/bundle and not requestable as a distinct server path"
-    elif surface_type == "dynamic_render" and target.startswith("SPA routes ") and (("GET", "/main.js") in done_case_keys or ("GET", "/") in done_case_keys):
+    if surface_type == "dynamic_render" and target.startswith("SPA routes ") and (("GET", "/main.js") in done_case_keys or ("GET", "/") in done_case_keys):
         decision = "covered"
         reason = "source analysis already reviewed the SPA bundle that disclosed these client-side routes"
     elif absolute_host and not host_in_scope(absolute_host):
