@@ -23,6 +23,8 @@ When the task already provides a saved batch file or engagement workspace artifa
 
 - Start from the saved batch file, then inspect only the directly linked local artifacts you actually need.
 - For `page` batches, read the saved HTML/headers first, then only the specific JS/CSS files referenced by that page.
+- If a saved case or adjacent crawl metadata shows a concrete in-scope asset returned successfully but the engagement-local body is missing or empty, do one bounded recovery fetch of that exact URL back into the engagement workspace before declaring the case unanalyzable.
+- Keep recovery narrow: exact case URL first, then only directly manifest-linked sibling assets when the manifest/root HTML proves them. Do **not** broaden into fresh crawling, guessed version prefixes, or speculative path construction.
 - Do **not** dump or `read` entire large/minified bundles into context. Use targeted searches with strict caps (`grep -n -m`, `sed -n`, `head`, `tail`, `jq`) and keep only the matched lines you need.
 - If a JS/CSS bundle is large or minified, treat it like an index: extract concrete routes/endpoints/secrets with bounded regex passes instead of broad whole-file scans.
 - When a saved manifest (`asset-manifest.json`, chunk map, preload map, SSR config) lists JS/CSS asset paths, preserve the manifest path exactly as written unless the file itself proves a different absolute base. Do **not** prepend nearby version directories, CDN prefixes, or guessed parent paths just because adjacent config exposes a `versionUrls` map.

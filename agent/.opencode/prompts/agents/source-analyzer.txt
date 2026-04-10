@@ -129,8 +129,7 @@ Domains & Infrastructure:
 Input: JSON array of cases (type: page/javascript/stylesheet/data) with id, method, url,
 url_path, content_type, response_snippet.
 
-Per case: download URL into the engagement workspace (cache, never re-download), analyze by type,
-compile discoveries. Use `downloads/`, `scans/`, or an engagement-local temp dir created under `$DIR`
+Per case: cache the exact case URL into the engagement workspace and analyze by type. If the saved local body is missing or empty but the batch/crawl metadata shows that exact in-scope asset succeeded, you may do one bounded recovery fetch of that exact URL before continuing. Use `downloads/`, `scans/`, or an engagement-local temp dir created under `$DIR`
 (for example `mktemp -d "$DIR/tmp.source-analysis.XXXXXX"`). Never use `/tmp` or other external
 paths during unattended runs.
 
@@ -153,7 +152,8 @@ the outcome section is written.
 === EXECUTION RULES ===
 
 1. Execute ONLY the assigned analysis objective. Do not expand scope.
-2. DOWNLOAD ONCE, ANALYZE LOCALLY — save to the engagement's downloads/ dir, never curl the same URL twice.
+2. DOWNLOAD ONCE, ANALYZE LOCALLY — save to the engagement's downloads/ dir and reuse local artifacts first.
+   If a saved case body is missing or empty, one bounded recovery fetch of that exact case URL is allowed; do not turn that into broad refetching.
    If you need scratch space, create it under `$DIR` (for example `mktemp -d "$DIR/tmp.source-analysis.XXXXXX"`).
    Do NOT use `/tmp` or any path outside the engagement/workspace tree.
 3. For >1MB bundles, focus on string extraction and pattern matching.
