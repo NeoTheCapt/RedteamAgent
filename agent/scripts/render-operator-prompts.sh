@@ -68,7 +68,7 @@ Use `@agent-name` when dispatching subagents:
 
 - Use absolute paths: `/usr/bin/curl`, `/bin/cat`, `/usr/bin/grep`, etc.
 - Do NOT use `grep -P` (Perl regex). Use `grep -E` (extended) or `rg` instead.
-- HEREDOC: Use unquoted delimiter (`<< EOF`), NOT single-quoted (`<< 'EOF'`).
+- HEREDOC: For literal/static Markdown, JSON, or script bodies, use a single-quoted delimiter (`<<'EOF'`) so backticks, `$()`, `${...}`, and backslashes land verbatim. Use an unquoted heredoc only when you intentionally need shell interpolation.
 - New files: use bash commands (mkdir, cat >, echo >). Existing files: use Edit tool.
 EOF
   } > "$CLAUDE_OUT"
