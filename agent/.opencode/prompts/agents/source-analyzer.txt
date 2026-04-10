@@ -185,6 +185,12 @@ the outcome section is written.
     emit it under `#### Surface Candidates`. Allowed `surface_type` values:
     `auth_entry`, `account_recovery`, `object_reference`, `privileged_write`, `file_handling`,
     `dynamic_render`, `api_documentation`, `workflow_token`.
+    Preserve concrete SPA/hash routes in `#### Frontend Routes` instead of collapsing them into a
+    vague note like “hidden routes found”. If the bundle reveals a real client-rendered route
+    (hidden page, admin/policy/legal screen, review/feedback/cart/register flow, sandbox, etc.),
+    keep the exact route string in the handoff. When that route is relevant to coverage, also emit a
+    `dynamic_render` surface candidate for the exact route; use `auth_entry` instead when it is
+    clearly a login/register/auth screen.
     Surface targets must stay importable: do not use unresolved angle-bracket/template placeholders
     such as `<encoded-url>` or `<profile.uuid>`. If only a query value is unknown, replace just the
     value with `...` (for example `GET /account/login?forward=...` or

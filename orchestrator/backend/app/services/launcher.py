@@ -3324,6 +3324,20 @@ def _supervise_container(
             phase, summary = _heartbeat_context(run)
             _append_runtime_event(run, "run.heartbeat", phase, summary)
             _refresh_live_run_metadata_projection(run, project, user)
+            normalize_active_scope(run)
+            completion_ok, _ = engagement_completion_state(run)
+            if completion_ok:
+                reason_code, reason_text, completion_summary = _terminal_reason(
+                    succeeded=True,
+                    return_code=0,
+                    completion_reason="",
+                    init_only_exit=False,
+                )
+                stop_run_runtime(run)
+                _append_runtime_event(run, "run.completed", phase, completion_summary)
+                terminal = db.update_run_status(run.id, "completed")
+                _write_run_terminal_reason(terminal, reason_code=reason_code, reason_text=reason_text)
+                break
 
             live_stall = _running_container_stall_reason(run)
             if live_stall is not None:

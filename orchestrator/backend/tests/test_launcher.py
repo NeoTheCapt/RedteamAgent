@@ -3275,6 +3275,89 @@ def test_normalize_active_scope_bootstraps_substantive_report_from_findings():
     assert engagement_completion_state(latest) == (True, "Engagement completed and finalized.")
 
 
+def test_auto_launch_marks_completed_when_scope_finalizes_before_runtime_exits(monkeypatch):
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+
+    class ImmediateThread:
+        def __init__(self, *, target, args=(), daemon=None):
+            self._target = target
+            self._args = args
+
+        def start(self):
+            run = self._args[0]
+            workspace = Path(run.engagement_root) / "workspace"
+            engagement_dir = workspace / "engagements" / "2026-03-28-000000-example-live-complete"
+            engagement_dir.mkdir(parents=True, exist_ok=True)
+            (workspace / "engagements" / ".active").write_text(
+                "engagements/2026-03-28-000000-example-live-complete\n",
+                encoding="utf-8",
+            )
+            (engagement_dir / "scope.json").write_text(
+                json.dumps(
+                    {
+                        "status": "complete",
+                        "current_phase": "complete",
+                        "phases_completed": ["recon", "collect", "consume_test", "exploit", "report"],
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            (engagement_dir / "report.md").write_text("# report\n", encoding="utf-8")
+            (engagement_dir / "surfaces.jsonl").write_text("", encoding="utf-8")
+            with sqlite3.connect(engagement_dir / "cases.db") as connection:
+                connection.execute(
+                    "CREATE TABLE cases (id INTEGER PRIMARY KEY AUTOINCREMENT, status TEXT NOT NULL)"
+                )
+                connection.commit()
+            process_log = Path(run.engagement_root) / "runtime" / "process.log"
+            process_log.write_text(
+                json.dumps({"type": "tool_use", "part": {"tool": "todowrite", "state": {"input": {}}}}) + "\n",
+                encoding="utf-8",
+            )
+            self._target(*self._args)
+
+    class FakeLogFollower:
+        def poll(self):
+            return 0
+
+    captured: list[list[str]] = []
+
+    def fake_run(command, **kwargs):
+        captured.append(command)
+        if command[:3] == ["docker", "run", "-d"]:
+            return subprocess.CompletedProcess(command, 0, stdout="container-123\n", stderr="")
+        if command[:4] == ["docker", "inspect", "-f", "{{.State.Status}}"]:
+            return subprocess.CompletedProcess(command, 0, stdout="running\n", stderr="")
+        if command[:3] == ["docker", "rm", "-f"]:
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("app.services.launcher.subprocess.run", fake_run)
+    monkeypatch.setattr("app.services.launcher.subprocess.Popen", lambda *args, **kwargs: FakeLogFollower())
+    monkeypatch.setattr("app.services.launcher.Thread", ImmediateThread)
+    monkeypatch.setattr(
+        "app.services.launcher.engagement_completion_state",
+        lambda _run: (True, "Engagement completed and finalized."),
+    )
+    object.__setattr__(settings, "auto_launch_runs", True)
+
+    try:
+        run = create_run(client, token, project["id"], "https://launched.example")
+    finally:
+        object.__setattr__(settings, "auto_launch_runs", False)
+
+    latest = db.get_run_by_id(run["id"])
+    assert latest is not None
+    assert latest.status == "completed"
+    metadata = json.loads((Path(run["engagement_root"]) / "run.json").read_text(encoding="utf-8"))
+    assert metadata["stop_reason_code"] == "completed"
+    assert metadata["stop_reason_text"] == "Run completed successfully."
+    assert any(command[:3] == ["docker", "rm", "-f"] for command in captured)
+
+
 def test_auto_launch_marks_completed_only_when_engagement_is_finalized(monkeypatch):
     client = TestClient(app)
     token = register_and_login(client, "alice")
@@ -3305,11 +3388,22 @@ def test_auto_launch_marks_completed_only_when_engagement_is_finalized(monkeypat
                 + "\n",
                 encoding="utf-8",
             )
-            (engagement_dir / "report.md").write_text("# report\n", encoding="utf-8")
-            (engagement_dir / "surfaces.jsonl").write_text("", encoding="utf-8")
+            (engagement_dir / "report.md").write_text(
+                "# Report\n\n## Executive Summary\n- completed\n\n## Findings\n- none\n",
+                encoding="utf-8",
+            )
+            (engagement_dir / "surfaces.jsonl").write_text(
+                json.dumps({"surface_type": "api_documentation", "target": "GET /api-docs/", "status": "covered"})
+                + "\n",
+                encoding="utf-8",
+            )
             with sqlite3.connect(engagement_dir / "cases.db") as connection:
                 connection.execute(
                     "CREATE TABLE cases (id INTEGER PRIMARY KEY AUTOINCREMENT, status TEXT NOT NULL)"
+                )
+                connection.executemany(
+                    "INSERT INTO cases(status) VALUES (?)",
+                    [("done",), ("error",)],
                 )
                 connection.commit()
             process_log = Path(run.engagement_root) / "runtime" / "process.log"
