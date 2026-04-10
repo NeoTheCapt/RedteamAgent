@@ -245,6 +245,7 @@ Start the pipeline regardless of auth choice (skip or configured):
 ## Step 6: Begin Engagement Loop
 
 The engagement loop starts only after Steps 1-5 finish successfully. Do not enter the operator core loop early.
+In autonomous mode, never end a consume-test turn on commentary-only text such as `[operator] Continuing consume_test.`. Any such text must be paired in the SAME turn with a real advancing action, or replaced by an explicit stop reason.
 
 Before Phase 1 begins, initialize OpenCode's native progress UI with `todowrite` following
 the operator progress rules in `prompts/agents/operator.txt`. At each later phase transition,
@@ -309,19 +310,20 @@ Follow the case-dispatching skill methodology. For each cycle:
 5. If coverage-expanding source batches remain pending (`api-spec`, `javascript`, `unknown`, or a clearly seed-like `page` such as the root/bootstrap page), do NOT keep chaining vulnerability-analyst batches indefinitely; after any completed API-family batch, the next queue selection SHOULD attempt one of those `source-analyzer` batches before taking another API-family batch.
 6. Do NOT let generic low-yield `page`, `stylesheet`, or `data` backlog (for example redirects, media-heavy pages, or static assets) starve high-signal API-family work once coverage-expanding source batches have already been drained.
 7. When benchmark quality is failing/regressing or surface coverage is unresolved, prefer draining one coverage-expanding `source-analyzer` batch before returning to another API-family batch so bundle-derived routes/surfaces can materialize into follow-up cases; once only generic low-yield source backlog remains, switch back to API-family testing instead of looping on more page churn.
-7. Outcome-recording bash blocks may do `done` / `requeue` / stats updates, but MUST NOT also prefetch the next non-empty batch unless that SAME assistant turn will immediately launch the matching `task(...)` call
-8. Do NOT hide the next non-empty fetch inside a "record outcomes" bash command and then leave the turn on commentary, a fresh `step_start`, or any other non-dispatch state; fetched cases may not sit in `processing` waiting for a later response
-9. NEVER combine outcome recording (`done`, `error`, `requeue`, `append_*`, queue stats, scope/findings/log updates) and `fetch_batch_to_file.sh` in the same bash/tool call. First record outcomes. Then do a dedicated fetch+dispatch step.
-10. ALWAYS fetch via `./scripts/fetch_batch_to_file.sh "$DIR/cases.db" <type> <limit> <agent> "$BATCH_FILE"`; it saves the full JSON batch to disk and prints only compact `BATCH_*` metadata for the model
-11. NEVER `cat "$BATCH_FILE"`, paste raw fetched JSON into the model context, or stop after a non-empty fetch without the matching `task(...)` call in that SAME turn
-12. Treat the fetch output as a dispatch contract: if `BATCH_COUNT > 0`, the very next advancing action MUST be the matching `task(...)` call for that same `BATCH_AGENT`/`BATCH_FILE`; do not insert reads, grep, todo updates, queue summaries, or any other tool call in between.
-13. Use the emitted `BATCH_FILE`, `BATCH_TYPE`, `BATCH_AGENT`, `BATCH_IDS`, and `BATCH_PATHS` directly when framing the dispatch; do not reopen the batch file just to decide whether to dispatch.
-14. If you are not ready to launch the matching subagent immediately, do NOT fetch yet.
-15. Treat the non-empty fetch and matching `task(...)` call as one atomic consume-test step. Do NOT decide that the fetch alone satisfied the "one step" rule.
-16. If a tool result ends with `BATCH_COUNT > 0`, that assistant turn is not complete until the matching `task(...)` call has been issued; a fetch result alone never counts as progress.
-17. Do NOT launch overlapping `task` calls inside consume-test, even if multiple batch types are ready at once
-18. If credentials are discovered during consume-test, write them to auth.json and in that SAME turn dispatch a bounded exploit-developer auth-validation task; never stop after only a credential-validation log/status entry
-19. Continue until queue empty + producers stopped
+8. Outcome-recording bash blocks may do `done` / `requeue` / stats updates, but MUST NOT also prefetch the next non-empty batch unless that SAME assistant turn will immediately launch the matching `task(...)` call
+9. Do NOT hide the next non-empty fetch inside a "record outcomes" bash command and then leave the turn on commentary, a fresh `step_start`, or any other non-dispatch state; fetched cases may not sit in `processing` waiting for a later response
+10. NEVER combine outcome recording (`done`, `error`, `requeue`, `append_*`, queue stats, scope/findings/log updates) and `fetch_batch_to_file.sh` in the same bash/tool call. First record outcomes. Then do a dedicated fetch+dispatch step.
+11. once outcome recording starts for a consume-test batch, that SAME turn must either (a) finish the queue updates and immediately perform the next fetch+dispatch step, or (b) run the stop/completion checks and emit an explicit stop reason; never end on commentary-only text such as `[operator] Continuing consume_test.` while queue work remains.
+12. ALWAYS fetch via `./scripts/fetch_batch_to_file.sh "$DIR/cases.db" <type> <limit> <agent> "$BATCH_FILE"`; it saves the full JSON batch to disk and prints only compact `BATCH_*` metadata for the model
+13. NEVER `cat "$BATCH_FILE"`, paste raw fetched JSON into the model context, or stop after a non-empty fetch without the matching `task(...)` call in that SAME turn
+14. Treat the fetch output as a dispatch contract: if `BATCH_COUNT > 0`, the very next advancing action MUST be the matching `task(...)` call for that same `BATCH_AGENT`/`BATCH_FILE`; do not insert reads, grep, todo updates, queue summaries, or any other tool call in between.
+15. Use the emitted `BATCH_FILE`, `BATCH_TYPE`, `BATCH_AGENT`, `BATCH_IDS`, and `BATCH_PATHS` directly when framing the dispatch; do not reopen the batch file just to decide whether to dispatch.
+16. If you are not ready to launch the matching subagent immediately, do NOT fetch yet.
+17. Treat the non-empty fetch and matching `task(...)` call as one atomic consume-test step. Do NOT decide that the fetch alone satisfied the "one step" rule.
+18. If a tool result ends with `BATCH_COUNT > 0`, that assistant turn is not complete until the matching `task(...)` call has been issued; a fetch result alone never counts as progress.
+19. Do NOT launch overlapping `task` calls inside consume-test, even if multiple batch types are ready at once
+20. If credentials are discovered during consume-test, write them to auth.json and in that SAME turn dispatch a bounded exploit-developer auth-validation task; never stop after only a credential-validation log/status entry
+21. Continue until queue empty + producers stopped
 
 Before leaving Test phase, run:
 `./scripts/check_collection_health.sh "$DIR"`
