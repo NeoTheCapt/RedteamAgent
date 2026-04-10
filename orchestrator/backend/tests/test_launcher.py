@@ -620,6 +620,54 @@ def test_supervise_container_stops_live_stalled_runtime(monkeypatch):
     assert metadata["stop_reason_text"] == "Runtime produced no new output before stall timeout elapsed."
 
 
+def test_start_container_supervisor_ignores_deleted_run_terminal_races(monkeypatch):
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "https://deleted-race.example")
+    db.update_run_status(run["id"], "running")
+
+    run_row = db.get_run_by_id(run["id"])
+    assert run_row is not None
+    project_row = db.get_project_by_id(project["id"])
+    assert project_row is not None
+    user_row = db.get_user_by_id(project_row.user_id)
+    assert user_row is not None
+
+    class InlineThread:
+        def __init__(self, *, target, args=(), daemon=None):
+            self._target = target
+            self._args = args
+            self.daemon = daemon
+
+        def start(self):
+            self._target(*self._args)
+
+    monkeypatch.setattr("app.services.launcher.Thread", InlineThread)
+
+    def deleted_run_race(*args, **kwargs):
+        db.delete_run(run_row.id)
+        raise AssertionError("run disappeared before terminal status update")
+
+    monkeypatch.setattr("app.services.launcher._supervise_container", deleted_run_race)
+
+    from app.services import launcher
+
+    with launcher._ACTIVE_CONTAINER_SUPERVISORS_LOCK:
+        launcher._ACTIVE_CONTAINER_SUPERVISORS.clear()
+
+    assert launcher._start_container_supervisor(
+        run_row,
+        project_row,
+        user_row,
+        log_handle=io.BytesIO(),
+    )
+
+    assert db.get_run_by_id(run_row.id) is None
+    with launcher._ACTIVE_CONTAINER_SUPERVISORS_LOCK:
+        assert run_row.id not in launcher._ACTIVE_CONTAINER_SUPERVISORS
+
+
 def test_running_container_stall_reason_keeps_early_collect_alive_when_rw_cases_db_is_locked_but_readonly_fallback_succeeds(monkeypatch):
     client = TestClient(app)
     token = register_and_login(client, "alice")
