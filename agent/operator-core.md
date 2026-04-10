@@ -71,6 +71,8 @@ PARALLEL: Independent tasks → parallel. Dependent → sequential.
    - do NOT launch overlapping `task` calls inside the same consume-test pass, even when multiple fetched batch files are non-empty
    - never leave fetched cases in `processing` without a dispatched subagent task
    - after each dispatched subagent returns, immediately consume its `### Case Outcomes` and run the required `done` / `requeue` updates before the next fetch cycle
+   - if non-API cases remain pending (`page`, `javascript`, `stylesheet`, `data`, or `unknown`), do NOT keep chaining vulnerability-analyst batches indefinitely; after any completed API-family batch, the next queue selection MUST attempt a `source-analyzer` fetch before taking another API-family batch unless the non-API pending count is already zero
+   - when benchmark quality is failing/regressing or surface coverage is unresolved, prefer draining at least one `source-analyzer` batch before returning to another API-family batch so bundle-derived routes/surfaces can materialize into follow-up cases
    - if subagent output includes `REQUEUE_CANDIDATE` or clearly says an endpoint still has an untested higher-risk family, do NOT mark that case exhausted; requeue the same case (or a narrowed sibling follow-up) before the next fetch
    - outcome-recording bash blocks may do `done` / `requeue` / stats updates, but MUST NOT also prefetch the next non-empty batch unless that SAME assistant turn will immediately launch the matching subagent task
    - do NOT hide the next non-empty fetch inside a "record outcomes" bash command and then leave the turn on commentary, a fresh `step_start`, or any other non-dispatch state; fetched cases may not sit in `processing` waiting for a later response

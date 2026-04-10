@@ -23,7 +23,7 @@ if [[ -z "$DB" || -z "$ACTION" ]]; then
   echo "  reset-stale <minutes>          Recover stuck processing cases"
   echo "  retry-errors [max_retries]     Retry error cases (default max: 2)"
   echo "  migrate                        Add retry_count column if missing"
-  echo "  requeue                        Read JSON lines from stdin, insert as pending"
+  echo "  requeue [id_list ...] [reason] Requeue existing case IDs or read JSON lines from stdin"
   exit 1
 fi
 
@@ -263,7 +263,35 @@ case "$ACTION" in
     ;;
 
   requeue)
-    COUNT=0
+    shift 2
+
+    requeued_existing=0
+    if (($# > 0)); then
+      REQUEUE_ID_ARGS=()
+      for token in "$@"; do
+        token="${token// /}"
+        token="${token#,}"
+        token="${token%,}"
+        [[ -z "$token" ]] && continue
+        if [[ "$token" =~ ^[0-9]+(,[0-9]+)*$ ]]; then
+          REQUEUE_ID_ARGS+=("$token")
+          continue
+        fi
+        break
+      done
+
+      if ((${#REQUEUE_ID_ARGS[@]} > 0)); then
+        ID_LIST="$(normalize_id_list "${REQUEUE_ID_ARGS[@]}")"
+        sql "UPDATE cases SET status='pending', assigned_agent=NULL, consumed_at=NULL WHERE id IN (${ID_LIST});"
+        echo "Requeued existing: ${ID_LIST}"
+        requeued_existing=1
+      fi
+    fi
+
+    if [[ "$requeued_existing" == "1" ]]; then
+      :
+    else
+      COUNT=0
     while IFS= read -r line; do
       [[ -z "$line" ]] && continue
 
@@ -385,6 +413,7 @@ case "$ACTION" in
     done
 
     echo "Requeued ${COUNT} new case(s)"
+    fi
     ;;
 
   *)

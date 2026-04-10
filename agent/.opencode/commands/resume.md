@@ -104,6 +104,8 @@ If resuming `consume_test`, the fetch/dispatch contract is strict:
 - `api|api-spec|form|upload|graphql|websocket` → fetch for `vulnerability-analyst`
 - `page|javascript|stylesheet|data|unknown` → fetch for `source-analyzer`
 - `stylesheet` MUST route to `source-analyzer` in the SAME turn; do not leave stylesheet rows parked in `processing`
+- if any `page|javascript|stylesheet|data|unknown` rows remain pending, attempt a `source-analyzer` fetch before taking another API-family batch unless the non-API pending count is already zero
+- when benchmark quality is failing/regressing or surface coverage is unresolved, prefer a `source-analyzer` fetch before returning to another API-family batch so bundle-derived routes/surfaces can materialize into follow-up cases
 - fetch through `./scripts/fetch_batch_to_file.sh`; keep the full batch JSON on disk and only use the compact `BATCH_*` metadata in model context
 - after the first non-empty fetch, immediately dispatch the matching subagent in the SAME turn; do not fetch a second batch first
 - NEVER end `/resume` on queue stats, a fetched batch, or a recovery note without the matching `task(...)` dispatch / case-outcome update in that SAME turn
@@ -117,16 +119,16 @@ BATCH_FILE="$ENG_DIR/scans/resume-batch.json"
 : > "$BATCH_FILE"
 for spec in \
   'api-spec vulnerability-analyst' \
-  'api vulnerability-analyst' \
-  'form vulnerability-analyst' \
-  'upload vulnerability-analyst' \
-  'graphql vulnerability-analyst' \
-  'websocket vulnerability-analyst' \
   'page source-analyzer' \
   'javascript source-analyzer' \
   'stylesheet source-analyzer' \
   'data source-analyzer' \
-  'unknown source-analyzer'
+  'unknown source-analyzer' \
+  'api vulnerability-analyst' \
+  'form vulnerability-analyst' \
+  'upload vulnerability-analyst' \
+  'graphql vulnerability-analyst' \
+  'websocket vulnerability-analyst'
   do
     set -- $spec
     batch_type="$1"
