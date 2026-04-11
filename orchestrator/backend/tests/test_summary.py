@@ -987,7 +987,7 @@ def test_run_summary_reopened_current_phase_prunes_completed_marker_and_stays_ac
     assert consume_waterfall["active_agents"] == 1
 
 
-def test_run_summary_prefers_active_exploit_task_over_remaining_consume_queue():
+def test_run_summary_keeps_consume_test_active_when_queue_remains_during_auth_validation():
     client = TestClient(app)
     token = register_and_login(client, "alice")
     project = create_project(client, token)
@@ -1051,25 +1051,25 @@ def test_run_summary_prefers_active_exploit_task_over_remaining_consume_queue():
     consume_phase = next(item for item in payload["phases"] if item["phase"] == "consume-test")
     exploit_agent = next(item for item in payload["agents"] if item["agent_name"] == "exploit-developer")
 
-    assert payload["overview"]["current_phase"] == "exploit"
-    assert payload["current"]["phase"] == "exploit"
+    assert payload["overview"]["current_phase"] == "consume-test"
+    assert payload["current"]["phase"] == "consume-test"
     assert payload["current"]["agent_name"] == "exploit-developer"
-    assert exploit_phase["state"] == "active"
-    assert exploit_phase["active_agents"] == 1
     assert consume_phase["state"] == "active"
-    assert consume_phase["active_agents"] == 1
-    assert exploit_agent["phase"] == "exploit"
+    assert consume_phase["active_agents"] == 2
+    assert exploit_phase["state"] == "pending"
+    assert exploit_phase["active_agents"] == 0
+    assert exploit_agent["phase"] == "consume-test"
     assert exploit_agent["status"] == "active"
 
     persisted_scope = json.loads((active_dir / "scope.json").read_text(encoding="utf-8"))
-    assert persisted_scope["current_phase"] == "exploit"
-    assert persisted_scope["phases_completed"] == ["recon", "collect", "consume_test"]
+    assert persisted_scope["current_phase"] == "consume_test"
+    assert persisted_scope["phases_completed"] == ["recon", "collect"]
 
     run_metadata = json.loads((Path(run["engagement_root"]) / "run.json").read_text(encoding="utf-8"))
-    assert run_metadata["current_phase"] == "exploit"
-    exploit_waterfall = next(item for item in run_metadata["phase_waterfall"] if item["phase"] == "exploit")
-    assert exploit_waterfall["state"] == "active"
-    assert exploit_waterfall["active_agents"] == 1
+    assert run_metadata["current_phase"] == "consume-test"
+    consume_waterfall = next(item for item in run_metadata["phase_waterfall"] if item["phase"] == "consume-test")
+    assert consume_waterfall["state"] == "active"
+    assert consume_waterfall["active_agents"] == 2
 
 
 
