@@ -906,12 +906,51 @@ def parse_cookie_arg(raw: str, url: str) -> dict[str, Any]:
     }
 
 
-def load_auth_cookies(path: str | None, url: str) -> list[dict[str, Any]]:
+def load_auth_payload(path: str | None) -> dict[str, Any]:
     if not path:
-        return []
+        return {}
+    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    return payload if isinstance(payload, dict) else {}
+
+
+def stringify_storage_value(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (str, int, float)):
+        return str(value)
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
+
+def normalize_storage_entries(raw: Any) -> dict[str, str]:
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, str] = {}
+    for key, value in raw.items():
+        normalized = stringify_storage_value(value)
+        if normalized is None:
+            continue
+        out[str(key)] = normalized
+    return out
+
+
+def extract_bearer_token(headers: Any) -> str | None:
+    if not isinstance(headers, dict):
+        return None
+    for key, value in headers.items():
+        if str(key).lower() != "authorization" or value is None:
+            continue
+        raw = str(value).strip()
+        if raw.lower().startswith("bearer ") and len(raw) > 7:
+            return raw[7:].strip()
+    return None
+
+
+def load_auth_cookies(path: str | None, url: str) -> list[dict[str, Any]]:
     parsed = urllib.parse.urlparse(url)
     hostname = parsed.hostname or ""
-    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    payload = load_auth_payload(path)
     cookies_obj = payload.get("cookies") or {}
     if not isinstance(cookies_obj, dict):
         return []
@@ -921,6 +960,80 @@ def load_auth_cookies(path: str | None, url: str) -> list[dict[str, Any]]:
             continue
         out.append({"name": str(name), "value": str(value), "domain": hostname, "path": "/"})
     return out
+
+
+def load_auth_storage(path: str | None) -> dict[str, dict[str, str]]:
+    payload = load_auth_payload(path)
+    local_storage: dict[str, str] = {}
+    session_storage: dict[str, str] = {}
+
+    explicit_storage = payload.get("browser_storage") or payload.get("storage") or {}
+    if isinstance(explicit_storage, dict):
+        local_storage.update(
+            normalize_storage_entries(
+                explicit_storage.get("localStorage") or explicit_storage.get("local_storage") or {}
+            )
+        )
+        session_storage.update(
+            normalize_storage_entries(
+                explicit_storage.get("sessionStorage") or explicit_storage.get("session_storage") or {}
+            )
+        )
+
+    tokens = payload.get("tokens") or {}
+    if isinstance(tokens, dict):
+        for key, value in tokens.items():
+            normalized = stringify_storage_value(value)
+            if normalized is None:
+                continue
+            key_str = str(key)
+            lowered = key_str.lower()
+            if lowered in {"bid", "basketid", "basket_id", "cartid", "cart_id", "sessionid", "session_id"}:
+                session_storage.setdefault(key_str, normalized)
+                session_storage.setdefault("bid", normalized)
+                continue
+            if lowered in {"token", "jwt", "access_token", "accesstoken", "id_token", "idtoken", "bearer", "bearer_token"}:
+                local_storage.setdefault(key_str, normalized)
+                local_storage.setdefault("token", normalized)
+
+    bearer = extract_bearer_token(payload.get("headers") or {})
+    if bearer:
+        local_storage.setdefault("token", bearer)
+
+    return {
+        "localStorage": local_storage,
+        "sessionStorage": session_storage,
+    }
+
+
+def apply_auth_storage(client: WebDriverClient, storage_state: dict[str, dict[str, str]]) -> dict[str, list[str]]:
+    local_items = normalize_storage_entries(storage_state.get("localStorage") or {})
+    session_items = normalize_storage_entries(storage_state.get("sessionStorage") or {})
+    if not local_items and not session_items:
+        return {"localStorage": [], "sessionStorage": []}
+    script = """
+const localItems = arguments[0] || {};
+const sessionItems = arguments[1] || {};
+const apply = (store, items) => {
+  const applied = [];
+  for (const [key, value] of Object.entries(items)) {
+    store.setItem(String(key), String(value));
+    applied.push(String(key));
+  }
+  return applied;
+};
+return {
+  localStorage: apply(window.localStorage, localItems),
+  sessionStorage: apply(window.sessionStorage, sessionItems),
+};
+"""
+    value = client.execute(script, [local_items, session_items])
+    if not isinstance(value, dict):
+        raise RuntimeError(f"failed to apply auth storage state: {value!r}")
+    return {
+        "localStorage": [str(item) for item in value.get("localStorage") or []],
+        "sessionStorage": [str(item) for item in value.get("sessionStorage") or []],
+    }
 
 
 def wait_for_driver_ready(base_url: str, timeout_s: float = 15.0) -> None:
@@ -1002,6 +1115,11 @@ def main() -> int:
 
     cookies = [parse_cookie_arg(item, args.url) for item in args.cookie]
     cookies.extend(load_auth_cookies(args.cookies_from_auth, args.url))
+    storage_state = load_auth_storage(args.cookies_from_auth)
+    requested_storage = {
+        "localStorage": sorted((storage_state.get("localStorage") or {}).keys()),
+        "sessionStorage": sorted((storage_state.get("sessionStorage") or {}).keys()),
+    }
 
     summary: dict[str, Any] = {
         "url": args.url,
@@ -1009,6 +1127,9 @@ def main() -> int:
         "chromedriver_binary": chromedriver_bin,
         "cookies_applied": len(cookies),
         "steps_requested": len(steps),
+        "storage_requested": requested_storage,
+        "storage_injected": False,
+        "storage_applied": {"localStorage": [], "sessionStorage": []},
     }
 
     try:
@@ -1017,11 +1138,14 @@ def main() -> int:
 
         parsed_target = urllib.parse.urlparse(args.url)
         origin = urllib.parse.urlunparse((parsed_target.scheme, parsed_target.netloc, "/", "", "", ""))
-        if cookies:
+        if cookies or requested_storage["localStorage"] or requested_storage["sessionStorage"]:
             client.navigate(origin)
             flow.wait_for_document(args.timeout_ms)
             for cookie in cookies:
                 client.add_cookie(cookie)
+            applied_storage = apply_auth_storage(client, storage_state)
+            summary["storage_applied"] = applied_storage
+            summary["storage_injected"] = bool(applied_storage["localStorage"] or applied_storage["sessionStorage"])
 
         client.navigate(args.url)
         flow.wait_for_document(args.timeout_ms)
