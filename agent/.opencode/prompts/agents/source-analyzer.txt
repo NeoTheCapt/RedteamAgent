@@ -199,7 +199,12 @@ the outcome section is written.
     artifacts expose a reusable workflow primitive (for example a captcha/anti-automation helper,
     reset/setup token flow, TOTP enrollment path, signed-action helper, or other temporary secret
     source), preserve at least one concrete consumer workflow route/surface from that same family
-    instead of handing off the primitive in isolation.
+    instead of handing off the primitive in isolation. Likewise, when saved artifacts expose a
+    downloadable backup, vault, dump, config export, or encoded note, do not treat the branch as
+    exhausted just because the first local pass found no plaintext secret. Keep the exact
+    requestable download path as a `file_handling` surface when relevant, record the verified file
+    type plus a few candidate seed words from filenames or adjacent strings in intel/findings, and
+    leave the branch actionable for bounded offline triage during exploit.
     Surface targets must stay importable: do not use unresolved angle-bracket/template placeholders
     such as `<encoded-url>` or `<profile.uuid>`. If only a query value is unknown, replace just the
     value with `...` (for example `GET /account/login?forward=...` or
