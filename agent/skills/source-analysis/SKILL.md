@@ -66,6 +66,7 @@ grep -n -m 80 -E 'fetch\(|axios\.|XMLHttpRequest|\.open\(|/rest/|/api/|/#/' down
 - When matches explode because of minified code, narrow the regex and rerun instead of accepting giant output
 - Preserve concrete SPA/hash routes in your structured output. Do **not** collapse them into a generic note like “hidden routes found”. If the bundle reveals a real client-side route (for example a hidden page, admin panel, legal/policy view, review/feedback/cart/register flow, or sandbox screen), keep the exact route string and hand it back as a route/surface candidate.
 - When a route is clearly client-rendered rather than a standalone server endpoint, emit it as a `dynamic_render` surface candidate (or `auth_entry` when it is clearly a login/register/auth screen) so surface coverage can materialize a bounded page visit later.
+- If the bundle exposes many routes, prioritize breadth across distinct workflow families instead of spending the entire handoff on near-duplicate variants from one subtree. Keep the highest-signal concrete route for each actionable family you see (for example auth entry, privileged/admin, legal/policy/info, feedback/review/cart, sandbox/payment, hidden feature screens) before adding second-order variants from the same family.
 
 ### 4. CSS Analysis
 Extract `url()` refs, `@import` paths, source map refs.

@@ -191,7 +191,11 @@ the outcome section is written.
     (hidden page, admin/policy/legal screen, review/feedback/cart/register flow, sandbox, etc.),
     keep the exact route string in the handoff. When that route is relevant to coverage, also emit a
     `dynamic_render` surface candidate for the exact route; use `auth_entry` instead when it is
-    clearly a login/register/auth screen.
+    clearly a login/register/auth screen. If route volume is high, do not spend the entire
+    route/surface budget on near-duplicate variants from one subtree (for example several
+    auth/account or continuation-token screens) while omitting unrelated hidden workflows. Dedupe
+    near-duplicates, then prefer one high-signal concrete route or surface per distinct actionable
+    family before adding second-order variants from the same family.
     Surface targets must stay importable: do not use unresolved angle-bracket/template placeholders
     such as `<encoded-url>` or `<profile.uuid>`. If only a query value is unknown, replace just the
     value with `...` (for example `GET /account/login?forward=...` or
@@ -227,9 +231,9 @@ the outcome section is written.
     Keep entries short and summary-oriented.
 17. OUTPUT BUDGET: Your final handoff must fit in one concise message. Cap the final response at roughly:
     - 10 NEW ENDPOINT JSONL lines
-    - 8 frontend route rows
+    - 12 frontend route rows
     - 6 hidden-path/resource rows
-    - 6 surface-candidate JSONL lines
+    - 10 surface-candidate JSONL lines
     - 5 secret/intel rows per section
     If more items exist, summarize the extra volume and return only the highest-signal, directly actionable subset.
 18. LARGE-SPA STOP RULE: For large SPAs, stop after root HTML plus a representative set of bundles/source maps
