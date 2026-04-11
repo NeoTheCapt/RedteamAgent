@@ -1211,6 +1211,12 @@ def _auto_resume_stall_guard_active(run: Run) -> bool:
     return (time.time() - started_at) < AUTO_RESUME_STALL_GRACE_SECONDS
 
 
+def _has_live_runtime_work_agent(active_runtime_agents: set[str], *, has_current_task: bool) -> bool:
+    if has_current_task:
+        return True
+    return any(agent_name != "operator" for agent_name in active_runtime_agents)
+
+
 def _running_container_stall_reason(run: Run) -> tuple[str, str, str] | None:
     engagement_dir = _active_engagement_dir(run)
     current_phase, total_cases, pending_cases, processing_cases = _load_running_queue_state(engagement_dir)
@@ -1245,6 +1251,10 @@ def _running_container_stall_reason(run: Run) -> tuple[str, str, str] | None:
     auto_resume_guard_active = _auto_resume_stall_guard_active(run)
     active_runtime_agents = _active_runtime_agents(run)
     has_current_task = _run_metadata_has_current_task(run)
+    has_live_runtime_work_agent = _has_live_runtime_work_agent(
+        active_runtime_agents,
+        has_current_task=has_current_task,
+    )
     processing_agents = _load_running_processing_agents(engagement_dir)
     opencode_logs_root = opencode_home_root_for(run) / "log"
     permission_log_paths = [process_log_path_for(run)]
@@ -1270,7 +1280,7 @@ def _running_container_stall_reason(run: Run) -> tuple[str, str, str] | None:
         current_phase not in EARLY_PHASE_STALL_PHASES
         and pending_cases > 0
         and processing_cases == 0
-        and not active_runtime_agents
+        and not has_live_runtime_work_agent
         and not auto_resume_guard_active
         and workflow_age is not None
         and workflow_age >= PENDING_QUEUE_DISPATCH_GRACE_SECONDS
@@ -1312,8 +1322,7 @@ def _running_container_stall_reason(run: Run) -> tuple[str, str, str] | None:
         and total_cases > 0
         and pending_cases == 0
         and processing_cases == 0
-        and not active_runtime_agents
-        and not has_current_task
+        and not has_live_runtime_work_agent
         and orphan_activity_at is not None
         and (time.time() - orphan_activity_at) >= RUN_STALL_TIMEOUT_SECONDS
     ):
@@ -1486,7 +1495,7 @@ def _promote_completed_scope_from_artifacts(scope_path: Path, payload: dict[str,
     surfaces_path = engagement_dir / "surfaces.jsonl"
 
     reason_code, _reason_text = _last_logged_stop_metadata(log_path)
-    if reason_code != "completed":
+    if reason_code and reason_code != "completed":
         return False
     if not report_path.exists():
         return False

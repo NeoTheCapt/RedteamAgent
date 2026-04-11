@@ -3198,6 +3198,83 @@ def test_engagement_completion_state_repairs_completed_report_scope_from_log():
     assert normalized["phases_completed"] == ["recon", "collect", "consume_test", "exploit", "report"]
 
 
+def test_engagement_completion_state_repairs_completed_report_scope_without_stop_log():
+    client = TestClient(app)
+    token = register_and_login(client, "alice-repair-report-without-stop-log")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "http://127.0.0.1:8000")
+
+    run_root = Path(run["engagement_root"])
+    workspace = run_root / "workspace"
+    engagement_dir = workspace / "engagements" / "2026-03-30-010000-example"
+    engagement_dir.mkdir(parents=True, exist_ok=True)
+    (workspace / "engagements" / ".active").write_text(
+        "engagements/2026-03-30-010000-example\n",
+        encoding="utf-8",
+    )
+    (engagement_dir / "scope.json").write_text(
+        json.dumps(
+            {
+                "status": "complete",
+                "current_phase": "report",
+                "phases_completed": ["recon", "collect", "consume_test", "exploit"],
+                "target": "http://127.0.0.1:8000",
+                "scope": ["127.0.0.1", "*.127.0.0.1"],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (engagement_dir / "log.md").write_text(
+        "# Engagement Log\n\n"
+        "## [04:15] Report complete — operator\n\n"
+        "**Action**: phase 5 report\n"
+        "**Result**: persisted final report to report.md and finished queue/coverage verification\n",
+        encoding="utf-8",
+    )
+    (engagement_dir / "report.md").write_text(
+        "# Penetration Test Report\n\n"
+        "**Date**: 2026-03-30 — Completed\n"
+        "**Target**: http://127.0.0.1:8000  **Scope**: 127.0.0.1, *.127.0.0.1  **Status**: Completed\n\n"
+        "## Executive Summary\n"
+        "- Target: http://127.0.0.1:8000\n"
+        "- Confirmed findings: 0 total\n\n"
+        "## Scope and Methodology\n"
+        "- Completed phases: recon, collect, consume_test, exploit, report\n\n"
+        "## Findings\n"
+        "No confirmed findings were recorded in findings.md.\n\n"
+        "## Attack Narrative\n"
+        "The engagement followed the recorded orchestrator workflow and completed reporting successfully.\n\n"
+        "## Recommendations\n"
+        "- Continue monitoring.\n\n"
+        "## Appendix\n"
+        "- cases.db rows: 2\n"
+        "- surfaces.jsonl rows: 0\n",
+        encoding="utf-8",
+    )
+    (engagement_dir / "surfaces.jsonl").write_text("", encoding="utf-8")
+    with sqlite3.connect(engagement_dir / "cases.db") as connection:
+        connection.execute(
+            "CREATE TABLE cases (id INTEGER PRIMARY KEY AUTOINCREMENT, status TEXT NOT NULL)"
+        )
+        connection.executemany(
+            "INSERT INTO cases(status) VALUES (?)",
+            [("done",), ("error",)],
+        )
+        connection.commit()
+
+    from app import db as app_db
+    from app.services.launcher import engagement_completion_state
+
+    latest = app_db.get_run_by_id(run["id"])
+    assert latest is not None
+    assert engagement_completion_state(latest) == (True, "Engagement completed and finalized.")
+
+    normalized = json.loads((engagement_dir / "scope.json").read_text(encoding="utf-8"))
+    assert normalized["current_phase"] == "complete"
+    assert normalized["phases_completed"] == ["recon", "collect", "consume_test", "exploit", "report"]
+
+
 def test_normalize_active_scope_marks_completed_report_and_log_headers(monkeypatch):
     import os
     import time
@@ -4457,6 +4534,163 @@ def test_running_container_stall_reason_grants_dispatch_grace_after_auto_resume(
                         "phase": "consume_test",
                         "status": "active",
                         "updated_at": "2026-04-02 09:33:10",
+                    }
+                ],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    from app.services.launcher import _running_container_stall_reason
+
+    assert _running_container_stall_reason(run_row) is None
+
+
+def test_running_container_stall_reason_treats_operator_only_pending_queue_as_stalled():
+    client = TestClient(app)
+    token = register_and_login(client, "alice-operator-only-stall")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "https://operator-only-stall.example")
+    db.update_run_status(run["id"], "running")
+
+    run_row = db.get_run_by_id(run["id"])
+    assert run_row is not None
+
+    run_root = Path(run_row.engagement_root)
+    process_log = run_root / "runtime" / "process.log"
+    process_log.parent.mkdir(parents=True, exist_ok=True)
+    process_log.write_text("operator emitted status-only turn\n", encoding="utf-8")
+
+    workspace = run_root / "workspace"
+    engagement_dir = workspace / "engagements" / "2026-04-02-094000-operator-only-stall"
+    engagement_dir.mkdir(parents=True, exist_ok=True)
+    (workspace / "engagements" / ".active").write_text(
+        "engagements/2026-04-02-094000-operator-only-stall\n",
+        encoding="utf-8",
+    )
+    scope_path = engagement_dir / "scope.json"
+    scope_path.write_text(
+        json.dumps(
+            {
+                "status": "in_progress",
+                "current_phase": "consume_test",
+                "phases_completed": ["recon", "collect"],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    log_path = engagement_dir / "log.md"
+    log_path.write_text("queue summary emitted without dispatch\n", encoding="utf-8")
+    with sqlite3.connect(engagement_dir / "cases.db") as connection:
+        connection.execute(
+            "CREATE TABLE cases (id INTEGER PRIMARY KEY AUTOINCREMENT, status TEXT NOT NULL)"
+        )
+        connection.execute("INSERT INTO cases(status) VALUES ('pending')")
+        connection.commit()
+
+    import os
+
+    old_epoch = datetime.now().timestamp() - 240
+    os.utime(process_log, (old_epoch, old_epoch))
+    os.utime(scope_path, (old_epoch, old_epoch))
+    os.utime(log_path, (old_epoch, old_epoch))
+    os.utime(engagement_dir / "cases.db", (old_epoch, old_epoch))
+
+    (run_root / "run.json").write_text(
+        json.dumps(
+            {
+                "current_phase": "consume_test",
+                "current_task_name": None,
+                "current_agent_name": None,
+                "agents": [
+                    {
+                        "agent_name": "operator",
+                        "phase": "consume_test",
+                        "status": "active",
+                        "updated_at": "2026-04-02 09:40:10",
+                    }
+                ],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    from app.services.launcher import _running_container_stall_reason
+
+    assert _running_container_stall_reason(run_row) == (
+        "consume_test",
+        "queue_stalled",
+        "Pending queue items remained undispatched with no active runtime agent after dispatch grace period elapsed.",
+    )
+
+
+def test_running_container_stall_reason_keeps_operator_only_pending_queue_alive_while_current_task_exists():
+    client = TestClient(app)
+    token = register_and_login(client, "alice-operator-current-task")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "https://operator-current-task.example")
+    db.update_run_status(run["id"], "running")
+
+    run_row = db.get_run_by_id(run["id"])
+    assert run_row is not None
+
+    run_root = Path(run_row.engagement_root)
+    process_log = run_root / "runtime" / "process.log"
+    process_log.parent.mkdir(parents=True, exist_ok=True)
+    process_log.write_text("operator fetching next batch\n", encoding="utf-8")
+
+    workspace = run_root / "workspace"
+    engagement_dir = workspace / "engagements" / "2026-04-02-094500-operator-current-task"
+    engagement_dir.mkdir(parents=True, exist_ok=True)
+    (workspace / "engagements" / ".active").write_text(
+        "engagements/2026-04-02-094500-operator-current-task\n",
+        encoding="utf-8",
+    )
+    scope_path = engagement_dir / "scope.json"
+    scope_path.write_text(
+        json.dumps(
+            {
+                "status": "in_progress",
+                "current_phase": "consume_test",
+                "phases_completed": ["recon", "collect"],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    log_path = engagement_dir / "log.md"
+    log_path.write_text("dispatch in progress\n", encoding="utf-8")
+    with sqlite3.connect(engagement_dir / "cases.db") as connection:
+        connection.execute(
+            "CREATE TABLE cases (id INTEGER PRIMARY KEY AUTOINCREMENT, status TEXT NOT NULL)"
+        )
+        connection.execute("INSERT INTO cases(status) VALUES ('pending')")
+        connection.commit()
+
+    import os
+
+    old_epoch = datetime.now().timestamp() - 240
+    os.utime(process_log, (old_epoch, old_epoch))
+    os.utime(scope_path, (old_epoch, old_epoch))
+    os.utime(log_path, (old_epoch, old_epoch))
+    os.utime(engagement_dir / "cases.db", (old_epoch, old_epoch))
+
+    (run_root / "run.json").write_text(
+        json.dumps(
+            {
+                "current_phase": "consume_test",
+                "current_task_name": "bash",
+                "current_agent_name": "operator",
+                "agents": [
+                    {
+                        "agent_name": "operator",
+                        "phase": "consume_test",
+                        "status": "active",
+                        "task_name": "bash",
+                        "updated_at": "2026-04-02 09:45:10",
                     }
                 ],
             }

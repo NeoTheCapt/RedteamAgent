@@ -5,6 +5,7 @@ import json
 import os
 import re
 import shutil
+from html import unescape
 import socket
 import subprocess
 import sys
@@ -24,6 +25,102 @@ def unwrap_value(payload: Any) -> Any:
 
 
 ELEMENT_REFERENCE_KEYS = ("element-6066-11e4-a52e-4f735466cecf", "ELEMENT")
+
+
+def normalize_text(value: str | None) -> str:
+    return re.sub(r"\s+", " ", unescape(value or "")).strip()
+
+
+def strip_html(fragment: str) -> str:
+    cleaned = re.sub(r"(?is)<(script|style)[^>]*>.*?</\1>", " ", fragment)
+    cleaned = re.sub(r"(?s)<[^>]+>", " ", cleaned)
+    return normalize_text(cleaned)
+
+
+def unique_nonempty(items: list[str], limit: int) -> list[str]:
+    seen: set[str] = set()
+    kept: list[str] = []
+    for item in items:
+        normalized = normalize_text(item)
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        kept.append(normalized)
+        if len(kept) >= limit:
+            break
+    return kept
+
+
+def summarize_dom_html(html: str) -> dict[str, Any]:
+    body_match = re.search(r"(?is)<body[^>]*>(.*?)</body>", html)
+    body_html = body_match.group(1) if body_match else html
+    headings = unique_nonempty(
+        [strip_html(match.group(1)) for match in re.finditer(r"(?is)<h[1-3][^>]*>(.*?)</h[1-3]>", body_html)],
+        8,
+    )
+    buttons = unique_nonempty(
+        [strip_html(match.group(1)) for match in re.finditer(r"(?is)<button[^>]*>(.*?)</button>", body_html)]
+        + [match.group(1) for match in re.finditer(r"(?is)<input[^>]+type=[\"'](?:submit|button)[\"'][^>]*value=[\"'](.*?)[\"']", body_html)],
+        10,
+    )
+    labels = unique_nonempty(
+        [strip_html(match.group(1)) for match in re.finditer(r"(?is)<label[^>]*>(.*?)</label>", body_html)],
+        10,
+    )
+    placeholders = unique_nonempty(
+        [match.group(3) for match in re.finditer(r"(?is)\b(placeholder)=([\"'])(.*?)\2", body_html)],
+        10,
+    )
+    links = unique_nonempty(
+        [strip_html(match.group(1)) for match in re.finditer(r"(?is)<a[^>]*>(.*?)</a>", body_html)],
+        10,
+    )
+    inputs: list[dict[str, str]] = []
+    seen_inputs: set[tuple[str, str, str, str]] = set()
+    for match in re.finditer(r"(?is)<input\b([^>]*)>", body_html):
+        attrs = match.group(1)
+        input_type = normalize_text(next((m.group(2) for m in re.finditer(r"(?is)\btype=([\"'])(.*?)\1", attrs)), "text")) or "text"
+        name = normalize_text(next((m.group(2) for m in re.finditer(r"(?is)\bname=([\"'])(.*?)\1", attrs)), ""))
+        element_id = normalize_text(next((m.group(2) for m in re.finditer(r"(?is)\bid=([\"'])(.*?)\1", attrs)), ""))
+        placeholder = normalize_text(next((m.group(2) for m in re.finditer(r"(?is)\bplaceholder=([\"'])(.*?)\1", attrs)), ""))
+        signature = (input_type, name, element_id, placeholder)
+        if signature in seen_inputs:
+            continue
+        seen_inputs.add(signature)
+        inputs.append(
+            {
+                "type": input_type,
+                "name": name,
+                "id": element_id,
+                "placeholder": placeholder,
+            }
+        )
+        if len(inputs) >= 8:
+            break
+    page_text_preview = strip_html(body_html)[:400]
+    return {
+        "heading_count": len(headings),
+        "form_count": len(re.findall(r"(?is)<form\b", body_html)),
+        "headings": headings,
+        "buttons": buttons,
+        "labels": labels,
+        "placeholders": placeholders,
+        "links": links,
+        "inputs": inputs,
+        "page_text_preview": page_text_preview,
+    }
+
+
+def summarize_dom_file(path: Path) -> dict[str, Any] | None:
+    if not path.exists():
+        return None
+    try:
+        html = path.read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return None
+    summary = summarize_dom_html(html)
+    summary["path"] = str(path.name)
+    return summary
 
 
 def extract_element_reference(payload: Any) -> str:
@@ -842,9 +939,9 @@ def main() -> int:
             flow.snapshot_dom(args.dom_file)
             flow.snapshot_png(args.screenshot)
 
+        default_dom = output_dir / args.dom_file
+        default_png = output_dir / args.screenshot
         if steps:
-            default_dom = output_dir / args.dom_file
-            default_png = output_dir / args.screenshot
             if not default_dom.exists():
                 flow.snapshot_dom(args.dom_file)
             if not default_png.exists():
@@ -859,18 +956,26 @@ def main() -> int:
                 "observed_alerts": flow.observed_alerts,
                 "dom_file": args.dom_file,
                 "screenshot": args.screenshot,
+                "dom_summary": summarize_dom_file(default_dom),
+                "has_screenshot": default_png.exists(),
             }
         )
         write_json(output_dir / args.summary_json, summary)
         print(json.dumps(summary, ensure_ascii=False))
         return 0
     except Exception as exc:
+        default_dom = output_dir / args.dom_file
+        default_png = output_dir / args.screenshot
         summary.update(
             {
                 "status": "error",
                 "error": str(exc),
                 "steps_run": flow.steps_run,
                 "observed_alerts": flow.observed_alerts,
+                "dom_file": args.dom_file if default_dom.exists() else None,
+                "screenshot": args.screenshot if default_png.exists() else None,
+                "dom_summary": summarize_dom_file(default_dom),
+                "has_screenshot": default_png.exists(),
             }
         )
         write_json(output_dir / args.summary_json, summary)
