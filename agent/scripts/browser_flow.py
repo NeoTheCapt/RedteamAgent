@@ -22,6 +22,19 @@ def unwrap_value(payload: Any) -> Any:
     return payload
 
 
+ELEMENT_REFERENCE_KEYS = ("element-6066-11e4-a52e-4f735466cecf", "ELEMENT")
+
+
+def extract_element_reference(payload: Any) -> str:
+    if not isinstance(payload, dict):
+        raise RuntimeError(f"webdriver element reference missing from payload: {payload!r}")
+    for key in ELEMENT_REFERENCE_KEYS:
+        value = payload.get(key)
+        if isinstance(value, str) and value:
+            return value
+    raise RuntimeError(f"webdriver element reference missing from payload: {payload!r}")
+
+
 class WebDriverClient:
     def __init__(self, base_url: str):
         self.base_url = base_url.rstrip("/")
@@ -117,6 +130,20 @@ class WebDriverClient:
             {"script": script, "args": args or []},
         )
 
+    def find_element(self, using: str, value: str) -> Any:
+        return self._request(
+            "POST",
+            f"/session/{self.session_id}/element",
+            {"using": using, "value": value},
+        )
+
+    def find_element_css(self, selector: str) -> Any:
+        return self.find_element("css selector", selector)
+
+    def click_element(self, element: Any) -> None:
+        element_ref = urllib.parse.quote(extract_element_reference(element), safe="")
+        self._request("POST", f"/session/{self.session_id}/element/{element_ref}/click", {})
+
 
 class StepError(RuntimeError):
     pass
@@ -140,18 +167,30 @@ class BrowserFlow:
             reason="document readyState",
         )
 
-    def wait_for_js_true(self, script: str, timeout_ms: int, reason: str, args: list[Any] | None = None) -> None:
+    def wait_for_js_result(
+        self,
+        script: str,
+        timeout_ms: int,
+        reason: str,
+        args: list[Any] | None = None,
+        *,
+        predicate: Any = None,
+    ) -> Any:
         deadline = time.time() + max(timeout_ms, 1) / 1000.0
         last_value = None
+        check = predicate or bool
         while time.time() < deadline:
             try:
                 last_value = self.client.execute(script, args or [])
             except Exception as exc:
                 last_value = f"error: {exc}"
-            if last_value:
-                return
+            if check(last_value):
+                return last_value
             time.sleep(0.2)
         raise StepError(f"timed out waiting for {reason}; last_value={last_value!r}")
+
+    def wait_for_js_true(self, script: str, timeout_ms: int, reason: str, args: list[Any] | None = None) -> None:
+        self.wait_for_js_result(script, timeout_ms=timeout_ms, reason=reason, args=args)
 
     def wait(self, ms: int) -> None:
         time.sleep(max(ms, 0) / 1000.0)
@@ -189,33 +228,24 @@ return (document.body && document.body.innerText || '').includes(needle);
             raise StepError(f"{action} failed for {selector}: {value}")
         self.record(action, selector=selector, timeout_ms=timeout_ms, **record)
 
-    def _run_lookup_step(
-        self,
-        *,
-        action: str,
-        lookup_kind: str,
-        query: str,
-        timeout_ms: int,
-        script: str,
-        script_args: list[Any],
-        record: dict[str, Any] | None = None,
-    ) -> None:
-        record = record or {}
-        self.wait_for_js_true(script, timeout_ms=timeout_ms, reason=f"{lookup_kind} {query}", args=script_args)
-        value = self.client.execute(script, script_args)
-        if not isinstance(value, dict) or not value.get("ok"):
-            raise StepError(f"{action} failed for {lookup_kind} {query}: {value}")
-        matched_selector = value.get("selector")
-        self.record(
-            action,
-            timeout_ms=timeout_ms,
-            **{lookup_kind: query},
-            matched_selector=matched_selector,
-            **record,
-        )
-
-    def click(self, selector: str, timeout_ms: int) -> None:
-        script = """
+    def _click_selector(self, selector: str, timeout_ms: int, action: str, record: dict[str, Any]) -> None:
+        self.wait_for_selector(selector, timeout_ms)
+        fallback_error = None
+        try:
+            self.client.execute(
+                "const el = document.querySelector(arguments[0]); if (el) el.scrollIntoView({block:'center', inline:'center'}); return !!el;",
+                [selector],
+            )
+        except Exception:
+            pass
+        try:
+            element = self.client.find_element_css(selector)
+            self.client.click_element(element)
+            self.record(action, selector=selector, timeout_ms=timeout_ms, click_mode="webdriver", **record)
+            return
+        except Exception as exc:
+            fallback_error = str(exc)
+        fallback_script = """
 const selector = arguments[0];
 const el = document.querySelector(selector);
 if (!el) return {ok:false, error:'selector not found'};
@@ -223,20 +253,49 @@ el.scrollIntoView({block:'center', inline:'center'});
 el.click();
 return {ok:true};
 """
-        self._run_selector_step(
+        value = self.client.execute(fallback_script, [selector])
+        if not isinstance(value, dict) or not value.get("ok"):
+            raise StepError(f"{action} failed for {selector}: {value}")
+        self.record(
+            action,
             selector=selector,
             timeout_ms=timeout_ms,
-            action="click",
-            script=script,
-            args=[selector],
-            record={},
+            click_mode="js-fallback",
+            fallback_error=fallback_error,
+            **record,
         )
 
+    def click(self, selector: str, timeout_ms: int) -> None:
+        self._click_selector(selector, timeout_ms, "click", {})
+
     def click_text(self, text: str, timeout_ms: int, exact: bool = False) -> None:
-        script = """
+        lookup_script = """
 const needle = (arguments[0] || '').trim();
 const exact = !!arguments[1];
 const normalize = (value) => (value || '').replace(/\\s+/g, ' ').trim();
+const selectorFor = (el) => {
+  if (!el || !(el instanceof Element)) return '';
+  const escapeCss = (value) => {
+    if (window.CSS && typeof window.CSS.escape === 'function') return window.CSS.escape(value);
+    return Array.from(String(value)).map((ch) => /[A-Za-z0-9_-]/.test(ch) ? ch : `\\${ch}`).join('');
+  };
+  if (el.id) return `#${escapeCss(el.id)}`;
+  const parts = [];
+  let node = el;
+  while (node && node.nodeType === Node.ELEMENT_NODE && node !== document.documentElement) {
+    let part = node.tagName.toLowerCase();
+    const parent = node.parentElement;
+    if (!parent) {
+      parts.unshift(part);
+      break;
+    }
+    const siblings = Array.from(parent.children).filter((child) => child.tagName === node.tagName);
+    if (siblings.length > 1) part += `:nth-of-type(${siblings.indexOf(node) + 1})`;
+    parts.unshift(part);
+    node = parent;
+  }
+  return parts.join(' > ');
+};
 const candidates = Array.from(document.querySelectorAll('button, a, [role="button"], input[type="button"], input[type="submit"], summary'));
 const texts = (el) => {
   const out = [
@@ -255,23 +314,37 @@ const matches = (value) => exact ? value === needle : value.includes(needle);
 for (const el of candidates) {
   const values = texts(el);
   if (!values.some(matches)) continue;
-  el.scrollIntoView({block:'center', inline:'center'});
-  el.click();
-  return {ok:true, selector: el.tagName.toLowerCase(), matched_text: values.find(matches) || ''};
+  return {ok:true, selector: selectorFor(el), matched_text: values.find(matches) || ''};
 }
 return {ok:false, error:'text not found'};
 """
-        self._run_lookup_step(
-            action="click_text",
-            lookup_kind="text",
-            query=text,
+        value = self.wait_for_js_result(
+            lookup_script,
             timeout_ms=timeout_ms,
-            script=script,
-            script_args=[text, exact],
-            record={"exact": exact},
+            reason=f"text {text}",
+            args=[text, exact],
+            predicate=lambda result: isinstance(result, dict) and result.get("ok") and bool(result.get("selector")),
+        )
+        selector = str(value.get("selector") or "")
+        if not selector:
+            raise StepError(f"click_text failed for text {text}: {value}")
+        self._click_selector(
+            selector,
+            timeout_ms,
+            "click_text",
+            {"text": text, "exact": exact, "matched_selector": selector, "matched_text": value.get("matched_text")},
         )
 
-    def type_text(self, selector: str, text: str, timeout_ms: int, clear: bool = True) -> None:
+    def _type_selector(
+        self,
+        selector: str,
+        text: str,
+        timeout_ms: int,
+        *,
+        clear: bool,
+        action: str,
+        record: dict[str, Any],
+    ) -> None:
         script = """
 const selector = arguments[0];
 const value = arguments[1];
@@ -298,38 +371,44 @@ return {ok:true};
         self._run_selector_step(
             selector=selector,
             timeout_ms=timeout_ms,
-            action="type",
+            action=action,
             script=script,
             args=[selector, text, clear],
-            record={"text_length": len(text), "clear": clear},
+            record={"text_length": len(text), "clear": clear, **record},
         )
 
+    def type_text(self, selector: str, text: str, timeout_ms: int, clear: bool = True) -> None:
+        self._type_selector(selector, text, timeout_ms, clear=clear, action="type", record={})
+
     def type_by_label(self, label: str, text: str, timeout_ms: int, clear: bool = True) -> None:
-        script = """
+        lookup_script = """
 const needle = (arguments[0] || '').trim();
-const value = arguments[1];
-const clear = !!arguments[2];
 const normalize = (input) => (input || '').replace(/\\s+/g, ' ').trim();
 const matches = (input) => normalize(input).toLowerCase().includes(needle.toLowerCase());
-const writableSelector = 'input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="checkbox"]):not([type="radio"]), textarea, select, [contenteditable="true"]';
-const applyValue = (el) => {
-  el.scrollIntoView({block:'center', inline:'center'});
-  el.focus();
-  if (clear) {
-    if ('value' in el) el.value = '';
-    if (el.isContentEditable) el.textContent = '';
-  }
-  if ('value' in el) {
-    el.value = value;
-  } else if (el.isContentEditable) {
-    el.textContent = value;
-  } else {
-    return false;
-  }
-  el.dispatchEvent(new Event('input', {bubbles:true}));
-  el.dispatchEvent(new Event('change', {bubbles:true}));
-  return true;
+const escapeCss = (value) => {
+  if (window.CSS && typeof window.CSS.escape === 'function') return window.CSS.escape(value);
+  return Array.from(String(value)).map((ch) => /[A-Za-z0-9_-]/.test(ch) ? ch : `\\${ch}`).join('');
 };
+const selectorFor = (el) => {
+  if (!el || !(el instanceof Element)) return '';
+  if (el.id) return `#${escapeCss(el.id)}`;
+  const parts = [];
+  let node = el;
+  while (node && node.nodeType === Node.ELEMENT_NODE && node !== document.documentElement) {
+    let part = node.tagName.toLowerCase();
+    const parent = node.parentElement;
+    if (!parent) {
+      parts.unshift(part);
+      break;
+    }
+    const siblings = Array.from(parent.children).filter((child) => child.tagName === node.tagName);
+    if (siblings.length > 1) part += `:nth-of-type(${siblings.indexOf(node) + 1})`;
+    parts.unshift(part);
+    node = parent;
+  }
+  return parts.join(' > ');
+};
+const writableSelector = 'input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="checkbox"]):not([type="radio"]), textarea, select, [contenteditable="true"]';
 const findByLabel = () => {
   for (const labelEl of Array.from(document.querySelectorAll('label'))) {
     if (!matches(labelEl.innerText || labelEl.textContent || '')) continue;
@@ -350,51 +429,83 @@ const candidates = [
   }),
 ].filter(Boolean);
 for (const el of candidates) {
-  if (!applyValue(el)) continue;
-  return {ok:true, selector: el.tagName.toLowerCase() + (el.id ? ('#' + el.id) : '')};
+  return {ok:true, selector: selectorFor(el)};
 }
 return {ok:false, error:'label not found'};
 """
-        self._run_lookup_step(
-            action="type_by_label",
-            lookup_kind="label",
-            query=label,
+        value = self.wait_for_js_result(
+            lookup_script,
             timeout_ms=timeout_ms,
-            script=script,
-            script_args=[label, text, clear],
-            record={"text_length": len(text), "clear": clear},
+            reason=f"label {label}",
+            args=[label],
+            predicate=lambda result: isinstance(result, dict) and result.get("ok") and bool(result.get("selector")),
+        )
+        selector = str(value.get("selector") or "")
+        if not selector:
+            raise StepError(f"type_by_label failed for label {label}: {value}")
+        self._type_selector(
+            selector,
+            text,
+            timeout_ms,
+            clear=clear,
+            action="type_by_label",
+            record={"label": label, "matched_selector": selector},
         )
 
     def type_by_placeholder(self, placeholder: str, text: str, timeout_ms: int, clear: bool = True) -> None:
-        script = """
+        lookup_script = """
 const needle = (arguments[0] || '').trim().toLowerCase();
-const value = arguments[1];
-const clear = !!arguments[2];
+const escapeCss = (value) => {
+  if (window.CSS && typeof window.CSS.escape === 'function') return window.CSS.escape(value);
+  return Array.from(String(value)).map((ch) => /[A-Za-z0-9_-]/.test(ch) ? ch : `\\${ch}`).join('');
+};
+const selectorFor = (el) => {
+  if (!el || !(el instanceof Element)) return '';
+  if (el.id) return `#${escapeCss(el.id)}`;
+  const parts = [];
+  let node = el;
+  while (node && node.nodeType === Node.ELEMENT_NODE && node !== document.documentElement) {
+    let part = node.tagName.toLowerCase();
+    const parent = node.parentElement;
+    if (!parent) {
+      parts.unshift(part);
+      break;
+    }
+    const siblings = Array.from(parent.children).filter((child) => child.tagName === node.tagName);
+    if (siblings.length > 1) part += `:nth-of-type(${siblings.indexOf(node) + 1})`;
+    parts.unshift(part);
+    node = parent;
+  }
+  return parts.join(' > ');
+};
 const candidates = Array.from(document.querySelectorAll('input[placeholder], textarea[placeholder]'));
 for (const el of candidates) {
-  const placeholder = (el.getAttribute('placeholder') || '').trim().toLowerCase();
-  if (!placeholder.includes(needle)) continue;
-  el.scrollIntoView({block:'center', inline:'center'});
-  el.focus();
-  if (clear && 'value' in el) el.value = '';
-  el.value = value;
-  el.dispatchEvent(new Event('input', {bubbles:true}));
-  el.dispatchEvent(new Event('change', {bubbles:true}));
-  return {ok:true, selector: el.tagName.toLowerCase() + (el.id ? ('#' + el.id) : '')};
+  const currentPlaceholder = (el.getAttribute('placeholder') || '').trim().toLowerCase();
+  if (!currentPlaceholder.includes(needle)) continue;
+  return {ok:true, selector: selectorFor(el)};
 }
 return {ok:false, error:'placeholder not found'};
 """
-        self._run_lookup_step(
-            action="type_by_placeholder",
-            lookup_kind="placeholder",
-            query=placeholder,
+        value = self.wait_for_js_result(
+            lookup_script,
             timeout_ms=timeout_ms,
-            script=script,
-            script_args=[placeholder, text, clear],
-            record={"text_length": len(text), "clear": clear},
+            reason=f"placeholder {placeholder}",
+            args=[placeholder],
+            predicate=lambda result: isinstance(result, dict) and result.get("ok") and bool(result.get("selector")),
+        )
+        selector = str(value.get("selector") or "")
+        if not selector:
+            raise StepError(f"type_by_placeholder failed for placeholder {placeholder}: {value}")
+        self._type_selector(
+            selector,
+            text,
+            timeout_ms,
+            clear=clear,
+            action="type_by_placeholder",
+            record={"placeholder": placeholder, "matched_selector": selector},
         )
 
-    def submit(self, selector: str, timeout_ms: int) -> None:
+    def _submit_selector(self, selector: str, timeout_ms: int, *, action: str, record: dict[str, Any]) -> None:
         script = """
 const selector = arguments[0];
 const el = document.querySelector(selector);
@@ -412,32 +523,17 @@ return {ok:true};
         self._run_selector_step(
             selector=selector,
             timeout_ms=timeout_ms,
-            action="submit",
+            action=action,
             script=script,
             args=[selector],
-            record={},
+            record=record,
         )
 
+    def submit(self, selector: str, timeout_ms: int) -> None:
+        self._submit_selector(selector, timeout_ms, action="submit", record={})
+
     def submit_first_form(self, timeout_ms: int) -> None:
-        script = """
-const form = document.querySelector('form');
-if (!form) return {ok:false, error:'no form found'};
-form.scrollIntoView({block:'center', inline:'center'});
-if (typeof form.requestSubmit === 'function') {
-  form.requestSubmit();
-} else {
-  form.submit();
-}
-return {ok:true, selector:'form'};
-"""
-        self._run_lookup_step(
-            action="submit_first_form",
-            lookup_kind="form",
-            query="first",
-            timeout_ms=timeout_ms,
-            script=script,
-            script_args=[],
-        )
+        self._submit_selector("form", timeout_ms, action="submit_first_form", record={"matched_selector": "form"})
 
     def snapshot_dom(self, path: str) -> None:
         dest = self.output_dir / path
