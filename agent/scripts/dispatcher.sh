@@ -31,6 +31,17 @@ sql() {
   sqlite3 "$DB" ".timeout 5000" "$1"
 }
 
+is_bookkeeping_suffix_token() {
+  case "$1" in
+    operator|recon-specialist|source-analyzer|vulnerability-analyst|exploit-developer|fuzzer|osint-analyst|report-writer|done|error|pending|processing|requeued|completed|skipped)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
 normalize_id_list() {
   if (($# == 0)); then
     echo "ERROR: id_list must contain at least one numeric ID" >&2
@@ -39,6 +50,8 @@ normalize_id_list() {
 
   local token
   local normalized=()
+  local ignored_suffixes=()
+  local saw_suffix=0
   for token in "$@"; do
     token="${token// /}"
     token="${token#,}"
@@ -48,17 +61,31 @@ normalize_id_list() {
     local part
     for part in "${parts[@]}"; do
       [[ -z "$part" ]] && continue
-      if ! [[ "$part" =~ ^[0-9]+$ ]]; then
-        echo "ERROR: id_list must contain only numeric IDs separated by commas or spaces" >&2
-        exit 1
+      if [[ "$part" =~ ^[0-9]+$ ]]; then
+        if (( saw_suffix )); then
+          echo "ERROR: id_list must contain only numeric IDs separated by commas or spaces" >&2
+          exit 1
+        fi
+        normalized+=("$part")
+        continue
       fi
-      normalized+=("$part")
+      if ((${#normalized[@]} > 0)) && is_bookkeeping_suffix_token "$part"; then
+        saw_suffix=1
+        ignored_suffixes+=("$part")
+        continue
+      fi
+      echo "ERROR: id_list must contain only numeric IDs separated by commas or spaces" >&2
+      exit 1
     done
   done
 
   if ((${#normalized[@]} == 0)); then
     echo "ERROR: id_list must contain at least one numeric ID" >&2
     exit 1
+  fi
+
+  if ((${#ignored_suffixes[@]} > 0)); then
+    printf 'WARN: ignoring trailing bookkeeping token(s): %s\n' "${ignored_suffixes[*]}" >&2
   fi
 
   local joined
