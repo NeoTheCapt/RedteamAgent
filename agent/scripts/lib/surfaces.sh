@@ -133,12 +133,98 @@ upsert_surface_record() {
     surface_file="$(surface_file_path "$eng_dir")"
     tmp_file="$(mktemp "${TMPDIR:-/tmp}/surfaces-jsonl.XXXXXX")"
 
-    python3 - <<'PY' "$surface_file" "$tmp_file" "$surface_type" "$target" "$source" "$rationale" "$evidence_ref" "$status"
-import json,sys
+    python3 - <<'PY' "$eng_dir" "$surface_file" "$tmp_file" "$surface_type" "$target" "$source" "$rationale" "$evidence_ref" "$status"
+import json
+import sys
+from pathlib import Path
+from urllib.parse import SplitResult, urlsplit
 
-surface_file, tmp_file, surface_type, target, source, rationale, evidence_ref, status = sys.argv[1:]
+eng_dir, surface_file, tmp_file, surface_type, target, source, rationale, evidence_ref, status = sys.argv[1:]
+scope_path = Path(eng_dir) / "scope.json"
 rows = []
 seen = False
+METHODS = {"GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"}
+LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "0.0.0.0", "::1", "host.docker.internal"}
+
+scope_target = ""
+if scope_path.exists():
+    try:
+        scope_payload = json.loads(scope_path.read_text(encoding="utf-8"))
+    except Exception:
+        scope_payload = {}
+    scope_target = str((scope_payload or {}).get("target") or "").strip()
+
+scope_parsed = urlsplit(scope_target) if scope_target else None
+scope_host = (scope_parsed.hostname or "").strip().lower().strip("[]") if scope_parsed else ""
+
+
+def default_port(parsed: SplitResult) -> int | None:
+    if parsed.port is not None:
+        return parsed.port
+    if parsed.scheme == "http":
+        return 80
+    if parsed.scheme == "https":
+        return 443
+    return None
+
+
+def normalize_fragment_path(value: str) -> str:
+    fragment = value.strip()
+    if fragment.startswith("/#/"):
+        return fragment
+    if fragment.startswith("#/"):
+        return "/" + fragment
+    if fragment.startswith("/"):
+        return "/#" + fragment
+    return "/#/" + fragment.lstrip("#/")
+
+
+def split_target_spec(value: str) -> tuple[str | None, str]:
+    parts = value.split(None, 1)
+    if len(parts) == 2 and parts[0].upper() in METHODS:
+        return parts[0].upper(), parts[1].strip()
+    return None, value
+
+
+def canonicalize_target(value: str) -> str:
+    value = " ".join(str(value or "").strip().split())
+    if not value:
+        return value
+
+    method, remainder = split_target_spec(value)
+
+    if remainder.startswith(("http://", "https://")):
+        parsed = urlsplit(remainder)
+        candidate_host = (parsed.hostname or "").strip().lower().strip("[]")
+        candidate_port = default_port(parsed)
+        scope_port = default_port(scope_parsed) if scope_parsed else None
+        same_scope_host = bool(
+            scope_parsed
+            and parsed.scheme == scope_parsed.scheme
+            and candidate_port == scope_port
+            and (
+                candidate_host == scope_host
+                or (candidate_host in LOOPBACK_HOSTS and scope_host in LOOPBACK_HOSTS)
+            )
+        )
+        if same_scope_host:
+            if parsed.fragment:
+                normalized_path = normalize_fragment_path(parsed.fragment)
+            else:
+                normalized_path = parsed.path or "/"
+                if parsed.query:
+                    normalized_path = f"{normalized_path}?{parsed.query}"
+            return f"{method or 'GET'} {normalized_path}"
+        return f"{method + ' ' if method else ''}{remainder}"
+
+    if remainder.startswith(("/#/", "#/")):
+        return f"{method or 'GET'} {normalize_fragment_path(remainder)}"
+    if remainder.startswith("/"):
+        return f"{method or 'GET'} {remainder}"
+    return f"{method + ' ' if method else ''}{remainder}"
+
+
+canonical_target = canonicalize_target(target)
 
 with open(surface_file, "r", encoding="utf-8") as fh:
     for line in fh:
@@ -146,7 +232,8 @@ with open(surface_file, "r", encoding="utf-8") as fh:
         if not line:
             continue
         row = json.loads(line)
-        if row.get("surface_type") == surface_type and row.get("target") == target:
+        if row.get("surface_type") == surface_type and canonicalize_target(str(row.get("target") or "")) == canonical_target:
+            row["target"] = target
             row["source"] = source
             row["rationale"] = rationale
             row["evidence_ref"] = evidence_ref
@@ -164,8 +251,17 @@ if not seen:
         "status": status,
     })
 
+collapsed = {}
+for row in rows:
+    key = (row.get("surface_type"), canonicalize_target(str(row.get("target") or "")))
+    if key in collapsed:
+        existing = collapsed[key]
+        existing.update(row)
+    else:
+        collapsed[key] = row
+
 with open(tmp_file, "w", encoding="utf-8") as out:
-    for row in rows:
+    for row in collapsed.values():
         out.write(json.dumps(row, ensure_ascii=True) + "\n")
 PY
 
