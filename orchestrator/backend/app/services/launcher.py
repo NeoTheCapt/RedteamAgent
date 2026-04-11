@@ -2402,6 +2402,49 @@ def _clear_run_terminal_reason(run: Run) -> None:
     metadata_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
+def _continuous_observation_target_matches(run: Run) -> bool:
+    env_path = seed_root_for(run) / "env.json"
+    if not env_path.exists():
+        return False
+    try:
+        payload = json.loads(env_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return False
+    if not isinstance(payload, dict):
+        return False
+
+    configured = str(
+        payload.get("REDTEAM_CONTINUOUS_TARGETS")
+        or payload.get("CONTINUOUS_OBSERVATION_TARGETS")
+        or ""
+    ).strip()
+    if not configured:
+        return False
+
+    candidates: set[str] = set()
+    target = str(getattr(run, "target", "") or "").strip()
+    if target:
+        candidates.add(target)
+        parsed_target = urlsplit(target if "://" in target else f"https://{target}")
+        if parsed_target.hostname:
+            candidates.add(parsed_target.hostname)
+
+    engagement_dir = _active_engagement_dir(run)
+    scope = _normalize_scope_file(engagement_dir / "scope.json", run=run) if engagement_dir is not None else None
+    if isinstance(scope, dict):
+        scope_target = str(scope.get("target") or "").strip()
+        scope_hostname = str(scope.get("hostname") or "").strip()
+        if scope_target:
+            candidates.add(scope_target)
+            parsed_scope_target = urlsplit(scope_target if "://" in scope_target else f"https://{scope_target}")
+            if parsed_scope_target.hostname:
+                candidates.add(parsed_scope_target.hostname)
+        if scope_hostname:
+            candidates.add(scope_hostname)
+
+    return any(rule.strip() in candidates for rule in re.split(r"[;,]", configured) if rule.strip())
+
+
 def _terminal_reason(
     *,
     succeeded: bool,
@@ -3159,7 +3202,10 @@ def _maybe_auto_resume_run(
     phase_name = _canonical_phase_name(phase)
     scope = _normalize_scope_file(engagement_dir / "scope.json", run=run) or {}
     scope_phase = _canonical_phase_name(scope.get("current_phase")) if isinstance(scope, dict) else "unknown"
-    if phase_name in {"report", "complete"} or scope_phase in {"report", "complete"}:
+    continuous_observation = _continuous_observation_target_matches(run)
+    if (
+        phase_name in {"report", "complete"} or scope_phase in {"report", "complete"}
+    ) and not continuous_observation:
         return False
 
     attempt = _current_auto_resume_count(run)

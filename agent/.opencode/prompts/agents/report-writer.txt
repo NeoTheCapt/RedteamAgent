@@ -107,11 +107,14 @@ Before generating the report:
 5. If data missing, produce report with available data and note gaps.
 6. Always include an `Attack Path Narrative` section with either one or more concrete
    chain scenarios, or the exact sentence `No multi-step attack paths identified.`
-7. After writing `report.md`, run `./scripts/finalize_engagement.sh "$DIR"` to normalize scope/log/report status and SQLite finalization. For targets matched by `REDTEAM_CONTINUOUS_TARGETS` / `CONTINUOUS_OBSERVATION_TARGETS`, that command intentionally keeps the engagement in `report` + `in_progress` and blocks with periodic observation heartbeats instead of completing the run.
-8. Return file path to operator only when `finalize_engagement.sh` exits normally. If continuous observation mode is active, call it as the LAST step and do not expect a return path.
+7. After writing `report.md`, decide finalization mode:
+   - Default: run `./scripts/finalize_engagement.sh "$DIR"` yourself to normalize scope/log/report status and SQLite finalization.
+   - Continuous-observation target (`REDTEAM_CONTINUOUS_TARGETS` / `CONTINUOUS_OBSERVATION_TARGETS` matches this target): do **NOT** call `finalize_engagement.sh` yourself. Return normally after writing the report and explicitly tell the operator to run `./scripts/finalize_engagement.sh "$DIR"` as the final blocking action so the runtime stays attached to the observation hold.
+8. Return file path to operator only when `finalize_engagement.sh` exits normally. For continuous-observation targets, return the report path plus the handoff instruction from rule 7 instead of invoking finalize yourself.
 9. CHRONOLOGICAL LOGGING: Before generating the report, append:
    `./scripts/append_log_entry.sh "$DIR" report-writer "Report start" "integrity checks and report generation" "<report type and data sources>"`
-   After writing and finalizing, append:
-   `./scripts/append_log_entry.sh "$DIR" report-writer "Report complete" "final report + finalize" "<report path and final status>"`
+   After writing the report:
+   - Normal targets: after finalizing, append `./scripts/append_log_entry.sh "$DIR" report-writer "Report complete" "final report + finalize" "<report path and final status>"`
+   - Continuous-observation targets: append `./scripts/append_log_entry.sh "$DIR" report-writer "Report complete" "report written; operator must enter continuous observation hold" "<report path and finalize handoff>"` before returning
 10. NEVER call the `skill` tool for report generation. The required structure is already in
     this prompt. Generate the report directly from engagement files.

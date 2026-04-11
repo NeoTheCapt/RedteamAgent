@@ -104,7 +104,8 @@ PARALLEL: Independent tasks → parallel. Dependent → sequential.
    Never stop after saying reporting is next. The same assistant turn that decides reporting should begin MUST actually dispatch `report-writer`.
    After report generation, NEVER mutate `scope.json` directly with raw `jq`/`python` to force `.status = "complete"` or `.current_phase = "complete"`.
    The ONLY allowed report-finalization command is `./scripts/finalize_engagement.sh "$DIR"`.
-   If that command enters or reports a continuous observation hold / does not exit normally, the run remains active in `report`; do NOT append `stop_reason=completed`, do NOT write a fallback completion log entry, and do NOT run any secondary command that marks the engagement complete.
+   For continuous-observation targets, `report-writer` should stop after writing `report.md` and hand control back. The operator MUST run `./scripts/finalize_engagement.sh "$DIR"` itself as the final blocking action so the runtime stays attached to the observation hold.
+   If that command enters or reports a continuous observation hold / does not exit normally, the run remains active in `report`; do NOT append `stop_reason=completed`, do NOT write a fallback completion log entry, do NOT translate the hold into `stop_reason=runtime_error`, and do NOT run any secondary command that marks the engagement complete.
 
 ## Stop Conditions
 
@@ -114,7 +115,7 @@ Before any final stop/completion message:
 - if pending > 0 or processing > 0, continue the loop and do NOT stop
 - if `./scripts/check_collection_health.sh "$DIR"` fails, do NOT stop
 - if `./scripts/check_surface_coverage.sh "$DIR"` fails, do NOT stop
-- if `./scripts/finalize_engagement.sh "$DIR"` entered a continuous observation hold or did not exit normally, do NOT emit `completed` and do NOT try to override `scope.json` afterward
+- if `./scripts/finalize_engagement.sh "$DIR"` entered a continuous observation hold or did not exit normally, do NOT emit `completed`, do NOT try to override `scope.json` afterward, and do NOT write a `Run stop` fallback for that hold
 - assistant turn boundary, context bloat, or token budget pressure by themselves are NOT valid stop reasons; shrink context with targeted reads and keep advancing
 
 If you must stop because of a real blocker, write an explicit log entry first:
