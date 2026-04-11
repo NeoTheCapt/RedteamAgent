@@ -129,7 +129,7 @@ Domains & Infrastructure:
 Input: JSON array of cases (type: page/javascript/stylesheet/data) with id, method, url,
 url_path, content_type, response_snippet.
 
-Per case: cache the exact case URL into the engagement workspace and analyze by type. If the saved local body is missing or empty but the batch/crawl metadata shows that exact in-scope asset succeeded, you may do one bounded recovery fetch of that exact URL before continuing. For concrete client-rendered page cases (`/#/...`, `#/...`, or other fragment routes preserved from bundle analysis), a plain HTTP refetch is not sufficient because it only reloads the root shell; materialize the route with `./scripts/katana_route_capture.sh "$DIR" "<exact-case-url>"` and inspect the saved route-capture artifact before treating the page as exhausted. Use `downloads/`, `scans/`, or an engagement-local temp dir created under `$DIR`
+Per case: cache the exact case URL into the engagement workspace and analyze by type. If the saved local body is missing or empty but the batch/crawl metadata shows that exact in-scope asset succeeded, you may do one bounded recovery fetch of that exact URL before continuing. For concrete client-rendered page cases (`/#/...`, `#/...`, or other fragment routes preserved from bundle analysis), a plain HTTP refetch is not sufficient because it only reloads the root shell; materialize the route with `./scripts/katana_route_capture.sh "$DIR" "<exact-case-url>"` and inspect the saved route-capture artifact before treating the page as exhausted. A route-capture artifact that only shows a seed error row (for example `hybrid: response is nil`) or otherwise has zero successful response rows still counts as failed materialization, not a covered route. Use `downloads/`, `scans/`, or an engagement-local temp dir created under `$DIR`
 (for example `mktemp -d "$DIR/tmp.source-analysis.XXXXXX"`). Never use `/tmp` or other external
 paths during unattended runs.
 
@@ -154,7 +154,7 @@ the outcome section is written.
 1. Execute ONLY the assigned analysis objective. Do not expand scope.
 2. DOWNLOAD ONCE, ANALYZE LOCALLY — save to the engagement's downloads/ dir and reuse local artifacts first.
    If a saved case body is missing or empty, one bounded recovery fetch of that exact case URL is allowed; do not turn that into broad refetching.
-   For fragment/client-route page cases, do not mark them `DONE` until you have inspected a saved route-materialization artifact for that exact route (reuse an existing one under `scans/route-captures/` or create it with `./scripts/katana_route_capture.sh "$DIR" "<exact-case-url>"`). If route materialization fails or cannot be produced yet, return `REQUEUE`, not `DONE`.
+   For fragment/client-route page cases, do not mark them `DONE` until you have inspected a saved route-materialization artifact for that exact route (reuse an existing one under `scans/route-captures/` or create it with `./scripts/katana_route_capture.sh "$DIR" "<exact-case-url>"`). If the artifact only contains the exact-route seed error, has zero successful response rows, or route materialization otherwise fails/cannot be produced yet, return `REQUEUE`, not `DONE`.
    If you need scratch space, create it under `$DIR` (for example `mktemp -d "$DIR/tmp.source-analysis.XXXXXX"`).
    Do NOT use `/tmp` or any path outside the engagement/workspace tree.
 3. For >1MB bundles, focus on string extraction and pattern matching.
