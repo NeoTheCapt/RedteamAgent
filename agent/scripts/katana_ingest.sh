@@ -63,7 +63,8 @@ mkdir -p "$ENGAGEMENT_DIR/scans"
 # normalized/redacted as we ingest each completed row.
 KATANA_OUTPUT="$ENGAGEMENT_DIR/scans/katana_output.jsonl"
 KATANA_RAW_OUTPUT="$ENGAGEMENT_DIR/scans/.katana_output.raw.jsonl"
-touch "$KATANA_OUTPUT" "$KATANA_RAW_OUTPUT"
+KATANA_ERROR_LOG="$ENGAGEMENT_DIR/scans/katana_error.log"
+touch "$KATANA_OUTPUT" "$KATANA_RAW_OUTPUT" "$KATANA_ERROR_LOG"
 
 # Backwards-compatible test/support path: when re-ingesting an existing captured
 # katana_output.jsonl without starting Katana, move that raw fixture into the hidden input
@@ -87,6 +88,10 @@ KATANA_RECOVERABLE_ERROR_LINES=0
 KATANA_SUCCESS_LINES=0
 KATANA_XHR_REQUESTS=0
 KATANA_INGEST_EXIT_GRACE_SECONDS="${KATANA_INGEST_EXIT_GRACE_SECONDS:-10}"
+KATANA_FALLBACK_SUCCESS_LINES_BASE=0
+KATANA_FALLBACK_XHR_REQUESTS_BASE=0
+KATANA_FALLBACK_ERROR_LOG_OFFSET=0
+KATANA_FALLBACK_ERROR_LOG_REPLAYED=0
 
 cleanup_katana_ingest() {
     if [[ "$KATANA_INGEST_STARTED_KATANA" == "1" ]]; then
@@ -101,6 +106,7 @@ cleanup_katana_ingest() {
         sanitize_katana_output_tail "partial-final" >/dev/null 2>&1 || true
         INGEST_REMAINDER=""
     fi
+    replay_fallback_error_log_hints >/dev/null 2>&1 || true
     rm -f "$KATANA_RAW_OUTPUT"
     rm -f "$(pid_file_path "$ENGAGEMENT_DIR/pids" "katana_ingest")"
 }
@@ -117,6 +123,97 @@ katana_runtime_active() {
     local container_name
     container_name="$(_katana_container_name)" || return 1
     docker ps --format '{{.Names}}' | grep -q "^${container_name}$"
+}
+
+fallback_has_usable_output() {
+    (( KATANA_SUCCESS_LINES > KATANA_FALLBACK_SUCCESS_LINES_BASE )) && return 0
+    (( KATANA_XHR_REQUESTS > KATANA_FALLBACK_XHR_REQUESTS_BASE )) && return 0
+    return 1
+}
+
+resolve_fallback_error_log_source() {
+    local url="${1:-}"
+    local source_ref="${2:-}"
+    local url_path source_path
+
+    [[ -n "$url" ]] || {
+        printf 'katana\n'
+        return 0
+    }
+
+    url_path="$(extract_url_path "$url")"
+    if ! is_katana_api_like_path "$url_path"; then
+        printf 'katana\n'
+        return 0
+    fi
+
+    if [[ -n "$source_ref" ]]; then
+        source_path="$(extract_url_path "$source_ref")"
+        if is_katana_javascript_source_ref "$source_ref"; then
+            printf 'katana-xhr\n'
+            return 0
+        fi
+        case "$source_path" in
+            */robots.txt|*/sitemap.xml|*/sitemap_index.xml)
+                printf 'katana\n'
+                return 0
+                ;;
+        esac
+        printf 'katana-xhr\n'
+        return 0
+    fi
+
+    printf 'katana\n'
+}
+
+replay_fallback_error_log_hints() {
+    local recovered=0 line endpoint source_ref error_text recovered_source artifact_line start_byte=1
+
+    [[ "$KATANA_FALLBACK_ACTIVATED" == "1" ]] || return 0
+    [[ "$KATANA_FALLBACK_ERROR_LOG_REPLAYED" == "0" ]] || return 0
+    [[ -f "$KATANA_ERROR_LOG" ]] || {
+        KATANA_FALLBACK_ERROR_LOG_REPLAYED=1
+        return 0
+    }
+
+    if fallback_has_usable_output; then
+        KATANA_FALLBACK_ERROR_LOG_REPLAYED=1
+        return 0
+    fi
+
+    if [[ "$KATANA_FALLBACK_ERROR_LOG_OFFSET" =~ ^[0-9]+$ ]]; then
+        start_byte=$((KATANA_FALLBACK_ERROR_LOG_OFFSET + 1))
+    fi
+
+    while IFS= read -r line; do
+        [[ -n "$line" ]] || continue
+        endpoint="$(printf '%s' "$line" | jq -r '.endpoint // empty' 2>/dev/null || true)"
+        source_ref="$(printf '%s' "$line" | jq -r '.source // empty' 2>/dev/null || true)"
+        error_text="$(printf '%s' "$line" | jq -r '.error // empty' 2>/dev/null || true)"
+        [[ -n "$endpoint" ]] || continue
+        [[ -n "$error_text" ]] || continue
+        katana_error_is_recoverable_discovery "$error_text" || continue
+
+        recovered_source="$(resolve_fallback_error_log_source "$endpoint" "$source_ref")"
+        artifact_line="$(jq -cn \
+            --arg endpoint "$endpoint" \
+            --arg source "$source_ref" \
+            --arg error "$error_text" \
+            --arg recovered_source "$recovered_source" \
+            '{request:{method:"GET",endpoint:$endpoint,source:$source},error:$error,meta:{recovered_from:"katana_error.log",recovered_source:$recovered_source}}')"
+        append_sanitized_output_line "$artifact_line"
+        ingest_request "GET" "$endpoint" "" "0" "$recovered_source"
+        if [[ "$recovered_source" == "katana-xhr" ]]; then
+            KATANA_XHR_REQUESTS=$((KATANA_XHR_REQUESTS + 1))
+        fi
+        recovered=$((recovered + 1))
+    done < <(tail -c +"$start_byte" "$KATANA_ERROR_LOG" 2>/dev/null || true)
+
+    if (( recovered > 0 )); then
+        echo "[katana_ingest] Recovered $recovered fallback discovery rows from katana_error.log"
+    fi
+
+    KATANA_FALLBACK_ERROR_LOG_REPLAYED=1
 }
 
 maybe_finish_ingest_loop() {
@@ -136,6 +233,7 @@ maybe_finish_ingest_loop() {
     fi
     sanitize_katana_output_tail "partial-final"
     INGEST_REMAINDER=""
+    replay_fallback_error_log_hints
 
     return 0
 }
@@ -751,6 +849,15 @@ activate_plain_katana_fallback() {
     local old_enable_hybrid="${KATANA_ENABLE_HYBRID:-1}"
     local old_enable_xhr="${KATANA_ENABLE_XHR:-1}"
     local old_enable_headless="${KATANA_ENABLE_HEADLESS:-1}"
+    KATANA_FALLBACK_SUCCESS_LINES_BASE="$KATANA_SUCCESS_LINES"
+    KATANA_FALLBACK_XHR_REQUESTS_BASE="$KATANA_XHR_REQUESTS"
+    KATANA_FALLBACK_ERROR_LOG_REPLAYED=0
+    if [[ -f "$KATANA_ERROR_LOG" ]]; then
+        KATANA_FALLBACK_ERROR_LOG_OFFSET="$(wc -c < "$KATANA_ERROR_LOG" | tr -d '[:space:]')"
+        KATANA_FALLBACK_ERROR_LOG_OFFSET="${KATANA_FALLBACK_ERROR_LOG_OFFSET:-0}"
+    else
+        KATANA_FALLBACK_ERROR_LOG_OFFSET=0
+    fi
     export KATANA_ENABLE_HYBRID=0
     export KATANA_ENABLE_XHR="$old_enable_xhr"
     export KATANA_ENABLE_HEADLESS="$old_enable_headless"
