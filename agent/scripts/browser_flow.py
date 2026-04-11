@@ -3,6 +3,7 @@ import argparse
 import base64
 import json
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -120,6 +121,12 @@ class WebDriverClient:
         encoded = str(self._request("GET", f"/session/{self.session_id}/screenshot"))
         return base64.b64decode(encoded)
 
+    def alert_text(self) -> str:
+        return str(self._request("GET", f"/session/{self.session_id}/alert/text"))
+
+    def accept_alert(self) -> None:
+        self._request("POST", f"/session/{self.session_id}/alert/accept", {})
+
     def add_cookie(self, cookie: dict[str, Any]) -> None:
         self._request("POST", f"/session/{self.session_id}/cookie", {"cookie": cookie})
 
@@ -154,11 +161,52 @@ class BrowserFlow:
         self.client = client
         self.output_dir = output_dir
         self.steps_run: list[dict[str, Any]] = []
+        self.observed_alerts: list[str] = []
 
     def record(self, action: str, **extra: Any) -> None:
         item = {"action": action}
         item.update(extra)
         self.steps_run.append(item)
+
+    def _parse_alert_text(self, message: str) -> str:
+        match = re.search(r"Alert text\s*:\s*(.+?)(?:\\n|$)", message, flags=re.IGNORECASE | re.DOTALL)
+        if match:
+            return match.group(1).strip()
+        return ""
+
+    def _recover_unexpected_alert(self, exc: Exception, source_action: str) -> bool:
+        message = str(exc)
+        if "unexpected alert open" not in message.lower():
+            return False
+
+        alert_text = ""
+        if self.client is not None and hasattr(self.client, "alert_text"):
+            try:
+                alert_text = str(self.client.alert_text() or "").strip()
+            except Exception:
+                alert_text = ""
+        if not alert_text:
+            alert_text = self._parse_alert_text(message) or "<unknown>"
+
+        accepted = False
+        if self.client is not None and hasattr(self.client, "accept_alert"):
+            try:
+                self.client.accept_alert()
+                accepted = True
+            except Exception:
+                accepted = False
+
+        self.observed_alerts.append(alert_text)
+        self.record("unexpected_alert", source_action=source_action, text=alert_text, accepted=accepted)
+        return True
+
+    def call_with_alert_recovery(self, fn: Any, *, source_action: str) -> Any:
+        try:
+            return fn()
+        except Exception as exc:
+            if not self._recover_unexpected_alert(exc, source_action):
+                raise
+        return fn()
 
     def wait_for_document(self, timeout_ms: int) -> None:
         self.wait_for_js_true(
@@ -181,7 +229,10 @@ class BrowserFlow:
         check = predicate or bool
         while time.time() < deadline:
             try:
-                last_value = self.client.execute(script, args or [])
+                last_value = self.call_with_alert_recovery(
+                    lambda: self.client.execute(script, args or []),
+                    source_action=f"wait_for_js:{reason}",
+                )
             except Exception as exc:
                 last_value = f"error: {exc}"
             if check(last_value):
@@ -223,7 +274,10 @@ return (document.body && document.body.innerText || '').includes(needle);
         record: dict[str, Any],
     ) -> None:
         self.wait_for_selector(selector, timeout_ms)
-        value = self.client.execute(script, args)
+        value = self.call_with_alert_recovery(
+            lambda: self.client.execute(script, args),
+            source_action=action,
+        )
         if not isinstance(value, dict) or not value.get("ok"):
             raise StepError(f"{action} failed for {selector}: {value}")
         self.record(action, selector=selector, timeout_ms=timeout_ms, **record)
@@ -253,7 +307,10 @@ el.scrollIntoView({block:'center', inline:'center'});
 el.click();
 return {ok:true};
 """
-        value = self.client.execute(fallback_script, [selector])
+        value = self.call_with_alert_recovery(
+            lambda: self.client.execute(fallback_script, [selector]),
+            source_action=action,
+        )
         if not isinstance(value, dict) or not value.get("ok"):
             raise StepError(f"{action} failed for {selector}: {value}")
         self.record(
@@ -538,13 +595,15 @@ return {ok:true};
     def snapshot_dom(self, path: str) -> None:
         dest = self.output_dir / path
         dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_text(self.client.page_source(), encoding="utf-8")
+        dom = self.call_with_alert_recovery(self.client.page_source, source_action="page_source")
+        dest.write_text(dom, encoding="utf-8")
         self.record("dump_dom", path=str(dest.relative_to(self.output_dir)))
 
     def snapshot_png(self, path: str) -> None:
         dest = self.output_dir / path
         dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_bytes(self.client.screenshot())
+        screenshot = self.call_with_alert_recovery(self.client.screenshot, source_action="screenshot")
+        dest.write_bytes(screenshot)
         self.record("screenshot", path=str(dest.relative_to(self.output_dir)))
 
     def execute_step(self, raw_step: dict[str, Any]) -> None:
@@ -794,9 +853,10 @@ def main() -> int:
         summary.update(
             {
                 "status": "ok",
-                "title": client.title(),
-                "final_url": client.current_url(),
+                "title": flow.call_with_alert_recovery(client.title, source_action="title"),
+                "final_url": flow.call_with_alert_recovery(client.current_url, source_action="current_url"),
                 "steps_run": flow.steps_run,
+                "observed_alerts": flow.observed_alerts,
                 "dom_file": args.dom_file,
                 "screenshot": args.screenshot,
             }
@@ -810,6 +870,7 @@ def main() -> int:
                 "status": "error",
                 "error": str(exc),
                 "steps_run": flow.steps_run,
+                "observed_alerts": flow.observed_alerts,
             }
         )
         write_json(output_dir / args.summary_json, summary)
