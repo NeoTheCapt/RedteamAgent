@@ -195,11 +195,18 @@ the outcome section is written.
     route/surface budget on near-duplicate variants from one subtree (for example several
     auth/account or continuation-token screens) while omitting unrelated hidden workflows. Dedupe
     near-duplicates, then prefer one high-signal concrete route or surface per distinct actionable
-    family before adding second-order variants from the same family. When the bundle or saved
+    family before adding second-order variants from the same family. Within one workflow family, do
+    not collapse materially different stages into a single representative when they would change the
+    downstream attack plan; if the bundle clearly shows sibling routes for different stages/outcomes
+    (for example login vs register vs forgot-password, browse/list vs submit/review, or end-user
+    flow vs admin/manage), preserve at least one concrete route/surface for each distinct stage
+    instead of treating one sibling as coverage for the rest. When the bundle or saved
     artifacts expose a reusable workflow primitive (for example a captcha/anti-automation helper,
     reset/setup token flow, TOTP enrollment path, signed-action helper, or other temporary secret
     source), preserve at least one concrete consumer workflow route/surface from that same family
-    instead of handing off the primitive in isolation. Likewise, when saved artifacts expose a
+    instead of handing off the primitive in isolation. A recovery/auth helper route is not a
+    substitute for a registration/create flow, and a read-only browse route is not a substitute for
+    a write/submit surface when both are concretely visible in the same artifact set. Likewise, when saved artifacts expose a
     downloadable backup, vault, dump, config export, or encoded note, do not treat the branch as
     exhausted just because the first local pass found no plaintext secret. Keep the exact
     requestable download path as a `file_handling` surface when relevant, record the verified file
