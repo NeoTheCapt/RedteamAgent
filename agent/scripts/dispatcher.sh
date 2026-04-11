@@ -102,6 +102,7 @@ ORDER BY
     CASE lower(source)
       WHEN 'exploit-developer' THEN 500
       WHEN 'katana-xhr' THEN 460
+      WHEN 'operator-surface-coverage' THEN 445
       WHEN 'katana' THEN 430
       WHEN 'vulnerability-analyst' THEN 380
       WHEN 'source-analyzer' THEN 280
@@ -177,6 +178,24 @@ ORDER BY
           OR lower(coalesce(nullif(url_path, ''), url)) LIKE '%openapi%'
           OR lower(coalesce(nullif(url_path, ''), url)) LIKE '%api-doc%'
         THEN 90 ELSE 0
+      END
+    + CASE
+        WHEN lower(coalesce(nullif(url_path, ''), url)) LIKE '%feedback%'
+          OR lower(coalesce(nullif(url_path, ''), url)) LIKE '%review%'
+          OR lower(coalesce(nullif(url_path, ''), url)) LIKE '%comment%'
+          OR lower(coalesce(nullif(url_path, ''), url)) LIKE '%rating%'
+          OR lower(coalesce(nullif(url_path, ''), url)) LIKE '%cart%'
+          OR lower(coalesce(nullif(url_path, ''), url)) LIKE '%basket%'
+          OR lower(coalesce(nullif(url_path, ''), url)) LIKE '%checkout%'
+          OR lower(coalesce(nullif(url_path, ''), url)) LIKE '%privacy%'
+          OR lower(coalesce(nullif(url_path, ''), url)) LIKE '%policy%'
+          OR lower(coalesce(nullif(url_path, ''), url)) LIKE '%terms%'
+          OR lower(coalesce(nullif(url_path, ''), url)) LIKE '%legal%'
+          OR lower(coalesce(nullif(url_path, ''), url)) LIKE '%sandbox%'
+          OR lower(coalesce(nullif(url_path, ''), url)) LIKE '%playground%'
+          OR lower(coalesce(nullif(url_path, ''), url)) LIKE '%demo%'
+          OR lower(coalesce(nullif(url_path, ''), url)) LIKE '%lab%'
+        THEN 120 ELSE 0
       END
     + CASE
         WHEN lower(coalesce(nullif(url_path, ''), url)) LIKE '%search%'
