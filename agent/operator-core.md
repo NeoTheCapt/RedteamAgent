@@ -154,7 +154,9 @@ When ANY agent discovers credentials:
 
 Auth-validation task requirements:
 - Use exploit-developer for the login/JWT acquisition attempt
-- Keep the task narrow: validate exactly the discovered credential(s), acquire session material if successful, and test one immediate authenticated foothold
+- Keep the task narrow: validate exactly the discovered credential(s), acquire session material if successful, and confirm one immediate authenticated foothold
+- Successful validation is NOT exhausted by `/whoami` or one trivial authenticated GET. In that same auth branch, spend one bounded authenticated breadth pass using already discovered in-scope routes/surfaces/cases: exercise at least one auth-only page or client route and one authenticated workflow/write action (profile/account/admin/order/review/feedback/cart-style flows when the target exposes them).
+- Treat POST-AUTH RE-COLLECTION as actionable queue expansion, not bookkeeping. If the refreshed queue or existing surfaces reveal concrete authenticated follow-ups, work at least one of them before returning to generic unauthenticated backlog.
 - If validation fails, log the failure and resume the queue instead of stalling
 - Preserve legacy compatibility: if you append a credential entry, also keep `credentials` as a list so older recovery snippets do not crash with `KeyError: credentials`
 - Never chain a new shell command on the same line as a heredoc terminator when updating auth.json or findings files; start the next command on a new line
