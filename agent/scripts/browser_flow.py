@@ -15,7 +15,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 
 def unwrap_value(payload: Any) -> Any:
@@ -51,6 +51,82 @@ def unique_nonempty(items: list[str], limit: int) -> list[str]:
     return kept
 
 
+_INTERESTING_ASSET_EXTENSIONS = (
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".gif",
+    ".webp",
+    ".svg",
+    ".pdf",
+    ".zip",
+    ".7z",
+    ".rar",
+    ".tar",
+    ".gz",
+    ".mp4",
+    ".mov",
+    ".avi",
+    ".mkv",
+    ".webm",
+)
+
+_NOISY_ROUTE_EXTENSIONS = (
+    ".js",
+    ".css",
+    ".ico",
+    ".woff",
+    ".woff2",
+    ".ttf",
+    ".map",
+)
+
+
+def normalize_dom_reference(value: str | None) -> str | None:
+    normalized = normalize_text(value)
+    if not normalized:
+        return None
+    lower = normalized.lower()
+    if lower.startswith(("javascript:", "mailto:", "tel:", "data:", "blob:")):
+        return None
+    parsed = urllib.parse.urlsplit(normalized)
+    if parsed.scheme and parsed.scheme not in ("http", "https"):
+        return None
+    if parsed.netloc:
+        return None
+    if not (parsed.path or parsed.query or parsed.fragment):
+        return None
+    if not normalized.startswith(("#", "/", "./", "../")) and not parsed.path:
+        return None
+    return normalized
+
+
+def is_interesting_asset_reference(reference: str) -> bool:
+    parsed = urllib.parse.urlsplit(reference)
+    candidate = (parsed.path or parsed.fragment or "").lower()
+    return any(candidate.endswith(ext) for ext in _INTERESTING_ASSET_EXTENSIONS)
+
+
+def is_route_hint_reference(reference: str) -> bool:
+    if is_interesting_asset_reference(reference):
+        return False
+    parsed = urllib.parse.urlsplit(reference)
+    candidate = (parsed.path or parsed.fragment or "").lower()
+    if any(candidate.endswith(ext) for ext in _NOISY_ROUTE_EXTENSIONS):
+        return False
+    return True
+
+
+def extract_dom_references(body_html: str, attr_patterns: list[str], predicate: Callable[[str], bool], limit: int) -> list[str]:
+    refs: list[str] = []
+    for pattern in attr_patterns:
+        for match in re.finditer(pattern, body_html):
+            reference = normalize_dom_reference(match.group(2))
+            if reference and predicate(reference):
+                refs.append(reference)
+    return unique_nonempty(refs, limit)
+
+
 def summarize_dom_html(html: str) -> dict[str, Any]:
     body_match = re.search(r"(?is)<body[^>]*>(.*?)</body>", html)
     body_html = body_match.group(1) if body_match else html
@@ -73,6 +149,24 @@ def summarize_dom_html(html: str) -> dict[str, Any]:
     )
     links = unique_nonempty(
         [strip_html(match.group(1)) for match in re.finditer(r"(?is)<a[^>]*>(.*?)</a>", body_html)],
+        10,
+    )
+    route_hints = extract_dom_references(
+        body_html,
+        [
+            r"(?is)\b(?:href|routerlink|action)=([\"'])(.*?)\1",
+            r"(?is)\bformaction=([\"'])(.*?)\1",
+        ],
+        is_route_hint_reference,
+        12,
+    )
+    asset_hints = extract_dom_references(
+        body_html,
+        [
+            r"(?is)\b(?:src|poster|data-src|href)=([\"'])(.*?)\1",
+            r"(?is)\bsrcset=([\"'])(.*?)\1",
+        ],
+        is_interesting_asset_reference,
         10,
     )
     inputs: list[dict[str, str]] = []
@@ -106,6 +200,8 @@ def summarize_dom_html(html: str) -> dict[str, Any]:
         "labels": labels,
         "placeholders": placeholders,
         "links": links,
+        "route_hints": route_hints,
+        "asset_hints": asset_hints,
         "inputs": inputs,
         "page_text_preview": page_text_preview,
     }
