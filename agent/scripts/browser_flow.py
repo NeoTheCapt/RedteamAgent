@@ -173,8 +173,48 @@ return (document.body && document.body.innerText || '').includes(needle);
         self.wait_for_js_true(script, timeout_ms=timeout_ms, reason=f"text {text}", args=[text])
         self.record("wait_for_text", text=text, timeout_ms=timeout_ms)
 
-    def click(self, selector: str, timeout_ms: int) -> None:
+    def _run_selector_step(
+        self,
+        *,
+        selector: str,
+        timeout_ms: int,
+        action: str,
+        script: str,
+        args: list[Any],
+        record: dict[str, Any],
+    ) -> None:
         self.wait_for_selector(selector, timeout_ms)
+        value = self.client.execute(script, args)
+        if not isinstance(value, dict) or not value.get("ok"):
+            raise StepError(f"{action} failed for {selector}: {value}")
+        self.record(action, selector=selector, timeout_ms=timeout_ms, **record)
+
+    def _run_lookup_step(
+        self,
+        *,
+        action: str,
+        lookup_kind: str,
+        query: str,
+        timeout_ms: int,
+        script: str,
+        script_args: list[Any],
+        record: dict[str, Any] | None = None,
+    ) -> None:
+        record = record or {}
+        self.wait_for_js_true(script, timeout_ms=timeout_ms, reason=f"{lookup_kind} {query}", args=script_args)
+        value = self.client.execute(script, script_args)
+        if not isinstance(value, dict) or not value.get("ok"):
+            raise StepError(f"{action} failed for {lookup_kind} {query}: {value}")
+        matched_selector = value.get("selector")
+        self.record(
+            action,
+            timeout_ms=timeout_ms,
+            **{lookup_kind: query},
+            matched_selector=matched_selector,
+            **record,
+        )
+
+    def click(self, selector: str, timeout_ms: int) -> None:
         script = """
 const selector = arguments[0];
 const el = document.querySelector(selector);
@@ -183,13 +223,55 @@ el.scrollIntoView({block:'center', inline:'center'});
 el.click();
 return {ok:true};
 """
-        value = self.client.execute(script, [selector])
-        if not isinstance(value, dict) or not value.get("ok"):
-            raise StepError(f"click failed for {selector}: {value}")
-        self.record("click", selector=selector, timeout_ms=timeout_ms)
+        self._run_selector_step(
+            selector=selector,
+            timeout_ms=timeout_ms,
+            action="click",
+            script=script,
+            args=[selector],
+            record={},
+        )
+
+    def click_text(self, text: str, timeout_ms: int, exact: bool = False) -> None:
+        script = """
+const needle = (arguments[0] || '').trim();
+const exact = !!arguments[1];
+const normalize = (value) => (value || '').replace(/\\s+/g, ' ').trim();
+const candidates = Array.from(document.querySelectorAll('button, a, [role="button"], input[type="button"], input[type="submit"], summary'));
+const texts = (el) => {
+  const out = [
+    normalize(el.innerText),
+    normalize(el.textContent),
+    normalize(el.getAttribute('aria-label')),
+    normalize(el.getAttribute('title')),
+    normalize(el.getAttribute('value')),
+  ].filter(Boolean);
+  if (el instanceof HTMLInputElement && el.labels) {
+    for (const label of Array.from(el.labels)) out.push(normalize(label.innerText || label.textContent));
+  }
+  return out.filter(Boolean);
+};
+const matches = (value) => exact ? value === needle : value.includes(needle);
+for (const el of candidates) {
+  const values = texts(el);
+  if (!values.some(matches)) continue;
+  el.scrollIntoView({block:'center', inline:'center'});
+  el.click();
+  return {ok:true, selector: el.tagName.toLowerCase(), matched_text: values.find(matches) || ''};
+}
+return {ok:false, error:'text not found'};
+"""
+        self._run_lookup_step(
+            action="click_text",
+            lookup_kind="text",
+            query=text,
+            timeout_ms=timeout_ms,
+            script=script,
+            script_args=[text, exact],
+            record={"exact": exact},
+        )
 
     def type_text(self, selector: str, text: str, timeout_ms: int, clear: bool = True) -> None:
-        self.wait_for_selector(selector, timeout_ms)
         script = """
 const selector = arguments[0];
 const value = arguments[1];
@@ -213,13 +295,106 @@ el.dispatchEvent(new Event('input', {bubbles:true}));
 el.dispatchEvent(new Event('change', {bubbles:true}));
 return {ok:true};
 """
-        value = self.client.execute(script, [selector, text, clear])
-        if not isinstance(value, dict) or not value.get("ok"):
-            raise StepError(f"type failed for {selector}: {value}")
-        self.record("type", selector=selector, text_length=len(text), timeout_ms=timeout_ms, clear=clear)
+        self._run_selector_step(
+            selector=selector,
+            timeout_ms=timeout_ms,
+            action="type",
+            script=script,
+            args=[selector, text, clear],
+            record={"text_length": len(text), "clear": clear},
+        )
+
+    def type_by_label(self, label: str, text: str, timeout_ms: int, clear: bool = True) -> None:
+        script = """
+const needle = (arguments[0] || '').trim();
+const value = arguments[1];
+const clear = !!arguments[2];
+const normalize = (input) => (input || '').replace(/\\s+/g, ' ').trim();
+const matches = (input) => normalize(input).toLowerCase().includes(needle.toLowerCase());
+const writableSelector = 'input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="checkbox"]):not([type="radio"]), textarea, select, [contenteditable="true"]';
+const applyValue = (el) => {
+  el.scrollIntoView({block:'center', inline:'center'});
+  el.focus();
+  if (clear) {
+    if ('value' in el) el.value = '';
+    if (el.isContentEditable) el.textContent = '';
+  }
+  if ('value' in el) {
+    el.value = value;
+  } else if (el.isContentEditable) {
+    el.textContent = value;
+  } else {
+    return false;
+  }
+  el.dispatchEvent(new Event('input', {bubbles:true}));
+  el.dispatchEvent(new Event('change', {bubbles:true}));
+  return true;
+};
+const findByLabel = () => {
+  for (const labelEl of Array.from(document.querySelectorAll('label'))) {
+    if (!matches(labelEl.innerText || labelEl.textContent || '')) continue;
+    let target = null;
+    const forId = labelEl.getAttribute('for');
+    if (forId) target = document.getElementById(forId);
+    if (!target) target = labelEl.querySelector(writableSelector);
+    if (target) return target;
+  }
+  return null;
+};
+const directCandidates = Array.from(document.querySelectorAll(writableSelector));
+const candidates = [
+  findByLabel(),
+  ...directCandidates.filter((el) => {
+    const attrs = [el.getAttribute('aria-label'), el.getAttribute('placeholder'), el.getAttribute('name'), el.getAttribute('id')];
+    return attrs.some(matches);
+  }),
+].filter(Boolean);
+for (const el of candidates) {
+  if (!applyValue(el)) continue;
+  return {ok:true, selector: el.tagName.toLowerCase() + (el.id ? ('#' + el.id) : '')};
+}
+return {ok:false, error:'label not found'};
+"""
+        self._run_lookup_step(
+            action="type_by_label",
+            lookup_kind="label",
+            query=label,
+            timeout_ms=timeout_ms,
+            script=script,
+            script_args=[label, text, clear],
+            record={"text_length": len(text), "clear": clear},
+        )
+
+    def type_by_placeholder(self, placeholder: str, text: str, timeout_ms: int, clear: bool = True) -> None:
+        script = """
+const needle = (arguments[0] || '').trim().toLowerCase();
+const value = arguments[1];
+const clear = !!arguments[2];
+const candidates = Array.from(document.querySelectorAll('input[placeholder], textarea[placeholder]'));
+for (const el of candidates) {
+  const placeholder = (el.getAttribute('placeholder') || '').trim().toLowerCase();
+  if (!placeholder.includes(needle)) continue;
+  el.scrollIntoView({block:'center', inline:'center'});
+  el.focus();
+  if (clear && 'value' in el) el.value = '';
+  el.value = value;
+  el.dispatchEvent(new Event('input', {bubbles:true}));
+  el.dispatchEvent(new Event('change', {bubbles:true}));
+  return {ok:true, selector: el.tagName.toLowerCase() + (el.id ? ('#' + el.id) : '')};
+}
+return {ok:false, error:'placeholder not found'};
+"""
+        self._run_lookup_step(
+            action="type_by_placeholder",
+            lookup_kind="placeholder",
+            query=placeholder,
+            timeout_ms=timeout_ms,
+            script=script,
+            script_args=[placeholder, text, clear],
+            record={"text_length": len(text), "clear": clear},
+        )
 
     def submit(self, selector: str, timeout_ms: int) -> None:
-        self.wait_for_selector(selector, timeout_ms)
         script = """
 const selector = arguments[0];
 const el = document.querySelector(selector);
@@ -234,10 +409,35 @@ if (typeof form.requestSubmit === 'function') {
 }
 return {ok:true};
 """
-        value = self.client.execute(script, [selector])
-        if not isinstance(value, dict) or not value.get("ok"):
-            raise StepError(f"submit failed for {selector}: {value}")
-        self.record("submit", selector=selector, timeout_ms=timeout_ms)
+        self._run_selector_step(
+            selector=selector,
+            timeout_ms=timeout_ms,
+            action="submit",
+            script=script,
+            args=[selector],
+            record={},
+        )
+
+    def submit_first_form(self, timeout_ms: int) -> None:
+        script = """
+const form = document.querySelector('form');
+if (!form) return {ok:false, error:'no form found'};
+form.scrollIntoView({block:'center', inline:'center'});
+if (typeof form.requestSubmit === 'function') {
+  form.requestSubmit();
+} else {
+  form.submit();
+}
+return {ok:true, selector:'form'};
+"""
+        self._run_lookup_step(
+            action="submit_first_form",
+            lookup_kind="form",
+            query="first",
+            timeout_ms=timeout_ms,
+            script=script,
+            script_args=[],
+        )
 
     def snapshot_dom(self, path: str) -> None:
         dest = self.output_dir / path
@@ -266,6 +466,13 @@ return {ok:true};
         if action == "click":
             self.click(str(raw_step["selector"]), timeout_ms)
             return
+        if action == "click_text":
+            self.click_text(
+                str(raw_step["text"]),
+                timeout_ms,
+                exact=bool(raw_step.get("exact", False)),
+            )
+            return
         if action == "type":
             self.type_text(
                 str(raw_step["selector"]),
@@ -274,8 +481,27 @@ return {ok:true};
                 clear=bool(raw_step.get("clear", True)),
             )
             return
+        if action == "type_by_label":
+            self.type_by_label(
+                str(raw_step["label"]),
+                str(raw_step.get("text") or ""),
+                timeout_ms,
+                clear=bool(raw_step.get("clear", True)),
+            )
+            return
+        if action == "type_by_placeholder":
+            self.type_by_placeholder(
+                str(raw_step["placeholder"]),
+                str(raw_step.get("text") or ""),
+                timeout_ms,
+                clear=bool(raw_step.get("clear", True)),
+            )
+            return
         if action == "submit":
             self.submit(str(raw_step["selector"]), timeout_ms)
+            return
+        if action == "submit_first_form":
+            self.submit_first_form(timeout_ms)
             return
         if action == "dump_dom":
             self.snapshot_dom(str(raw_step.get("path") or "dom.html"))
@@ -284,7 +510,6 @@ return {ok:true};
             self.snapshot_png(str(raw_step.get("path") or "screenshot.png"))
             return
         raise StepError(f"unsupported step action: {action}")
-
 
 def find_free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
