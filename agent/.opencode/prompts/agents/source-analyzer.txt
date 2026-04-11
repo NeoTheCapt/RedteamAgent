@@ -195,7 +195,11 @@ the outcome section is written.
     route/surface budget on near-duplicate variants from one subtree (for example several
     auth/account or continuation-token screens) while omitting unrelated hidden workflows. Dedupe
     near-duplicates, then prefer one high-signal concrete route or surface per distinct actionable
-    family before adding second-order variants from the same family.
+    family before adding second-order variants from the same family. When the bundle or saved
+    artifacts expose a reusable workflow primitive (for example a captcha/anti-automation helper,
+    reset/setup token flow, TOTP enrollment path, signed-action helper, or other temporary secret
+    source), preserve at least one concrete consumer workflow route/surface from that same family
+    instead of handing off the primitive in isolation.
     Surface targets must stay importable: do not use unresolved angle-bracket/template placeholders
     such as `<encoded-url>` or `<profile.uuid>`. If only a query value is unknown, replace just the
     value with `...` (for example `GET /account/login?forward=...` or
