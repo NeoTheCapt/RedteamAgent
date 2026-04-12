@@ -189,8 +189,11 @@ def normalize_browser_asset_hint(reference: str | None) -> str | None:
         return None
     if value.startswith("./"):
         value = "/" + value[2:].lstrip("/")
-    if not value.startswith("/"):
-        return None
+    elif not value.startswith("/"):
+        parsed = urlparse(value)
+        if parsed.scheme or parsed.netloc:
+            return None
+        value = "/" + value.lstrip("/")
     lower = value.lower()
     if not any(lower.endswith(ext) for ext in _INTERESTING_ASSET_EXTENSIONS):
         return None
