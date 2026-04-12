@@ -3120,6 +3120,103 @@ def test_engagement_completion_state_accepts_completed_status_alias():
     assert normalized["status"] == "complete"
 
 
+def test_engagement_completion_state_accepts_scope_equivalent_surface_records():
+    client = TestClient(app)
+    token = register_and_login(client, "alice-surface-equivalent")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "http://127.0.0.1:8000")
+
+    run_root = Path(run["engagement_root"])
+    workspace = run_root / "workspace"
+    engagement_dir = workspace / "engagements" / "2026-03-28-000000-example-surface-equivalent"
+    engagement_dir.mkdir(parents=True, exist_ok=True)
+    (workspace / "engagements" / ".active").write_text(
+        "engagements/2026-03-28-000000-example-surface-equivalent\n",
+        encoding="utf-8",
+    )
+    (engagement_dir / "scope.json").write_text(
+        json.dumps(
+            {
+                "target": "http://127.0.0.1:8000",
+                "status": "complete",
+                "current_phase": "complete",
+                "phases_completed": ["recon", "collect", "consume_test", "exploit", "report"],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (engagement_dir / "log.md").write_text(
+        "# Engagement Log\n\n"
+        "- **Target**: http://127.0.0.1:8000\n"
+        "- **Date**: 2026-03-28\n"
+        "- **Status**: Completed\n",
+        encoding="utf-8",
+    )
+    (engagement_dir / "report.md").write_text(
+        "# Penetration Test Report\n\n"
+        "**Date**: 2026-03-28 — Completed\n"
+        "**Target**: http://127.0.0.1:8000  **Scope**: 127.0.0.1, *.127.0.0.1  **Status**: Completed\n\n"
+        "## Executive Summary\n"
+        "- Target: http://127.0.0.1:8000\n"
+        "- Confirmed findings: 0 total\n\n"
+        "## Scope and Methodology\n"
+        "- Completed phases: recon, collect, consume_test, exploit, report\n\n"
+        "## Findings\n"
+        "No confirmed findings were recorded in findings.md.\n\n"
+        "## Attack Narrative\n"
+        "The engagement followed the recorded orchestrator workflow and completed reporting successfully.\n\n"
+        "## Recommendations\n"
+        "- Continue monitoring.\n\n"
+        "## Appendix\n"
+        "- cases.db rows: 2\n"
+        "- surfaces.jsonl rows: 2\n",
+        encoding="utf-8",
+    )
+    (engagement_dir / "surfaces.jsonl").write_text(
+        json.dumps(
+            {
+                "surface_type": "dynamic_render",
+                "target": "http://127.0.0.1:8000/#/jobs",
+                "source": "source-analyzer",
+                "rationale": "absolute SPA route record from source analysis",
+                "evidence_ref": "downloads/source-analysis/routes.json",
+                "status": "discovered",
+            }
+        )
+        + "\n"
+        + json.dumps(
+            {
+                "surface_type": "dynamic_render",
+                "target": "GET /#/jobs",
+                "source": "operator-surface-coverage",
+                "rationale": "same route was triaged and covered later in the run",
+                "evidence_ref": "scans/browser-flow/jobs/summary.json",
+                "status": "covered",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    with sqlite3.connect(engagement_dir / "cases.db") as connection:
+        connection.execute(
+            "CREATE TABLE cases (id INTEGER PRIMARY KEY AUTOINCREMENT, status TEXT NOT NULL)"
+        )
+        connection.executemany(
+            "INSERT INTO cases(status) VALUES (?)",
+            [("done",), ("error",)],
+        )
+        connection.commit()
+
+    from app import db as app_db
+    from app.services.launcher import engagement_completion_state
+
+    latest = app_db.get_run_by_id(run["id"])
+    assert latest is not None
+    assert engagement_completion_state(latest) == (True, "Engagement completed and finalized.")
+
+
+
 def test_engagement_completion_state_repairs_completed_report_scope_from_log():
     client = TestClient(app)
     token = register_and_login(client, "alice-repair-report-scope")

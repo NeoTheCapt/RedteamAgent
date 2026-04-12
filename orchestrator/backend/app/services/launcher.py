@@ -1427,22 +1427,122 @@ def _running_container_stall_reason(run: Run) -> tuple[str, str, str] | None:
     return None
 
 
-def _surface_completion_ok(surface_file: Path) -> bool:
+_SURFACE_STATUS_RANK = {
+    "discovered": 0,
+    "deferred": 1,
+    "not_applicable": 2,
+    "covered": 3,
+}
+_SURFACE_COMPLETION_LOOPBACK_HOSTS = _LOOPBACK_RUNTIME_HOSTS | {_RUNTIME_HOST_GATEWAY_ALIAS}
+
+
+def _surface_default_port(parsed) -> int | None:
+    if parsed.port is not None:
+        return parsed.port
+    if parsed.scheme == "http":
+        return 80
+    if parsed.scheme == "https":
+        return 443
+    return None
+
+
+def _normalize_surface_fragment_path(value: str) -> str:
+    fragment = value.strip()
+    if fragment.startswith("/#/"):
+        return fragment
+    if fragment.startswith("#/"):
+        return "/" + fragment
+    if fragment.startswith("/"):
+        return "/#" + fragment
+    return "/#/" + fragment.lstrip("#/")
+
+
+def _split_surface_target_spec(value: str) -> tuple[str | None, str]:
+    parts = value.split(None, 1)
+    if len(parts) == 2 and parts[0].upper() in {"GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"}:
+        return parts[0].upper(), parts[1].strip()
+    return None, value
+
+
+def _canonicalize_surface_target_for_scope(value: str, scope_target: str) -> str:
+    normalized_value = " ".join(str(value or "").strip().split())
+    if not normalized_value:
+        return normalized_value
+
+    method, remainder = _split_surface_target_spec(normalized_value)
+    parsed_scope = urlsplit(scope_target) if scope_target else None
+    scope_host = (parsed_scope.hostname or "").strip().lower().strip("[]") if parsed_scope else ""
+
+    if remainder.startswith(("http://", "https://")):
+        parsed = urlsplit(remainder)
+        candidate_host = (parsed.hostname or "").strip().lower().strip("[]")
+        candidate_port = _surface_default_port(parsed)
+        scope_port = _surface_default_port(parsed_scope) if parsed_scope else None
+        same_scope_host = bool(
+            parsed_scope
+            and parsed.scheme == parsed_scope.scheme
+            and candidate_port == scope_port
+            and (
+                candidate_host == scope_host
+                or (candidate_host in _SURFACE_COMPLETION_LOOPBACK_HOSTS and scope_host in _SURFACE_COMPLETION_LOOPBACK_HOSTS)
+            )
+        )
+        if same_scope_host:
+            if parsed.fragment:
+                normalized_path = _normalize_surface_fragment_path(parsed.fragment)
+            else:
+                normalized_path = parsed.path or "/"
+                if parsed.query:
+                    normalized_path = f"{normalized_path}?{parsed.query}"
+            return f"{method or 'GET'} {normalized_path}"
+        return f"{method + ' ' if method else ''}{remainder}"
+
+    if remainder.startswith(("/#/", "#/")):
+        return f"{method or 'GET'} {_normalize_surface_fragment_path(remainder)}"
+    if remainder.startswith("/"):
+        return f"{method or 'GET'} {remainder}"
+    return f"{method + ' ' if method else ''}{remainder}"
+
+
+def _surface_completion_ok(surface_file: Path, scope: dict[str, object] | None = None) -> bool:
     if not surface_file.exists():
         return True
     try:
         rows = [json.loads(line) for line in surface_file.read_text(encoding="utf-8").splitlines() if line.strip()]
     except json.JSONDecodeError:
         return False
+
+    scope_target = ""
+    if isinstance(scope, dict):
+        scope_target = str(scope.get("target") or "").strip()
+
     strict_deferred_types = {
         "account_recovery",
         "dynamic_render",
         "object_reference",
         "privileged_write",
     }
+    aggregated: dict[tuple[str, str], dict[str, str]] = {}
+
     for row in rows:
-        status_name = str(row.get("status") or "").strip()
-        surface_type = str(row.get("surface_type") or "").strip()
+        surface_type = _normalize_surface_type(str(row.get("surface_type") or "").strip())
+        status_name = str(row.get("status") or "discovered").strip().lower().replace("-", "_")
+        if status_name not in _VALID_SURFACE_STATUSES:
+            status_name = "discovered"
+        key = (
+            surface_type,
+            _canonicalize_surface_target_for_scope(str(row.get("target") or ""), scope_target),
+        )
+        current = aggregated.get(key)
+        if current is None or _SURFACE_STATUS_RANK[status_name] >= _SURFACE_STATUS_RANK[current["status"]]:
+            aggregated[key] = {
+                "surface_type": surface_type,
+                "status": status_name,
+            }
+
+    for row in aggregated.values():
+        status_name = row["status"]
+        surface_type = row["surface_type"]
         if status_name == "discovered":
             return False
         if status_name == "deferred" and surface_type in strict_deferred_types:
@@ -1505,7 +1605,7 @@ def _promote_completed_scope_from_artifacts(scope_path: Path, payload: dict[str,
     pending_cases, processing_cases = _count_remaining_cases(cases_db)
     if pending_cases or processing_cases:
         return False
-    if not _surface_completion_ok(surfaces_path):
+    if not _surface_completion_ok(surfaces_path, payload):
         return False
 
     changed = False
@@ -1781,7 +1881,7 @@ def engagement_completion_state(run: Run) -> tuple[bool, str]:
             f"Queue still has pending={pending_cases} processing={processing_cases}.",
         )
 
-    if not _surface_completion_ok(surfaces_path):
+    if not _surface_completion_ok(surfaces_path, scope):
         return (False, "Surface coverage is still unresolved.")
 
     return (True, "Engagement completed and finalized.")
