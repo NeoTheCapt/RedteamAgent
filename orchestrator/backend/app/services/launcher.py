@@ -1864,10 +1864,6 @@ def engagement_completion_state(run: Run) -> tuple[bool, str]:
         if logged_reason:
             return (False, logged_reason)
         return (False, f"Engagement status is {status_name or 'unknown'}.")
-    if current_phase != "complete":
-        return (False, f"Current phase is {current_phase or 'unknown'}.")
-    if "report" not in completed_phases:
-        return (False, "Report phase is not marked complete.")
     if not report_path.exists():
         return (False, "report.md is missing.")
     report_text = report_path.read_text(encoding="utf-8", errors="replace")
@@ -1883,6 +1879,17 @@ def engagement_completion_state(run: Run) -> tuple[bool, str]:
 
     if not _surface_completion_ok(surfaces_path, scope):
         return (False, "Surface coverage is still unresolved.")
+
+    if current_phase != "complete" or "report" not in completed_phases:
+        if _promote_completed_scope_from_artifacts(scope_path, scope):
+            current_phase = _canonical_phase_name(scope.get("current_phase"))
+            completed_phases = {_canonical_phase_name(item) for item in scope.get("phases_completed", [])}
+            scope_path.write_text(json.dumps(scope, indent=2) + "\n", encoding="utf-8")
+
+    if current_phase != "complete":
+        return (False, f"Current phase is {current_phase or 'unknown'}.")
+    if "report" not in completed_phases:
+        return (False, "Report phase is not marked complete.")
 
     return (True, "Engagement completed and finalized.")
 

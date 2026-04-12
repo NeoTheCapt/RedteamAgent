@@ -3372,6 +3372,124 @@ def test_engagement_completion_state_repairs_completed_report_scope_without_stop
     assert normalized["phases_completed"] == ["recon", "collect", "consume_test", "exploit", "report"]
 
 
+def test_engagement_completion_state_self_heals_half_normalized_completed_scope(monkeypatch):
+    client = TestClient(app)
+    token = register_and_login(client, "alice-half-normalized-complete")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "http://127.0.0.1:8000")
+
+    run_root = Path(run["engagement_root"])
+    workspace = run_root / "workspace"
+    engagement_dir = workspace / "engagements" / "2026-03-30-020000-example"
+    engagement_dir.mkdir(parents=True, exist_ok=True)
+    (workspace / "engagements" / ".active").write_text(
+        "engagements/2026-03-30-020000-example\n",
+        encoding="utf-8",
+    )
+    scope_path = engagement_dir / "scope.json"
+    scope_path.write_text(
+        json.dumps(
+            {
+                "status": "complete",
+                "current_phase": "report",
+                "phases_completed": ["recon", "collect", "consume_test", "exploit"],
+                "target": "http://127.0.0.1:8000",
+                "scope": ["127.0.0.1", "*.127.0.0.1"],
+                "start_time": "2026-03-30T01:55:00Z",
+                "end_time": "2026-03-30T02:15:00Z",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (engagement_dir / "log.md").write_text(
+        "# Engagement Log\n\n"
+        "## [10:15] Report complete — operator\n\n"
+        "**Action**: phase 5 report\n"
+        "**Result**: persisted final report to report.md and finished queue/coverage verification\n",
+        encoding="utf-8",
+    )
+    (engagement_dir / "report.md").write_text(
+        "# Penetration Test Report\n\n"
+        "**Date**: 2026-03-30 — Completed\n"
+        "**Target**: http://127.0.0.1:8000  **Scope**: 127.0.0.1, *.127.0.0.1  **Status**: Completed\n\n"
+        "## Executive Summary\n"
+        "- Target: http://127.0.0.1:8000\n"
+        "- Confirmed findings: 0 total\n\n"
+        "## Scope and Methodology\n"
+        "- Completed phases: recon, collect, consume_test, exploit, report\n\n"
+        "## Findings\n"
+        "No confirmed findings were recorded in findings.md.\n\n"
+        "## Attack Narrative\n"
+        "The engagement followed the recorded orchestrator workflow and completed reporting successfully.\n\n"
+        "## Recommendations\n"
+        "- Continue monitoring.\n\n"
+        "## Appendix\n"
+        "- cases.db rows: 2\n"
+        "- surfaces.jsonl rows: 0\n",
+        encoding="utf-8",
+    )
+    (engagement_dir / "surfaces.jsonl").write_text(
+        json.dumps(
+            {
+                "surface_type": "dynamic_render",
+                "target": "http://127.0.0.1:8000/#/jobs",
+                "source": "source-analyzer",
+                "rationale": "absolute SPA route record from source analysis",
+                "evidence_ref": "downloads/source-analysis/routes.json",
+                "status": "discovered",
+            }
+        )
+        + "\n"
+        + json.dumps(
+            {
+                "surface_type": "dynamic_render",
+                "target": "GET /#/jobs",
+                "source": "operator-surface-coverage",
+                "rationale": "same route was triaged and covered later in the run",
+                "evidence_ref": "scans/browser-flow/jobs/summary.json",
+                "status": "covered",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    with sqlite3.connect(engagement_dir / "cases.db") as connection:
+        connection.execute(
+            "CREATE TABLE cases (id INTEGER PRIMARY KEY AUTOINCREMENT, status TEXT NOT NULL)"
+        )
+        connection.executemany(
+            "INSERT INTO cases(status) VALUES (?)",
+            [("done",), ("error",)],
+        )
+        connection.commit()
+
+    from app import db as app_db
+    from app.services import launcher
+
+    original_normalize_scope_file = launcher._normalize_scope_file
+
+    def _leave_scope_half_normalized(*args, **kwargs):
+        scope = original_normalize_scope_file(*args, **kwargs)
+        if scope_path.exists():
+            payload = json.loads(scope_path.read_text(encoding="utf-8"))
+            payload["current_phase"] = "report"
+            payload["phases_completed"] = ["recon", "collect", "consume_test", "exploit"]
+            scope_path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+            return payload
+        return scope
+
+    monkeypatch.setattr(launcher, "_normalize_scope_file", _leave_scope_half_normalized)
+
+    latest = app_db.get_run_by_id(run["id"])
+    assert latest is not None
+    assert launcher.engagement_completion_state(latest) == (True, "Engagement completed and finalized.")
+
+    normalized = json.loads(scope_path.read_text(encoding="utf-8"))
+    assert normalized["current_phase"] == "complete"
+    assert normalized["phases_completed"] == ["recon", "collect", "consume_test", "exploit", "report"]
+
+
 def test_normalize_active_scope_marks_completed_report_and_log_headers(monkeypatch):
     import os
     import time
