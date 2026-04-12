@@ -235,6 +235,7 @@ the outcome section is written.
     - concatenation remnants such as `'+...+'`
     - write endpoints with empty or guessed parameters
     - front-end routes unless they are clearly testable server endpoints
+    - self-assessment / score / progress / challenge-state / leaderboard endpoints whose main job is internal game, telemetry, or benchmark state rather than a user/business workflow; keep those as low-signal notes unless they are the only concrete handle on a broader auth/workflow abuse path
     If the source suggests a risky flow but not a directly requestable endpoint, emit it only under
     `#### Surface Candidates`, not as a NEW ENDPOINT.
 15. QUEUE HANDOFF: You are fully responsible for endpoint quality. The operator will import your
