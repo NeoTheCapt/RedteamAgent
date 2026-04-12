@@ -55,8 +55,11 @@ if surfaces_file.exists():
         rows.append(json.loads(raw))
 
 source_analysis_dir = eng_dir / "scans" / "source-analysis"
+browser_flow_dir = eng_dir / "scans" / "browser-flow"
 synthetic_route_surfaces = []
+synthetic_browser_surfaces = []
 seen_synthetic_route_targets = set()
+seen_synthetic_browser_targets = set()
 
 
 def normalize_source_analysis_route(route: str | None) -> str | None:
@@ -109,7 +112,127 @@ if source_analysis_dir.exists():
                 }
             )
 
+
+def normalize_browser_hint_reference(reference: str | None) -> str | None:
+    value = str(reference or "").strip()
+    if not value:
+        return None
+    if value.startswith("../"):
+        return None
+    if value.startswith("./"):
+        value = "/" + value[2:].lstrip("/")
+    if value.startswith("#/") or value.startswith("/#/"):
+        return normalize_source_analysis_route(value)
+    if value.startswith("/"):
+        return value
+    return None
+
+
+def browser_route_semantic_key(reference: str) -> str:
+    normalized = normalize_browser_hint_reference(reference) or reference
+    if normalized.startswith("/#/"):
+        return "/" + normalized.split("/#/", 1)[1].lstrip("/")
+    return normalized
+
+
+def prefer_browser_route_candidates(route_hints: list[str]) -> list[str]:
+    preferred: dict[str, str] = {}
+    for route in route_hints:
+        normalized = normalize_browser_hint_reference(route)
+        if not normalized:
+            continue
+        key = browser_route_semantic_key(normalized)
+        existing = preferred.get(key)
+        if existing is None:
+            preferred[key] = normalized
+            continue
+        if normalized.startswith("/#/") and not existing.startswith("/#/"):
+            preferred[key] = normalized
+    return list(preferred.values())
+
+
+_INTERESTING_ASSET_EXTENSIONS = (
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".gif",
+    ".webp",
+    ".svg",
+    ".pdf",
+    ".zip",
+    ".7z",
+    ".rar",
+    ".tar",
+    ".gz",
+    ".mp4",
+    ".mov",
+    ".avi",
+    ".mkv",
+    ".webm",
+)
+
+
+def normalize_browser_asset_hint(reference: str | None) -> str | None:
+    value = str(reference or "").strip()
+    if not value:
+        return None
+    if value.startswith("../"):
+        return None
+    if value.startswith("./"):
+        value = "/" + value[2:].lstrip("/")
+    if not value.startswith("/"):
+        return None
+    lower = value.lower()
+    if not any(lower.endswith(ext) for ext in _INTERESTING_ASSET_EXTENSIONS):
+        return None
+    return value
+
+
+if browser_flow_dir.exists():
+    for summary_path in sorted(browser_flow_dir.glob("*/summary.json")):
+        try:
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        dom_summary = summary.get("dom_summary") or {}
+        evidence_ref = str(summary_path.relative_to(eng_dir))
+
+        for route in prefer_browser_route_candidates(dom_summary.get("route_hints") or [])[:12]:
+            target = f"GET {route}"
+            if target in seen_synthetic_browser_targets:
+                continue
+            seen_synthetic_browser_targets.add(target)
+            synthetic_browser_surfaces.append(
+                {
+                    "surface_type": "dynamic_render",
+                    "target": target,
+                    "source": "browser-flow-summary",
+                    "rationale": "browser-flow summary exposed an unexercised internal route hint from live DOM evidence",
+                    "evidence_ref": evidence_ref,
+                    "status": "discovered",
+                }
+            )
+
+        for asset in (normalize_browser_asset_hint(item) for item in (dom_summary.get("asset_hints") or [])):
+            if not asset:
+                continue
+            target = f"GET {asset}"
+            if target in seen_synthetic_browser_targets:
+                continue
+            seen_synthetic_browser_targets.add(target)
+            synthetic_browser_surfaces.append(
+                {
+                    "surface_type": "file_handling",
+                    "target": target,
+                    "source": "browser-flow-summary",
+                    "rationale": "browser-flow summary exposed an interesting same-origin asset hint from live DOM evidence",
+                    "evidence_ref": evidence_ref,
+                    "status": "discovered",
+                }
+            )
+
 rows.extend(synthetic_route_surfaces)
+rows.extend(synthetic_browser_surfaces)
 
 conn = sqlite3.connect(str(eng_dir / "cases.db"))
 conn.row_factory = sqlite3.Row
@@ -400,6 +523,9 @@ def finding_mentions(*needles: str) -> bool:
 def followup_type(method: str, path: str) -> str:
     if path.endswith("/file-upload") or path == "/file-upload":
         return "upload"
+    lowered_path = path.lower()
+    if any(lowered_path.endswith(ext) for ext in _INTERESTING_ASSET_EXTENSIONS):
+        return "data"
     if method != "GET":
         return "api"
     api_prefixes = (
