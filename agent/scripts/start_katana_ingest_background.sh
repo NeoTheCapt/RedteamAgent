@@ -31,11 +31,11 @@ fi
 mkdir -p "$ENGAGEMENT_DIR/scans" "$ENGAGEMENT_DIR/pids"
 
 PID_FILE="$(pid_file_path "$ENGAGEMENT_DIR/pids" "katana_ingest")"
-if pid_is_running "$PID_FILE"; then
+if pid_is_running "$PID_FILE" "katana_ingest.sh"; then
     cat "$PID_FILE"
     exit 0
 fi
-rm -f "$PID_FILE"
+clear_pid_tracking "$PID_FILE"
 
 if [[ ${#EXTRA_FLAGS[@]} -gt 0 ]]; then
     ./scripts/katana_ingest.sh "$ENGAGEMENT_DIR" "${EXTRA_FLAGS[@]}" > "$ENGAGEMENT_DIR/scans/katana_ingest.log" 2>&1 < /dev/null &
@@ -43,14 +43,14 @@ else
     ./scripts/katana_ingest.sh "$ENGAGEMENT_DIR" > "$ENGAGEMENT_DIR/scans/katana_ingest.log" 2>&1 < /dev/null &
 fi
 katana_ingest_pid=$!
-printf '%s\n' "$katana_ingest_pid" > "$PID_FILE"
+write_pid_tracking "$PID_FILE" "$katana_ingest_pid" "katana_ingest.sh"
 
 registration_grace_seconds="${KATANA_INGEST_REGISTRATION_GRACE_SECONDS:-1}"
 sleep "$registration_grace_seconds"
 
 if ! kill -0 "$katana_ingest_pid" 2>/dev/null; then
     wait "$katana_ingest_pid" 2>/dev/null || true
-    rm -f "$PID_FILE"
+    clear_pid_tracking "$PID_FILE"
     echo "ERROR: katana_ingest.sh exited before background registration completed" >&2
     exit 1
 fi

@@ -109,7 +109,7 @@ cleanup_katana_ingest() {
     fi
     replay_fallback_error_log_hints >/dev/null 2>&1 || true
     rm -f "$KATANA_RAW_OUTPUT"
-    rm -f "$(pid_file_path "$ENGAGEMENT_DIR/pids" "katana_ingest")"
+    clear_pid_tracking "$(pid_file_path "$ENGAGEMENT_DIR/pids" "katana_ingest")"
 }
 trap cleanup_katana_ingest EXIT
 
