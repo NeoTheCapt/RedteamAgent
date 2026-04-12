@@ -165,13 +165,15 @@ generate_params_sig() {
   local origin
   origin="$(extract_url_origin "$url")"
 
-  # Merge keys from both JSON objects, sort, and join with the request origin.
-  # Preserve underscore-prefixed control markers with values so agent-internal
-  # follow-up probes can coexist, and pin concrete redirect/URL-style values so
-  # meaningful bounded follow-ups (for example redirect destinations or return URLs)
-  # do not dedupe away.
+  # Parse JSON arguments directly instead of newline-splitting a combined blob.
+  # Producers such as extract_query_params emit pretty-printed multi-line JSON;
+  # splitting on raw newlines makes low-signal cache-buster variants hash
+  # differently and bypass queue dedupe.
   local dedup_material
-  dedup_material=$(printf '%s\n%s\n%s' "$query_json" "$body_json" "$origin" | jq -Rs '
+  dedup_material=$(jq -cn \
+    --arg q "$query_json" \
+    --arg b "$body_json" \
+    --arg origin "$origin" '
     def is_control_key:
       startswith("_");
 
@@ -196,15 +198,13 @@ generate_params_sig() {
       | sort
       | join(",");
 
-    split("\n") as $parts
-    | ($parts[0] | fromjson? // {}) as $q
-    | ($parts[1] | fromjson? // {}) as $b
-    | ($parts[2] // "") as $origin
+    ($q | fromjson? // {}) as $query
+    | ($b | fromjson? // {}) as $body
     | [
         $origin,
-        ((($q | keys) + ($b | keys)) | unique | join(",")),
-        ($q | value_pins("q")),
-        ($b | value_pins("b"))
+        ((($query | keys) + ($body | keys)) | unique | join(",")),
+        ($query | value_pins("q")),
+        ($body | value_pins("b"))
       ]
     | join("|")
   ')
