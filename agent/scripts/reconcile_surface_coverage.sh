@@ -72,16 +72,25 @@ def normalize_source_analysis_route(route: str | None) -> str | None:
         return None
     if value.startswith(("http://", "https://")):
         parsed = urlparse(value)
+        path = parsed.path.strip() or "/"
+        if parsed.query:
+            path = f"{path}?{parsed.query}"
         if parsed.fragment:
-            value = parsed.fragment.strip()
+            fragment = parsed.fragment.strip()
+            if fragment.startswith("/"):
+                value = fragment
+            else:
+                return f"{path}#{fragment}" if fragment else path
         else:
-            value = parsed.path.strip()
+            value = path
         if not value:
             return None
     if value.startswith("/#/"):
         return value
     if value.startswith("#/"):
         return "/" + value
+    if "#" in value and value.startswith("/"):
+        return value
     if value.startswith("/"):
         return "/#" + value
     return "/#/" + value.lstrip('#/')
@@ -469,21 +478,21 @@ def parse_target_request(target: str):
 
     if rest.startswith(("http://", "https://")):
         parsed = urlparse(rest)
-        fragment_path = normalize_source_analysis_route(f"#/{parsed.fragment.lstrip('/')}" if parsed.fragment and not parsed.fragment.startswith('#/') else parsed.fragment)
-        if fragment_path:
-            path = fragment_path
-        else:
-            path = parsed.path or "/"
-            if parsed.query:
-                path = f"{path}?{parsed.query}"
+        path = parsed.path or "/"
+        if parsed.query:
+            path = f"{path}?{parsed.query}"
+        if parsed.fragment:
+            path = f"{path}#{parsed.fragment}"
         return method or "GET", path, rest, (parsed.hostname or "").lower(), locale_scoped
 
     if method:
         return method, rest, None, None, locale_scoped
 
-    if rest.startswith("/") or rest.startswith("#/"):
-        inferred_path = normalize_source_analysis_route(rest) if "#" in rest else rest
-        return "GET", inferred_path or rest, None, None, locale_scoped
+    if rest.startswith("#/"):
+        return "GET", "/" + rest, None, None, locale_scoped
+
+    if rest.startswith("/"):
+        return "GET", rest, None, None, locale_scoped
 
     return None, None, None, None, locale_scoped
 
