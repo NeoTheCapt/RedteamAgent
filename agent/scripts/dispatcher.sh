@@ -74,6 +74,10 @@ normalize_id_list() {
         ignored_suffixes+=("$part")
         continue
       fi
+      if (( saw_suffix )); then
+        ignored_suffixes+=("$part")
+        continue
+      fi
       echo "ERROR: id_list must contain only numeric IDs separated by commas or spaces" >&2
       exit 1
     done

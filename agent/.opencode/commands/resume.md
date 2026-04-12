@@ -111,6 +111,7 @@ If resuming `consume_test`, the fetch/dispatch contract is strict:
 - when benchmark quality is failing/regressing or surface coverage is unresolved, prefer one coverage-expanding `source-analyzer` fetch before returning to another API-family batch so bundle-derived routes/surfaces can materialize into follow-up cases; once only generic low-yield source backlog remains, switch back to API-family testing instead of looping on more page churn
 - fetch through `./scripts/fetch_batch_to_file.sh`; keep the full batch JSON on disk and only use the compact `BATCH_*` metadata in model context
 - after the first non-empty fetch, immediately dispatch the matching subagent in the SAME turn; do not fetch a second batch first
+- `./scripts/dispatcher.sh ... done` and `error` accept numeric case IDs only. Never append agent names, queue-state labels, or prose notes to those commands; log commentary separately with `append_log_entry.sh` after the queue update.
 - NEVER end `/resume` on queue stats, a fetched batch, a recovery note, or a status banner like `[operator] Autoengage started and active.` without the matching `task(...)` dispatch / case-outcome update in that SAME turn
 - if no advancing action is ready, write an explicit `Run stop` log entry with a stop reason instead of drifting into a status-only turn
 

@@ -39,6 +39,7 @@ Each iteration:
    - New endpoints: echo JSON | ./scripts/dispatcher.sh $DB requeue
    - Findings: record to findings.md
    - Errors: ./scripts/dispatcher.sh $DB error "id1,id2,..."
+   - `done` / `error` take numeric IDs only. Never append agent names, statuses, or freeform notes to those commands; put commentary in a separate log entry.
 5. pending=0 and producers stopped → report completion
 6. Otherwise → loop back to step 1
 ```
