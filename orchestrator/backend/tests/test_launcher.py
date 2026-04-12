@@ -2922,6 +2922,108 @@ def test_auto_resume_allows_report_phase_recovery_for_continuous_targets(monkeyp
 
 
 
+def test_auto_resume_bypasses_default_limit_for_continuous_report_hold(monkeypatch):
+    client = TestClient(app)
+    token = register_and_login(client, "alice-continuous-report-limit")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "https://www.example.com")
+
+    run_root = Path(run["engagement_root"])
+    workspace = run_root / "workspace"
+    engagement_dir = workspace / "engagements" / "2026-03-31-000002-continuous-report-limit"
+    engagement_dir.mkdir(parents=True, exist_ok=True)
+    (workspace / "engagements" / ".active").write_text(
+        "engagements/2026-03-31-000002-continuous-report-limit\n",
+        encoding="utf-8",
+    )
+    (engagement_dir / "scope.json").write_text(
+        json.dumps(
+            {
+                "target": "https://www.example.com",
+                "hostname": "www.example.com",
+                "status": "in_progress",
+                "current_phase": "report",
+                "phases_completed": ["recon", "collect", "consume_test", "exploit"],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (engagement_dir / "report.md").write_text(
+        "# Penetration Test Report\n"
+        "## Executive Summary\n" + ("summary line\n" * 25)
+        + "## Scope and Methodology\n" + ("method line\n" * 10)
+        + "## Findings\nNo confirmed findings\n"
+        + "## Attack Narrative\n" + ("narrative line\n" * 10)
+        + "## Recommendations\n- keep watching\n"
+        + "## Appendix\nappendix details\n",
+        encoding="utf-8",
+    )
+    (engagement_dir / "surfaces.jsonl").write_text("", encoding="utf-8")
+    with sqlite3.connect(engagement_dir / "cases.db") as connection:
+        connection.execute("CREATE TABLE cases (id INTEGER PRIMARY KEY AUTOINCREMENT, status TEXT NOT NULL)")
+        connection.executemany("INSERT INTO cases(status) VALUES (?)", [("done",), ("done",)])
+        connection.commit()
+
+    seed_root = run_root / "seed"
+    seed_root.mkdir(parents=True, exist_ok=True)
+    (seed_root / "env.json").write_text(
+        json.dumps({"REDTEAM_CONTINUOUS_TARGETS": "https://www.example.com"}) + "\n",
+        encoding="utf-8",
+    )
+
+    metadata_path = run_root / "run.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata["auto_resume_count"] = 3
+    metadata["auto_resume_progress"] = 2
+    metadata_path.write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
+
+    launched = {"container": 0, "supervisor": 0}
+
+    def fake_launch(*args, **kwargs):
+        launched["container"] += 1
+        return None
+
+    def fake_start(*args, **kwargs):
+        launched["supervisor"] += 1
+        log_handle = kwargs.get("log_handle")
+        if log_handle is not None:
+            log_handle.close()
+        return True
+
+    monkeypatch.setattr("app.services.launcher._launch_runtime_container", fake_launch)
+    monkeypatch.setattr("app.services.launcher._start_container_supervisor", fake_start)
+
+    from app.services.launcher import _maybe_auto_resume_run
+
+    project_obj = db.get_project_by_id(project["id"])
+    user_obj = db.get_user_by_username("alice-continuous-report-limit")
+    run_obj = db.get_run_by_id(run["id"])
+    assert project_obj is not None
+    assert user_obj is not None
+    assert run_obj is not None
+
+    resumed = _maybe_auto_resume_run(
+        project_obj,
+        run_obj,
+        user_obj,
+        phase="report",
+        reason_code="runtime_disappeared",
+        reason_text="continuous observation hold detached",
+    )
+
+    assert resumed is True
+    assert launched == {"container": 1, "supervisor": 1}
+    latest = db.get_run_by_id(run["id"])
+    assert latest is not None
+    assert latest.status == "running"
+    refreshed = json.loads(metadata_path.read_text(encoding="utf-8"))
+    assert refreshed["auto_resume_count"] == 4
+    events = db.list_events_for_run(run["id"])
+    assert any("4/∞" in event.summary for event in events if event.event_type == "run.resumed")
+
+
+
 def test_auto_launch_missing_container_preserves_completed_artifacts(monkeypatch):
     client = TestClient(app)
     token = register_and_login(client, "alice")

@@ -132,6 +132,8 @@ PARALLEL: Independent tasks → parallel. Dependent → sequential.
    After report generation, NEVER mutate `scope.json` directly with raw `jq`/`python` to force `.status = "complete"` or `.current_phase = "complete"`.
    The ONLY allowed report-finalization command is `./scripts/finalize_engagement.sh "$DIR"`.
    For continuous-observation targets, `report-writer` should stop after writing `report.md` and hand control back. The operator MUST run `./scripts/finalize_engagement.sh "$DIR"` itself as the final blocking action so the runtime stays attached to the observation hold.
+   When invoking that command for a continuous-observation target, give the tool a long-lived timeout budget (at least 24h / `86400000` ms) so the tool wrapper does not tear down the hold after only a few minutes.
+   Once the command prints the first continuous-observation heartbeat, treat the hold as the live success state: do NOT retry `finalize_engagement.sh`, do NOT emit a user-facing summary/final answer, and do NOT perform any further tool call in that run unless the hold actually breaks.
    If that command enters or reports a continuous observation hold / does not exit normally, the run remains active in `report`; do NOT append `stop_reason=completed`, do NOT write a fallback completion log entry, do NOT translate the hold into `stop_reason=runtime_error`, and do NOT run any secondary command that marks the engagement complete.
 
 ## Stop Conditions

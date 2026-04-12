@@ -1860,6 +1860,8 @@ def engagement_completion_state(run: Run) -> tuple[bool, str]:
     completed_phases = {_canonical_phase_name(item) for item in scope.get("phases_completed", [])}
 
     if status_name != "complete":
+        if _continuous_observation_report_hold_active(run, engagement_dir=engagement_dir, scope=scope):
+            return (False, "Continuous observation hold active.")
         logged_reason = _last_logged_stop_reason(log_path)
         if logged_reason:
             return (False, logged_reason)
@@ -2559,6 +2561,42 @@ def _continuous_observation_target_matches(run: Run) -> bool:
             candidates.add(scope_hostname)
 
     return any(rule.strip() in candidates for rule in re.split(r"[;,]", configured) if rule.strip())
+
+
+def _continuous_observation_report_hold_active(
+    run: Run,
+    *,
+    engagement_dir: Path | None = None,
+    scope: dict[str, object] | None = None,
+) -> bool:
+    if not _continuous_observation_target_matches(run):
+        return False
+
+    engagement_dir = engagement_dir or _active_engagement_dir(run)
+    if engagement_dir is None:
+        return False
+
+    if scope is None:
+        scope = _normalize_scope_file(engagement_dir / "scope.json", run=run)
+    if not isinstance(scope, dict):
+        return False
+
+    if _canonical_phase_name(scope.get("current_phase")) != "report":
+        return False
+
+    report_path = engagement_dir / "report.md"
+    if not report_path.exists():
+        return False
+    report_text = report_path.read_text(encoding="utf-8", errors="replace")
+    if not _report_has_substantive_content(report_text):
+        return False
+
+    pending_cases, processing_cases = _count_remaining_cases(engagement_dir / "cases.db")
+    if pending_cases or processing_cases:
+        return False
+
+    surfaces_path = engagement_dir / "surfaces.jsonl"
+    return _surface_completion_ok(surfaces_path, scope)
 
 
 def _terminal_reason(
@@ -3319,6 +3357,11 @@ def _maybe_auto_resume_run(
     scope = _normalize_scope_file(engagement_dir / "scope.json", run=run) or {}
     scope_phase = _canonical_phase_name(scope.get("current_phase")) if isinstance(scope, dict) else "unknown"
     continuous_observation = _continuous_observation_target_matches(run)
+    continuous_report_hold = _continuous_observation_report_hold_active(
+        run,
+        engagement_dir=engagement_dir,
+        scope=scope if isinstance(scope, dict) else None,
+    )
     if (
         phase_name in {"report", "complete"} or scope_phase in {"report", "complete"}
     ) and not continuous_observation:
@@ -3334,7 +3377,7 @@ def _maybe_auto_resume_run(
     ):
         attempt = 0
 
-    if attempt >= _AUTO_RESUME_LIMIT:
+    if attempt >= _AUTO_RESUME_LIMIT and not continuous_report_hold:
         return False
 
     recovery_note = ""
@@ -3352,11 +3395,12 @@ def _maybe_auto_resume_run(
     _update_run_metadata(run, auto_resume_started_at=time.time())
     _set_auto_resume_count(run, next_attempt)
     _set_auto_resume_progress(run, resolved_count)
+    attempt_label = f"{next_attempt}/∞" if continuous_report_hold else f"{next_attempt}/{_AUTO_RESUME_LIMIT}"
     _append_runtime_event(
         run,
         "run.resumed",
         phase,
-        f"Relaunching /resume after {reason_code} ({next_attempt}/{_AUTO_RESUME_LIMIT}): {reason_text}{recovery_note}",
+        f"Relaunching /resume after {reason_code} ({attempt_label}): {reason_text}{recovery_note}",
     )
     resumed = db.get_run_by_id(run.id) or run
     if resumed.status != "running":

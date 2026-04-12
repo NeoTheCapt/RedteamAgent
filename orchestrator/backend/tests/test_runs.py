@@ -2900,6 +2900,106 @@ def test_list_runs_auto_resumes_logged_incomplete_stop_when_runtime_supervisor_i
     }
 
 
+def test_list_runs_continuous_report_hold_ignores_stale_logged_stop_reason_when_supervisor_is_missing(monkeypatch):
+    client = TestClient(app)
+    token = register_and_login(client, "alice-continuous-hold")
+    project = create_project(client, token)
+
+    create_run = client.post(
+        f"/projects/{project['id']}/runs",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"target": "https://www.example.com"},
+    )
+    assert create_run.status_code == 201
+    run = create_run.json()
+    db.update_run_status(run["id"], "running")
+
+    run_root = Path(run["engagement_root"])
+    workspace = run_root / "workspace"
+    engagement_dir = workspace / "engagements" / "2026-03-29-000001-example-report-hold"
+    engagement_dir.mkdir(parents=True, exist_ok=True)
+    (workspace / "engagements" / ".active").write_text(
+        "engagements/2026-03-29-000001-example-report-hold\n",
+        encoding="utf-8",
+    )
+    (engagement_dir / "scope.json").write_text(
+        json.dumps(
+            {
+                "target": "https://www.example.com",
+                "hostname": "www.example.com",
+                "status": "in_progress",
+                "current_phase": "report",
+                "phases_completed": ["recon", "collect", "consume_test", "exploit"],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (engagement_dir / "report.md").write_text(
+        "# Penetration Test Report\n"
+        "## Executive Summary\n" + ("summary line\n" * 25)
+        + "## Scope and Methodology\n" + ("method line\n" * 10)
+        + "## Findings\nNo confirmed findings\n"
+        + "## Attack Narrative\n" + ("narrative line\n" * 10)
+        + "## Recommendations\n- keep watching\n"
+        + "## Appendix\nappendix details\n",
+        encoding="utf-8",
+    )
+    (engagement_dir / "surfaces.jsonl").write_text("", encoding="utf-8")
+    (engagement_dir / "log.md").write_text(
+        "# Activity Log\n\n"
+        "## [01:01] Run stop — operator\n\n"
+        "**Action**: stop_reason=queue_incomplete\n"
+        "**Result**: stale consume-test stop reason from an earlier resume\n",
+        encoding="utf-8",
+    )
+    with sqlite3.connect(engagement_dir / "cases.db") as connection:
+        connection.execute(
+            "CREATE TABLE cases (id INTEGER PRIMARY KEY AUTOINCREMENT, status TEXT NOT NULL)"
+        )
+        connection.executemany("INSERT INTO cases(status) VALUES (?)", [("done",), ("done",)])
+        connection.commit()
+
+    seed_root = run_root / "seed"
+    seed_root.mkdir(parents=True, exist_ok=True)
+    (seed_root / "env.json").write_text(
+        json.dumps({"REDTEAM_CONTINUOUS_TARGETS": "https://www.example.com"}) + "\n",
+        encoding="utf-8",
+    )
+
+    with sqlite3.connect(database_path()) as connection:
+        connection.execute(
+            "UPDATE runs SET updated_at = datetime('now', '-700 seconds') WHERE id = ?",
+            (run["id"],),
+        )
+        connection.commit()
+    old_epoch = datetime.now().timestamp() - 700
+    os.utime(run_root / "run.json", (old_epoch, old_epoch))
+
+    captured: dict[str, str] = {}
+
+    def fake_auto_resume(project_obj, run_obj, user_obj, *, phase, reason_code, reason_text):
+        captured["phase"] = phase
+        captured["reason_code"] = reason_code
+        captured["reason_text"] = reason_text
+        return True
+
+    monkeypatch.setattr("app.services.runs.locate_runtime_pid", lambda _run: None)
+    monkeypatch.setattr("app.services.runs._maybe_auto_resume_run", fake_auto_resume)
+
+    runs_response = client.get(
+        f"/projects/{project['id']}/runs",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert runs_response.status_code == 200
+    assert runs_response.json()[0]["status"] == "running"
+    assert captured == {
+        "phase": "report",
+        "reason_code": "runtime_disappeared",
+        "reason_text": "continuous observation hold detached",
+    }
+
+
 def test_list_runs_marks_completed_scope_as_completed_even_if_runtime_is_still_alive(monkeypatch):
     client = TestClient(app)
     token = register_and_login(client, "alice")

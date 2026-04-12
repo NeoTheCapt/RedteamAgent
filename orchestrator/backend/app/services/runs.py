@@ -20,6 +20,7 @@ from .launcher import (
     RUNTIME_PID_LOOKUP_UNAVAILABLE,
     _active_engagement_dir,
     _clear_run_terminal_reason,
+    _continuous_observation_report_hold_active,
     _last_logged_stop_metadata,
     _latest_process_log_activity_at,
     _latest_undispatched_batch_fetch,
@@ -703,13 +704,20 @@ def _reconcile_run_status(run: Run, project: Project | None = None, user: User |
 
     if run.status == "running":
         engagement_dir = _active_engagement_dir(run)
+        continuous_report_hold = (
+            engagement_dir is not None and _continuous_observation_report_hold_active(run, engagement_dir=engagement_dir)
+        )
         logged_reason_code = ""
         logged_reason_text = ""
-        if engagement_dir is not None:
+        if engagement_dir is not None and not continuous_report_hold:
             logged_reason_code, logged_reason_text = _last_logged_stop_metadata(engagement_dir / "log.md")
 
-        reason_code = logged_reason_code or "runtime_disappeared"
-        reason_text = logged_reason_text or "Runtime supervisor disappeared before the engagement reached a terminal state."
+        if continuous_report_hold:
+            reason_code = "runtime_disappeared"
+            reason_text = "continuous observation hold detached"
+        else:
+            reason_code = logged_reason_code or "runtime_disappeared"
+            reason_text = logged_reason_text or "Runtime supervisor disappeared before the engagement reached a terminal state."
         if project is not None and user is not None:
             scope_path = _active_scope_path(run)
             current_phase, _, _, _, _ = _load_queue_state(scope_path)
