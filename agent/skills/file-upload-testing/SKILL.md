@@ -28,6 +28,16 @@ origin: RedteamOpencode
 - [ ] Determine where files are stored (same domain, CDN, S3)
 - [ ] Check if uploaded files are directly accessible via URL
 - [ ] Check if filename is preserved or randomized
+- [ ] Map the concrete workflow around the file: `submit → persist → retrieve/render/admin-review`
+- [ ] Reuse existing upload evidence before branching into more payload variants
+
+### Follow-Up Discipline (critical for unattended runs)
+
+- Treat a successful upload acceptance or an existing upload finding as the start of a workflow, not the end.
+- On follow-up passes, do **not** keep free-exploring extension/MIME permutations if the unresolved question is really where the uploaded content lands.
+- Spend one bounded step on the highest-signal consumer path already evidenced by the app: retrieval URL, public/static asset path, gallery/list view, moderation queue, document viewer, export/download path, or downstream parser.
+- If the consumer path still is not provable inside that bounded pass, return a concrete next step (exact workflow/artifact to confirm) instead of drifting or leaving the batch without outcomes.
+- Keep the guidance generic: focus on storage, retrieval, rendering, parsing, and authorization around uploaded content — not target-specific paths.
 
 ### 2. Extension Bypass
 
