@@ -135,6 +135,17 @@ mark_report_in_progress_for_observation() {
     mv "$tmp_report" "$REPORT_FILE"
 }
 
+append_observation_hold_log_entry() {
+    local interval target
+    interval="$(observation_interval_seconds)"
+    target="$(jq -r '.target // empty' "$SCOPE_FILE" 2>/dev/null || true)"
+    if [[ -x "$SCRIPT_DIR/append_log_entry.sh" ]]; then
+        "$SCRIPT_DIR/append_log_entry.sh" "$ENG_DIR" operator "Observation hold active" \
+            "entered continuous observation hold" \
+            "runtime attached for ${target:-unknown target}; heartbeat every ${interval}s" >/dev/null 2>&1 || true
+    fi
+}
+
 continuous_observation_loop() {
     local target interval
     target="$(jq -r '.target // empty' "$SCOPE_FILE" 2>/dev/null || true)"
@@ -154,6 +165,7 @@ if continuous_target_matches; then
     mark_scope_in_progress_for_observation
     mark_log_in_progress_for_observation
     mark_report_in_progress_for_observation
+    append_observation_hold_log_entry
     continuous_observation_loop
     exit 0
 fi
