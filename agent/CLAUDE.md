@@ -99,6 +99,7 @@ PARALLEL: Independent tasks → parallel. Dependent → sequential.
    - do NOT launch overlapping `task` calls inside the same consume-test pass, even when multiple fetched batch files are non-empty
    - never leave fetched cases in `processing` without a dispatched subagent task
    - after each dispatched subagent returns, immediately consume its `### Case Outcomes` and run the required `done` / `requeue` updates before the next fetch cycle
+   - an empty/whitespace-only operator reply immediately after a consume-test subagent handoff does NOT count as progress or as a valid loop boundary; treat it as an interrupted consume-test pass and continue the queue in the SAME turn once control returns
    - `./scripts/dispatcher.sh ... done` and `error` accept numeric case IDs only; never append agent names, statuses, or prose notes to those commands. Put human-readable context in a separate `append_log_entry.sh` call after the queue update.
    - once outcome recording starts for a consume-test batch, that SAME turn must either (a) finish the queue updates and immediately perform the next fetch+dispatch step, or (b) run the stop/completion checks and emit an explicit stop reason; never end on commentary-only text such as `[operator] Continuing consume_test.` while queue work remains
 - when recording outcomes, keep queue mutation and narration separate: first `done` / `error` / `requeue` with numeric IDs only, then write any prose explanation via `append_log_entry.sh`
@@ -324,6 +325,7 @@ Resume rules:
 - On `/resume`, fetch through `"$SCRIPTS/fetch_batch_to_file.sh"` and keep the full JSON batch on disk; do NOT `cat` the batch file or paste raw fetched JSON back into the model context.
 - For queue summaries, prefer `"$SCRIPTS/dispatcher.sh" "$ENG_DIR/cases.db" stats` over hand-written sqlite queries; if custom SQL is truly needed, inspect the schema first and use `url_path` (never a nonexistent `path` column).
 - After `reset-stale`, either dispatch exactly one concrete next batch in the SAME turn or write an explicit `Run stop` log entry with a stop reason.
+- If a resumed consume-test turn shows `pending > 0` and `processing = 0` right after a recent subagent completion or an empty operator reply, treat that as a dropped dispatch rather than a healthy idle state; immediately fetch the next real batch and launch the matching subagent in that SAME turn.
 - Do NOT leave `/resume` on a queue summary, `dispatcher.sh ... stats`, or a batch fetch without the matching subagent dispatch / case-outcome update in that same turn.
 - Do NOT emit `[operator] Autoengage started and active.` (or any equivalent mid-run status banner) after a resume/autonomous continuation while pending or processing work remains; either advance the queue in that same turn or stop with an explicit stop reason.
 - When printing diagnostic banner lines that start with `-`, NEVER use bare `printf '---label---\n'`; bash can parse that as an option and abort the step. Use `printf '%s\n' '---label---'` (or `echo '---label---'`) instead.
