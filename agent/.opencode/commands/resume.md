@@ -17,6 +17,10 @@ If no engagement found or status is "completed", inform user there's nothing to 
 
 If the user provided a specific engagement directory in their arguments, use that instead. After choosing the engagement, update `engagements/.active` so hooks and helper commands target the same run.
 
+**Continuous-observation fast path:** before the generic state dump below, inspect `scope.json` + the recent `log.md` tail. If `current_phase` is `report` and the recent log already contains a continuous-observation handoff marker (`Continuous-observation handoff:`, `operator must enter continuous observation hold`, or `operator must run ./scripts/finalize_engagement.sh`), then the handoff has already happened. In that situation, skip the generic resume diagnostics/recovery flow and make your VERY NEXT action a single anchored bash tool call that runs `"$SCRIPTS/finalize_engagement.sh" "$ENG_DIR"` with a long-lived timeout budget (at least `86400000` ms). Do **not** insert any extra file read, `wc`, `grep`, queue stats, summary text, or alternate command before that finalize call.
+
+If that finalize call successfully enters the observation hold, stop there. Do **not** emit a user-facing summary/final answer and do **not** perform any additional tool call unless the hold actually breaks.
+
 ## Step 2: Read Full State
 
 ```bash
@@ -101,6 +105,8 @@ fi
 ## Step 5: Resume Immediately From Real State
 
 Do NOT present a summary and stop. Read state, recover stale work, and continue from the correct phase in the SAME turn.
+
+Special-case report-phase resumes for long-lived observation targets: if `current_phase=report` and the recent log already shows the continuous-observation handoff markers above, that is **not** a request for more diagnostics. It is a direct instruction to run `"$SCRIPTS/finalize_engagement.sh" "$ENG_DIR"` immediately as the next action, with no intervening reads or summaries.
 
 Determine resume point from `scope.json`, `cases.db`, and queue state:
 - Queue has pending or interrupted cases → resume consumption loop (Phase 3)

@@ -301,6 +301,8 @@ printf '%s\n' '---STATS---'
 If status=in_progress: read state, present summary, recover stale cases, and continue from the correct phase in the SAME turn.
 cases.db IS the state: pending=not done, done=completed, processing=interrupted.
 
+Before any generic resume diagnostics, check for the continuous-observation report-handoff fast path: if `current_phase=report` and the recent `log.md` tail already contains `Continuous-observation handoff:`, `operator must enter continuous observation hold`, or `operator must run ./scripts/finalize_engagement.sh`, then the handoff is already complete and your VERY NEXT action must be one anchored `bash` tool call that runs `"$SCRIPTS/finalize_engagement.sh" "$ENG_DIR"` with a long-lived timeout budget (at least 24h / `86400000` ms). Do not insert a file read, queue summary, grep, `wc`, reasoning-only pause, or alternate command before that finalize call. If the hold starts successfully, stop there and do not perform any additional tool call unless the hold breaks.
+
 Resume rules:
 - NEVER stop after only reading `scope.json`, `log.md`, `findings.md`, or queue stats.
 - On `/resume`, prefer recent-window reads (`tail`, focused offsets, jq/sqlite summaries, targeted grep`) over full `log.md` / `findings.md` reloads; only reopen the entire file when a concrete dedupe/reporting need requires it.
