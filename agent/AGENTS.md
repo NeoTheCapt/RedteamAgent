@@ -148,14 +148,18 @@ PARALLEL: Independent tasks → parallel. Dependent → sequential.
    Never stop after saying reporting is next. The same assistant turn that decides reporting should begin MUST actually dispatch `report-writer`.
    After report generation, NEVER mutate `scope.json` directly with raw `jq`/`python` to force `.status = "complete"` or `.current_phase = "complete"`.
    The ONLY allowed report-finalization command is `./scripts/finalize_engagement.sh "$DIR"`.
+   `report-writer` owns report generation only. The operator owns finalization for BOTH standard and continuous-observation targets.
+   Once `report-writer` returns a successful report handoff, your VERY NEXT action must be a `bash` tool call that runs `./scripts/finalize_engagement.sh "$DIR"` with no intervening text reply, file read, reasoning-only pause, or alternate command.
+   For standard targets, that finalize call should exit normally and mark the engagement complete.
    For continuous-observation targets, `report-writer` should stop after writing `report.md` and hand control back. The operator MUST run `./scripts/finalize_engagement.sh "$DIR"` itself as the final blocking action so the runtime stays attached to the observation hold.
-   Continuous-observation report handoff is NOT a stopping point: once `report-writer` returns that handoff, your VERY NEXT action must be a `bash` tool call that runs `./scripts/finalize_engagement.sh "$DIR"` with no intervening text reply, file read, reasoning-only pause, or alternate command.
+   Continuous-observation report handoff is NOT a stopping point: once `report-writer` returns that handoff, your VERY NEXT action must be that finalize call with no extra diagnostics or summaries.
    Treat either literal handoff marker `Continuous-observation handoff:` or report-writer completion text such as `operator must enter continuous observation hold` / `operator must run ./scripts/finalize_engagement.sh` as the hard trigger for that immediate finalize call. A bare report path or report-writer task result is NEVER terminal success for a continuous-observation target.
    When invoking that command for a continuous-observation target, give the tool a long-lived timeout budget (at least 24h / `86400000` ms) so the tool wrapper does not tear down the hold after only a few minutes.
    Once the command prints the first continuous-observation heartbeat, treat the hold as the live success state: do NOT retry `finalize_engagement.sh`, do NOT emit a user-facing summary/final answer, and do NOT perform any further tool call in that run unless the hold actually breaks.
    If that command enters or reports a continuous observation hold / does not exit normally, the run remains active in `report`; do NOT append `stop_reason=completed`, do NOT write a fallback completion log entry, do NOT translate the hold into `stop_reason=runtime_error`, and do NOT run any secondary command that marks the engagement complete.
 
 ## Stop Conditions
+
 
 Do NOT stop because one batch completed or because you can summarize partial progress.
 Before any final stop/completion message:
@@ -307,14 +311,20 @@ ENG_DIR=$(resolve_engagement_dir "$(pwd)")
 printf '%s\n' "ENG_DIR=$ENG_DIR"
 printf '%s\n' '---SCOPE---'
 jq -c '{status,current_phase,phases_completed,target,start_time,started_at}' "$ENG_DIR/scope.json"
+if jq -e '.current_phase == "report"' "$ENG_DIR/scope.json" >/dev/null 2>&1 \
+  && tail -n 80 "$ENG_DIR/log.md" 2>/dev/null | rg -F -e 'Continuous-observation handoff:' -e 'operator must enter continuous observation hold' -e 'operator must run ./scripts/finalize_engagement.sh' >/dev/null; then
+  printf '%s\n' '[operator] continuous-observation handoff detected during resume; entering finalize hold'
+  exec "$SCRIPTS/finalize_engagement.sh" "$ENG_DIR"
+fi
 printf '%s\n' '---STATS---'
 "$SCRIPTS/dispatcher.sh" "$ENG_DIR/cases.db" stats 2>/dev/null
 ```
 
+Treat that Step 1 shell block as the required first resume command. It already checks the continuous-observation report-handoff fast path and, when triggered, enters `finalize_engagement.sh` inside the SAME bash/tool call.
 If status=in_progress: read state, present summary, recover stale cases, and continue from the correct phase in the SAME turn.
 cases.db IS the state: pending=not done, done=completed, processing=interrupted.
 
-Before any generic resume diagnostics, check for the continuous-observation report-handoff fast path: if `current_phase=report` and the recent `log.md` tail already contains `Continuous-observation handoff:`, `operator must enter continuous observation hold`, or `operator must run ./scripts/finalize_engagement.sh`, then the handoff is already complete and your VERY NEXT action must be one anchored `bash` tool call that runs `"$SCRIPTS/finalize_engagement.sh" "$ENG_DIR"` with a long-lived timeout budget (at least 24h / `86400000` ms). Do not insert a file read, queue summary, grep, `wc`, reasoning-only pause, or alternate command before that finalize call. If the hold starts successfully, stop there and do not perform any additional tool call unless the hold breaks.
+Before any generic resume diagnostics, check for the continuous-observation report-handoff fast path: if `current_phase=report` and the recent `log.md` tail already contains `Continuous-observation handoff:`, `operator must enter continuous observation hold`, or `operator must run ./scripts/finalize_engagement.sh`, then the handoff is already complete and the Step 1 shell block above must be your first command so it can `exec "$SCRIPTS/finalize_engagement.sh" "$ENG_DIR"` immediately. Do not insert a file read, queue summary, grep, `wc`, reasoning-only pause, or alternate command before that finalize call. If the hold starts successfully, stop there and do not perform any additional tool call unless the hold breaks.
 
 Resume rules:
 - NEVER stop after only reading `scope.json`, `log.md`, `findings.md`, or queue stats.
