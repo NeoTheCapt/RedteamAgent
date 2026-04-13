@@ -160,13 +160,16 @@ def prefer_browser_route_candidates(route_hints: list[str]) -> list[str]:
     return list(preferred.values())
 
 
-_INTERESTING_ASSET_EXTENSIONS = (
+_IMAGE_ASSET_EXTENSIONS = (
     ".jpg",
     ".jpeg",
     ".png",
     ".gif",
     ".webp",
     ".svg",
+)
+
+_NON_IMAGE_ASSET_EXTENSIONS = (
     ".pdf",
     ".zip",
     ".7z",
@@ -178,6 +181,62 @@ _INTERESTING_ASSET_EXTENSIONS = (
     ".avi",
     ".mkv",
     ".webm",
+    ".txt",
+    ".md",
+    ".csv",
+    ".json",
+    ".xml",
+    ".yml",
+    ".yaml",
+    ".log",
+    ".sql",
+    ".db",
+    ".sqlite",
+    ".bak",
+    ".kdbx",
+    ".doc",
+    ".docx",
+    ".xls",
+    ".xlsx",
+    ".ppt",
+    ".pptx",
+    ".pyc",
+    ".exe",
+)
+
+_INTERESTING_ASSET_EXTENSIONS = _IMAGE_ASSET_EXTENSIONS + _NON_IMAGE_ASSET_EXTENSIONS
+
+_HIGH_SIGNAL_BROWSER_IMAGE_MARKERS = (
+    "/upload",
+    "/uploads/",
+    "/attachment",
+    "/attachments/",
+    "/avatar",
+    "/profile",
+    "/receipt",
+    "/invoice",
+    "/report",
+    "/export",
+    "/document",
+    "/documents/",
+    "/evidence",
+    "/gallery",
+    "/submitted",
+    "/generated",
+)
+
+_LOW_SIGNAL_BROWSER_IMAGE_MARKERS = (
+    "/products/",
+    "/product/",
+    "/carousel/",
+    "/padding/",
+    "/logo",
+    "/logos/",
+    "/banner/",
+    "/hero/",
+    "/icon/",
+    "/icons/",
+    "/favicon",
 )
 
 
@@ -195,9 +254,15 @@ def normalize_browser_asset_hint(reference: str | None) -> str | None:
             return None
         value = "/" + value.lstrip("/")
     lower = value.lower()
-    if not any(lower.endswith(ext) for ext in _INTERESTING_ASSET_EXTENSIONS):
+    if any(lower.endswith(ext) for ext in _NON_IMAGE_ASSET_EXTENSIONS):
+        return value
+    if any(lower.endswith(ext) for ext in _IMAGE_ASSET_EXTENSIONS):
+        if any(marker in lower for marker in _LOW_SIGNAL_BROWSER_IMAGE_MARKERS):
+            return None
+        if any(marker in lower for marker in _HIGH_SIGNAL_BROWSER_IMAGE_MARKERS):
+            return value
         return None
-    return value
+    return None
 
 
 if browser_flow_dir.exists():

@@ -60,6 +60,7 @@ ALWAYS test these paths during initial recon (use ffuf with a custom wordlist):
 /uploads
 ```
 Save as temp wordlist and run ONE ffuf pass with these paths. Record all non-404 responses.
+Concrete observability / diagnostic hits from this pass (for example `/metrics`, `/health`, `/info`, `/status`, `/trace`, version/build dumps) are queue-worthy GET endpoints when they return real data. Do not demote them to intel-only notes.
 
 === OUTPUT FORMAT ===
 
