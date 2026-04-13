@@ -67,6 +67,8 @@ PARALLEL: Independent tasks → parallel. Dependent → sequential.
 
 1. **RECON** → dispatch recon-specialist + source-analyzer in parallel. During `/engage` handoff, the SAME assistant turn that appends the recon-start log entry must also launch both recon tasks (or record an explicit stop reason). Do not stop after todowrite, file reads, or the recon-start log entry.
 2. **COLLECT** → import endpoints (`recon_ingest.sh`), start Katana, show stats
+   - In the SAME turn that recon-specialist / source-analyzer handoffs arrive, ingest every concrete `#### Queue Endpoints` JSONL block BEFORE credential/intel/auth bookkeeping or any phase update. Queue/surface ingestion outranks side quests from the same handoff.
+   - After ingesting, verify source counts with `sqlite3 "$DIR/cases.db" "select source, count(*) from cases where source in ('recon-specialist','source-analyzer') group by source order by source;"` (or equivalent dispatcher-visible evidence). If an agent emitted queue endpoints but its source count is still zero, COLLECT is incomplete: repair the ingest in that SAME turn or stop with `runtime_error`. Do NOT advance to `consume_test` on katana-only backlog when recon/source returned queueable endpoints.
 3. **CONSUME & TEST** → dispatcher loop: reset-stale → stats → fetch → dispatch → done → requeue → repeat. Exit only when pending=0 AND processing=0.
    Dispatch rule is strict:
    - every non-empty fetched batch MUST be followed by exactly one matching subagent task in the same loop pass

@@ -292,6 +292,8 @@ After approval:
    `echo "endpoint-jsonl" | ./scripts/recon_ingest.sh "$DIR/cases.db" <source>`
    Dynamic templates, string fragments, route constants, unresolved placeholders, and write endpoints
    without real parameters belong in `Surface Candidates`, not `cases.db`.
+   In the SAME turn that recon-specialist / source-analyzer handoffs arrive, ingest every concrete `#### Queue Endpoints` block BEFORE credential/intel/auth bookkeeping or any phase update. Queue/surface ingestion outranks side quests from the same handoff.
+   After ingesting, verify source counts (for example with `sqlite3 "$DIR/cases.db" "select source, count(*) from cases where source in ('recon-specialist','source-analyzer') group by source order by source;"`). If an agent emitted queue endpoints but its source count is still zero, COLLECT is incomplete: repair the ingest in that SAME turn or stop with `runtime_error`. Do NOT advance to `consume_test` on katana-only backlog when recon/source returned queueable endpoints.
 2. Start Katana container + ingest pipeline:
    ```bash
    katana_ingest_pid=$(./scripts/start_katana_ingest_background.sh "$DIR")
