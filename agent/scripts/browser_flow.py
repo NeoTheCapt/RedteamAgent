@@ -344,6 +344,14 @@ class WebDriverClient:
         element_ref = urllib.parse.quote(extract_element_reference(element), safe="")
         self._request("POST", f"/session/{self.session_id}/element/{element_ref}/click", {})
 
+    def send_keys_element(self, element: Any, text: str) -> None:
+        element_ref = urllib.parse.quote(extract_element_reference(element), safe="")
+        self._request(
+            "POST",
+            f"/session/{self.session_id}/element/{element_ref}/value",
+            {"text": text, "value": list(text)},
+        )
+
 
 class StepError(RuntimeError):
     pass
@@ -603,6 +611,11 @@ const el = document.querySelector(selector);
 if (!el) return {ok:false, error:'selector not found'};
 el.scrollIntoView({block:'center', inline:'center'});
 el.focus();
+const tagName = (el.tagName || '').toLowerCase();
+const inputType = ((el.getAttribute && el.getAttribute('type')) || '').toLowerCase();
+if (tagName === 'input' && inputType === 'file') {
+  return {ok:false, error:'file inputs require upload action'};
+}
 if (clear) {
   if ('value' in el) el.value = '';
   if (el.isContentEditable) el.textContent = '';
@@ -755,6 +768,67 @@ return {ok:false, error:'placeholder not found'};
             record={"placeholder": placeholder, "matched_selector": selector},
         )
 
+    def _normalize_upload_paths(self, raw_paths: Any) -> list[Path]:
+        if isinstance(raw_paths, (str, os.PathLike)):
+            candidates = [raw_paths]
+        elif isinstance(raw_paths, list):
+            candidates = raw_paths
+        else:
+            raise StepError(f"upload requires path/file/paths, got: {raw_paths!r}")
+
+        resolved: list[Path] = []
+        for candidate in candidates:
+            path_text = str(candidate or "").strip()
+            if not path_text:
+                continue
+            path = Path(path_text).expanduser()
+            if not path.is_absolute():
+                path = (Path.cwd() / path).resolve()
+            if not path.exists() or not path.is_file():
+                raise StepError(f"upload file does not exist: {path}")
+            resolved.append(path)
+
+        if not resolved:
+            raise StepError("upload requires at least one existing file path")
+        return resolved
+
+    def upload_file(self, selector: str, raw_paths: Any, timeout_ms: int) -> None:
+        paths = self._normalize_upload_paths(raw_paths)
+        self.wait_for_selector(selector, timeout_ms)
+        inspect_script = """
+const selector = arguments[0];
+const el = document.querySelector(selector);
+if (!el) return {ok:false, error:'selector not found'};
+el.scrollIntoView({block:'center', inline:'center'});
+const tag = (el.tagName || '').toLowerCase();
+const type = ((el.getAttribute && el.getAttribute('type')) || '').toLowerCase();
+return {ok:true, tag, type, multiple: !!el.multiple, is_file: tag === 'input' && type === 'file'};
+"""
+        value = self.call_with_alert_recovery(
+            lambda: self.client.execute(inspect_script, [selector]),
+            source_action="upload",
+        )
+        if not isinstance(value, dict) or not value.get("ok"):
+            raise StepError(f"upload failed for {selector}: {value}")
+        if not value.get("is_file"):
+            raise StepError(f"upload target is not an input[type=file]: {selector}")
+
+        upload_text = "\n".join(str(path) for path in paths)
+        try:
+            element = self.client.find_element_css(selector)
+            self.client.send_keys_element(element, upload_text)
+        except Exception as exc:
+            raise StepError(f"upload failed for {selector}: {exc}") from exc
+
+        self.record(
+            "upload",
+            selector=selector,
+            timeout_ms=timeout_ms,
+            file_count=len(paths),
+            files=[path.name for path in paths],
+            multiple=bool(value.get("multiple")),
+        )
+
     def _submit_selector(self, selector: str, timeout_ms: int, *, action: str, record: dict[str, Any]) -> None:
         script = """
 const selector = arguments[0];
@@ -843,6 +917,16 @@ return {ok:true};
                 str(raw_step.get("text") or ""),
                 timeout_ms,
                 clear=bool(raw_step.get("clear", True)),
+            )
+            return
+        if action == "upload":
+            upload_paths = raw_step.get("paths")
+            if upload_paths is None:
+                upload_paths = raw_step.get("path") or raw_step.get("file") or raw_step.get("file_path") or raw_step.get("filePath")
+            self.upload_file(
+                str(raw_step["selector"]),
+                upload_paths,
+                timeout_ms,
             )
             return
         if action == "submit":
