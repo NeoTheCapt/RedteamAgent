@@ -768,6 +768,70 @@ return {ok:false, error:'placeholder not found'};
             record={"placeholder": placeholder, "matched_selector": selector},
         )
 
+    def set_range_value(self, selector: str, value: Any, timeout_ms: int, *, action: str = "set_range") -> None:
+        script = """
+const selector = arguments[0];
+const requested = arguments[1];
+const el = document.querySelector(selector);
+if (!el) return {ok:false, error:'selector not found'};
+el.scrollIntoView({block:'center', inline:'center'});
+el.focus();
+const tagName = (el.tagName || '').toLowerCase();
+const inputType = ((el.getAttribute && el.getAttribute('type')) || '').toLowerCase();
+if (tagName !== 'input' || (inputType !== 'range' && inputType !== 'number')) {
+  return {ok:false, error:'element is not range/number input'};
+}
+const serialized = String(requested ?? '');
+if (!serialized.trim()) {
+  return {ok:false, error:'value is empty'};
+}
+const numeric = Number(serialized);
+if (!Number.isFinite(numeric)) {
+  return {ok:false, error:'value is not numeric'};
+}
+const nativeSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
+if (nativeSetter && typeof nativeSetter.set === 'function') {
+  nativeSetter.set.call(el, serialized);
+} else {
+  el.value = serialized;
+}
+try {
+  el.dispatchEvent(new InputEvent('input', {bubbles:true, data: serialized, inputType: 'insertText'}));
+} catch (_err) {
+  el.dispatchEvent(new Event('input', {bubbles:true}));
+}
+el.dispatchEvent(new Event('change', {bubbles:true}));
+el.dispatchEvent(new Event('mouseup', {bubbles:true}));
+el.dispatchEvent(new Event('blur', {bubbles:true}));
+return {
+  ok:true,
+  requested: serialized,
+  effective: String(el.value ?? ''),
+  min: el.getAttribute('min') || '',
+  max: el.getAttribute('max') || '',
+  step: el.getAttribute('step') || '',
+  type: inputType,
+};
+"""
+        self.wait_for_selector(selector, timeout_ms)
+        value_record = self.call_with_alert_recovery(
+            lambda: self.client.execute(script, [selector, value]),
+            source_action=action,
+        )
+        if not isinstance(value_record, dict) or not value_record.get("ok"):
+            raise StepError(f"{action} failed for {selector}: {value_record}")
+        self.record(
+            action,
+            selector=selector,
+            timeout_ms=timeout_ms,
+            requested_value=str(value_record.get("requested") or ""),
+            effective_value=str(value_record.get("effective") or ""),
+            min=str(value_record.get("min") or ""),
+            max=str(value_record.get("max") or ""),
+            step=str(value_record.get("step") or ""),
+            input_type=str(value_record.get("type") or ""),
+        )
+
     def _normalize_upload_paths(self, raw_paths: Any) -> list[Path]:
         if isinstance(raw_paths, (str, os.PathLike)):
             candidates = [raw_paths]
@@ -917,6 +981,19 @@ return {ok:true};
                 str(raw_step.get("text") or ""),
                 timeout_ms,
                 clear=bool(raw_step.get("clear", True)),
+            )
+            return
+        if action in {"set_range", "set_rating"}:
+            raw_value = raw_step.get("value")
+            if raw_value is None:
+                raw_value = raw_step.get("rating")
+            if raw_value is None:
+                raw_value = raw_step.get("text")
+            self.set_range_value(
+                str(raw_step["selector"]),
+                raw_value,
+                timeout_ms,
+                action=action,
             )
             return
         if action == "upload":
