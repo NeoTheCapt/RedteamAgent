@@ -143,6 +143,7 @@ eng_dir, surface_file, tmp_file, surface_type, target, source, rationale, eviden
 scope_path = Path(eng_dir) / "scope.json"
 rows = []
 seen = False
+skipped_invalid_rows = 0
 METHODS = {"GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"}
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "0.0.0.0", "::1", "host.docker.internal"}
 
@@ -227,11 +228,19 @@ def canonicalize_target(value: str) -> str:
 canonical_target = canonicalize_target(target)
 
 with open(surface_file, "r", encoding="utf-8") as fh:
-    for line in fh:
+    for line_no, line in enumerate(fh, start=1):
         line = line.strip()
         if not line:
             continue
-        row = json.loads(line)
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError as exc:
+            skipped_invalid_rows += 1
+            print(
+                f"WARN: skipping malformed surface row {surface_file}:{line_no}: {exc}",
+                file=sys.stderr,
+            )
+            continue
         if row.get("surface_type") == surface_type and canonicalize_target(str(row.get("target") or "")) == canonical_target:
             row["target"] = target
             row["source"] = source
@@ -263,6 +272,12 @@ for row in rows:
 with open(tmp_file, "w", encoding="utf-8") as out:
     for row in collapsed.values():
         out.write(json.dumps(row, ensure_ascii=True) + "\n")
+
+if skipped_invalid_rows:
+    print(
+        f"WARN: dropped {skipped_invalid_rows} malformed surface row(s) while updating {surface_file}",
+        file=sys.stderr,
+    )
 PY
 
     mv "$tmp_file" "$surface_file"
