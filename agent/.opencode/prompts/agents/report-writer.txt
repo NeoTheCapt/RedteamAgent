@@ -110,7 +110,8 @@ Before generating the report:
 7. After writing `report.md`, decide finalization mode:
    - Default: run `./scripts/finalize_engagement.sh "$DIR"` yourself to normalize scope/log/report status and SQLite finalization.
    - Continuous-observation target (`REDTEAM_CONTINUOUS_TARGETS` / `CONTINUOUS_OBSERVATION_TARGETS` matches this target): do **NOT** call `finalize_engagement.sh` yourself. Return normally after writing the report and explicitly tell the operator to run `./scripts/finalize_engagement.sh "$DIR"` immediately as the very next action and final blocking action so the runtime stays attached to the observation hold.
-8. Return file path to operator only when `finalize_engagement.sh` exits normally. For continuous-observation targets, return the report path plus the immediate handoff instruction from rule 7 instead of invoking finalize yourself.
+   - For continuous-observation targets, your completion note MUST contain a standalone line `Continuous-observation handoff:` followed by a standalone line containing exactly `./scripts/finalize_engagement.sh "$DIR"`. Do not replace that marker with prose-only wording, and do not return only the report path.
+8. Return file path to operator only when `finalize_engagement.sh` exits normally. For continuous-observation targets, return the report path plus the immediate handoff instruction from rule 7 instead of invoking finalize yourself. A report path by itself is invalid for a continuous-observation target.
 9. CHRONOLOGICAL LOGGING: Before generating the report, append:
    `./scripts/append_log_entry.sh "$DIR" report-writer "Report start" "integrity checks and report generation" "<report type and data sources>"`
    After writing the report:
