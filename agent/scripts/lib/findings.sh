@@ -117,6 +117,11 @@ def normalize_space(value: str) -> str:
     return re.sub(r"\s+", " ", value.strip().lower())
 
 
+def expand_identifier_breaks(value: str) -> str:
+    value = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", value)
+    return re.sub(r"[_./-]+", " ", value)
+
+
 def field_value(text: str, label: str) -> str:
     match = re.search(rf"(?mi)^- \*\*{re.escape(label)}\*\*:\s*(.+)$", text)
     return match.group(1).strip() if match else ""
@@ -181,7 +186,7 @@ def extract_routes(text: str) -> list[str]:
 
     method_url_pattern = re.compile(r"(?i)\b(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+((?:https?://|/)[^\s`\"'<>),;]+)")
     url_pattern = re.compile(r"https?://[^\s`\"'<>),;]+")
-    path_pattern = re.compile(r"(?<![A-Za-z0-9])(/[^\s`\"'<>),;]+)")
+    path_pattern = re.compile(r"(?<![A-Za-z0-9:])(/[^\s`\"'<>),;]+)")
 
     routes: list[str] = []
     for candidate in candidates:
@@ -258,26 +263,136 @@ def title_similarity(left: str, right: str) -> float:
     return difflib.SequenceMatcher(a=left, b=right).ratio()
 
 
+TITLE_STOPWORDS = {
+    "a",
+    "an",
+    "and",
+    "api",
+    "apis",
+    "auth",
+    "authentication",
+    "authenticated",
+    "callable",
+    "endpoint",
+    "endpoints",
+    "exposes",
+    "expose",
+    "exposed",
+    "for",
+    "full",
+    "get",
+    "grants",
+    "grant",
+    "including",
+    "is",
+    "on",
+    "post",
+    "protected",
+    "public",
+    "response",
+    "returns",
+    "return",
+    "route",
+    "routes",
+    "the",
+    "to",
+    "trigger",
+    "triggers",
+    "user",
+    "with",
+    "without",
+}
+
+
+def title_tokens(value: str) -> list[str]:
+    if not value:
+        return []
+
+    normalized = normalize_space(expand_identifier_breaks(value))
+    normalized = re.sub(r"[`'\"()\[\]{}:]+", " ", normalized)
+
+    synonym_patterns = {
+        r"\bunauthenticated\b": "missingauth",
+        r"\bmissing authentication\b": "missingauth",
+        r"\bwithout authentication\b": "missingauth",
+        r"\bpasswords\b": "password",
+        r"\bhashes\b": "hash",
+        r"\btokens\b": "token",
+        r"\baccepted\b": "accept",
+        r"\baccepts\b": "accept",
+        r"\bexpos(?:e|es|ed|ing)\b": "expose",
+        r"\breturn(?:s|ed|ing)?\b": "return",
+        r"\bgrant(?:s|ed|ing)?\b": "grant",
+        r"\btriggers\b": "trigger",
+    }
+    for pattern, replacement in synonym_patterns.items():
+        normalized = re.sub(pattern, replacement, normalized)
+
+    tokens = []
+    for token in re.findall(r"[a-z0-9]+", normalized):
+        if len(token) <= 1 or token in TITLE_STOPWORDS:
+            continue
+        tokens.append(token)
+    return dedupe_preserve_order(tokens)
+
+
+def title_token_overlap(left: dict, right: dict) -> tuple[int, float]:
+    left_tokens = set(left.get("title_tokens", []))
+    right_tokens = set(right.get("title_tokens", []))
+    if not left_tokens or not right_tokens:
+        return (0, 0.0)
+    overlap = left_tokens & right_tokens
+    if not overlap:
+        return (0, 0.0)
+    score = len(overlap) / len(left_tokens | right_tokens)
+    return (len(overlap), score)
+
+
 def normalize_type_signature(value: str) -> str:
     if not value:
         return ""
 
-    normalized = normalize_space(value)
+    normalized = normalize_space(expand_identifier_breaks(value))
     normalized = re.sub(r"[`'\"()\[\]{}]+", " ", normalized)
 
     synonym_patterns = {
         r"\bvalidat(?:e|es|ed|ing|ion|ions)\b": "verify",
         r"\bverif(?:y|ies|ied|ying|ication|ications)\b": "verify",
         r"\bbypasses\b": "bypass",
+        r"\bunauthenticated\b": "missingauth",
+        r"\bmissing authentication\b": "missingauth",
+        r"\bwithout authentication\b": "missingauth",
+        r"\bexcessive data exposure\b": "data disclosure",
+        r"\bsensitive data disclosure\b": "data disclosure",
+        r"\binformation disclosure\b": "data disclosure",
     }
     for pattern, replacement in synonym_patterns.items():
         normalized = re.sub(pattern, replacement, normalized)
 
+    ignored_tokens = {
+        "abuse",
+        "attack",
+        "attacks",
+        "endpoint",
+        "fault",
+        "handling",
+        "input",
+        "issue",
+        "issues",
+        "notification",
+        "signature",
+        "signal",
+        "stateful",
+        "trigger",
+        "unprotected",
+        "workflow",
+    }
     tokens = [
         token
         for token in re.findall(r"[a-z0-9]+", normalized)
-        if len(token) > 1 and token not in {"issue", "issues", "attack", "attacks"}
+        if len(token) > 1 and token not in ignored_tokens
     ]
+    tokens = dedupe_preserve_order(tokens)
     if not tokens:
         return ""
     return " ".join(tokens)
@@ -301,22 +416,18 @@ def duplicate_reason(existing: dict, candidate: dict) -> str:
         and existing["type"] == candidate["type"]
     ):
         return "artifact+type"
-    if (
-        route_overlap(existing, candidate)
-        and candidate["owasp"]
-        and candidate["severity"]
-        and candidate["type_bucket"]
-        and existing["owasp"] == candidate["owasp"]
-        and existing["severity"] == candidate["severity"]
-        and existing["type_bucket"] == candidate["type_bucket"]
-    ):
-        return "route+owasp+severity+type-bucket"
-    if (
-        route_overlap(existing, candidate)
-        and candidate["owasp"]
-        and existing["owasp"] == candidate["owasp"]
-        and title_similarity(existing["title_norm"], candidate["title_norm"]) >= 0.55
-    ):
+
+    same_route = route_overlap(existing, candidate)
+    same_severity = bool(candidate["severity"]) and existing["severity"] == candidate["severity"]
+    same_owasp = bool(candidate["owasp"]) and existing["owasp"] == candidate["owasp"]
+    same_type_bucket = bool(candidate["type_bucket"]) and existing["type_bucket"] == candidate["type_bucket"]
+    title_overlap_count, title_overlap_score = title_token_overlap(existing, candidate)
+
+    if same_route and same_severity and same_type_bucket:
+        return "route+severity+type-bucket"
+    if same_route and same_owasp and title_overlap_count >= 2 and title_overlap_score >= 0.45:
+        return "route+owasp+title-token-overlap"
+    if same_route and same_owasp and title_similarity(existing["title_norm"], candidate["title_norm"]) >= 0.65:
         return "route+owasp+title-similarity"
     return ""
 
@@ -333,6 +444,7 @@ def parse_finding(text: str) -> dict[str, object]:
         "id": finding_id,
         "title": title,
         "title_norm": normalize_space(title),
+        "title_tokens": title_tokens(title),
         "severity": severity,
         "owasp": owasp,
         "type": finding_type,
