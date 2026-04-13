@@ -2754,6 +2754,79 @@ def test_run_summary_backfill_normalizes_loopback_surface_candidates_without_dup
     assert "host.docker.internal" not in (active_dir / "surfaces.jsonl").read_text(encoding="utf-8")
 
 
+def test_run_summary_dedupes_equivalent_surface_targets_when_counting_coverage():
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "https://www.example.com")
+    active_dir = setup_active_engagement(run)
+
+    (active_dir / "scope.json").write_text(
+        json.dumps(
+            {
+                "target": "https://www.example.com",
+                "hostname": "www.example.com",
+                "port": 443,
+                "scope": ["www.example.com", "*.example.com"],
+                "status": "in_progress",
+                "current_phase": "report",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (active_dir / "surfaces.jsonl").write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "surface_type": "api_documentation",
+                        "target": "GET /en-sg/api-v5",
+                        "source": "source-analyzer",
+                        "rationale": "API landing page was covered via exact route recovery",
+                        "evidence_ref": "case-18.body",
+                        "status": "covered",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "surface_type": "api_documentation",
+                        "target": "https://www.example.com/en-sg/api-v5",
+                        "source": "source-analyzer",
+                        "rationale": "root HTML exposes concrete API documentation route",
+                        "evidence_ref": "root.html",
+                        "status": "discovered",
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    response = client.get(
+        f"/projects/{project['id']}/runs/{run['id']}/summary",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+
+    payload = response.json()
+    assert payload["coverage"]["total_surfaces"] == 1
+    assert payload["coverage"]["remaining_surfaces"] == 0
+    assert payload["coverage"]["high_risk_remaining"] == 0
+    assert payload["coverage"]["surface_statuses"] == {"covered": 1}
+    assert payload["coverage"]["surface_types"] == [
+        {
+            "type": "api_documentation",
+            "total": None,
+            "done": None,
+            "pending": None,
+            "processing": None,
+            "error": None,
+            "count": 1,
+        }
+    ]
+
+
 def test_run_summary_backfill_preserves_mixed_surface_candidates_by_normalizing_placeholders():
     client = TestClient(app)
     token = register_and_login(client, "alice")

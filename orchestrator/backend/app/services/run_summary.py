@@ -18,7 +18,15 @@ from ..models.project import Project
 from ..models.run import Run
 from ..models.user import User
 from .events import list_events_for_run
-from .launcher import _loopback_display_context, _rewrite_artifact_value, normalize_active_scope
+from .launcher import (
+    _SURFACE_STATUS_RANK,
+    _VALID_SURFACE_STATUSES,
+    _canonicalize_surface_target_for_scope,
+    _loopback_display_context,
+    _normalize_surface_type,
+    _rewrite_artifact_value,
+    normalize_active_scope,
+)
 from .runs import _latest_workflow_activity_at, _project_or_404, _reconcile_run_status
 
 PHASE_ORDER = ["recon", "collect", "consume-test", "exploit", "report"]
@@ -529,7 +537,7 @@ def _load_observed_paths(path: Path, context: dict[str, str] | None = None) -> l
     return records
 
 
-def _load_surface_metrics(path: Path) -> dict:
+def _load_surface_metrics(path: Path, scope: dict | None = None) -> dict:
     metrics = {
         "total_surfaces": 0,
         "remaining_surfaces": 0,
@@ -540,10 +548,11 @@ def _load_surface_metrics(path: Path) -> dict:
     if not path.exists():
         return metrics
 
-    status_counts: Counter = Counter()
-    type_counts: Counter = Counter()
-    high_risk_remaining = 0
+    scope_target = ""
+    if isinstance(scope, dict):
+        scope_target = str(scope.get("target") or "").strip()
 
+    aggregated: dict[tuple[str, str], dict[str, str]] = {}
     for line in path.read_text(encoding="utf-8").splitlines():
         stripped = line.strip()
         if not stripped:
@@ -552,10 +561,25 @@ def _load_surface_metrics(path: Path) -> dict:
             payload = json.loads(stripped)
         except json.JSONDecodeError:
             continue
-        status_name = payload.get("status", "unknown")
-        surface_type = payload.get("surface_type", "unknown")
-        status_counts[status_name] += 1
+        surface_type = _normalize_surface_type(str(payload.get("surface_type") or "unknown").strip())
+        status_name = str(payload.get("status") or "discovered").strip().lower().replace("-", "_")
+        if status_name not in _VALID_SURFACE_STATUSES:
+            status_name = "discovered"
+        target = _canonicalize_surface_target_for_scope(str(payload.get("target") or ""), scope_target)
+        key = (surface_type, target)
+        current = aggregated.get(key)
+        if current is None or _SURFACE_STATUS_RANK[status_name] >= _SURFACE_STATUS_RANK[current["status"]]:
+            aggregated[key] = {"surface_type": surface_type, "status": status_name}
+
+    status_counts: Counter = Counter()
+    type_counts: Counter = Counter()
+    high_risk_remaining = 0
+
+    for row in aggregated.values():
+        surface_type = row["surface_type"]
+        status_name = row["status"]
         type_counts[surface_type] += 1
+        status_counts[status_name] += 1
         metrics["total_surfaces"] += 1
         if status_name not in {"covered", "not_applicable"}:
             metrics["remaining_surfaces"] += 1
@@ -1088,7 +1112,7 @@ def _summarize_existing_run(run: Run, project: Project, user: User) -> RunSummar
     run_metadata = _load_json(run_root / "run.json")
     cases = _load_cases_metrics(cases_db)
     processing_agents = cases.get("processing_agents", [])
-    surfaces = _load_surface_metrics(active_root / "surfaces.jsonl")
+    surfaces = _load_surface_metrics(active_root / "surfaces.jsonl", scope)
     findings_count = _count_findings(active_root / "findings.md")
     events = list_events_for_run(project.id, run.id, user)
     effective_current_phase = _effective_current_phase(
