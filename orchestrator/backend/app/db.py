@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Iterator
 
 from .config import settings
+from .models.case import Case
+from .models.dispatch import Dispatch
 from .models.event import Event
 from .models.project import Project
 from .models.run import Run
@@ -624,6 +626,10 @@ def create_event(
     task_name: str,
     agent_name: str,
     summary: str,
+    *,
+    kind: str = "legacy",
+    level: str = "info",
+    payload_json: str = "{}",
 ) -> Event:
     with get_connection() as connection:
         if event_type != "run.heartbeat":
@@ -637,14 +643,18 @@ def create_event(
             )
         cursor = connection.execute(
             """
-            INSERT INTO events (run_id, event_type, phase, task_name, agent_name, summary)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO events
+                (run_id, event_type, phase, task_name, agent_name, summary,
+                 kind, level, payload_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (run_id, event_type, phase, task_name, agent_name, summary),
+            (run_id, event_type, phase, task_name, agent_name, summary,
+             kind, level, payload_json),
         )
         row = connection.execute(
             """
-            SELECT id, run_id, event_type, phase, task_name, agent_name, summary, created_at
+            SELECT id, run_id, event_type, phase, task_name, agent_name, summary, created_at,
+                   kind, level, payload_json
             FROM events
             WHERE id = ?
             """,
@@ -709,3 +719,122 @@ def get_latest_non_heartbeat_event_for_run(run_id: int, prefix: str = "") -> Eve
             (run_id, f"{prefix}%"),
         ).fetchone()
     return Event.from_row(row) if row else None
+
+
+def upsert_dispatch(
+    *,
+    dispatch_id: str,
+    run_id: int,
+    phase: str,
+    round: int,
+    agent: str,
+    slot: str,
+    task: str | None,
+    state: str,
+    started_at: int | None = None,
+    finished_at: int | None = None,
+    error: str | None = None,
+) -> Dispatch:
+    with get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO dispatches (id, run_id, phase, round, agent, slot, task,
+                                    state, started_at, finished_at, error)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                state=excluded.state,
+                task=COALESCE(excluded.task, dispatches.task),
+                finished_at=COALESCE(excluded.finished_at, dispatches.finished_at),
+                error=COALESCE(excluded.error, dispatches.error)
+            """,
+            (dispatch_id, run_id, phase, round, agent, slot, task,
+             state, started_at, finished_at, error),
+        )
+        conn.commit()
+    return get_dispatch(dispatch_id)
+
+
+def get_dispatch(dispatch_id: str) -> Dispatch | None:
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM dispatches WHERE id = ?",
+            (dispatch_id,),
+        ).fetchone()
+    return Dispatch.from_row(row) if row else None
+
+
+def list_dispatches(run_id: int, phase: str | None = None) -> list[Dispatch]:
+    sql = "SELECT * FROM dispatches WHERE run_id = ?"
+    args: list = [run_id]
+    if phase:
+        sql += " AND phase = ?"
+        args.append(phase)
+    sql += " ORDER BY started_at IS NULL, started_at, id"
+    with get_connection() as conn:
+        rows = conn.execute(sql, args).fetchall()
+    return [Dispatch.from_row(r) for r in rows]
+
+
+def upsert_case(
+    *,
+    case_id: int,
+    run_id: int,
+    method: str,
+    path: str,
+    category: str | None = None,
+    dispatch_id: str | None = None,
+    state: str,
+    result: str | None = None,
+    finding_id: str | None = None,
+    started_at: int | None = None,
+    finished_at: int | None = None,
+) -> Case:
+    with get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO cases (case_id, run_id, method, path, category, dispatch_id,
+                               state, result, finding_id, started_at, finished_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(run_id, case_id) DO UPDATE SET
+                method=excluded.method,
+                path=excluded.path,
+                category=COALESCE(excluded.category, cases.category),
+                dispatch_id=COALESCE(excluded.dispatch_id, cases.dispatch_id),
+                state=excluded.state,
+                result=COALESCE(excluded.result, cases.result),
+                finding_id=COALESCE(excluded.finding_id, cases.finding_id),
+                started_at=COALESCE(excluded.started_at, cases.started_at),
+                finished_at=COALESCE(excluded.finished_at, cases.finished_at)
+            """,
+            (case_id, run_id, method, path, category, dispatch_id,
+             state, result, finding_id, started_at, finished_at),
+        )
+        conn.commit()
+    return get_case(run_id, case_id)
+
+
+def get_case(run_id: int, case_id: int) -> Case | None:
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM cases WHERE run_id = ? AND case_id = ?",
+            (run_id, case_id),
+        ).fetchone()
+    return Case.from_row(row) if row else None
+
+
+def list_cases(
+    run_id: int, *,
+    state: str | None = None,
+    method: str | None = None,
+    category: str | None = None,
+) -> list[Case]:
+    sql = "SELECT * FROM cases WHERE run_id = ?"
+    args: list = [run_id]
+    for col, val in (("state", state), ("method", method), ("category", category)):
+        if val:
+            sql += f" AND {col} = ?"
+            args.append(val)
+    sql += " ORDER BY case_id"
+    with get_connection() as conn:
+        rows = conn.execute(sql, args).fetchall()
+    return [Case.from_row(r) for r in rows]

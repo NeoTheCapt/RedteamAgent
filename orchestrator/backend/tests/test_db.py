@@ -206,3 +206,77 @@ def test_run_dataclass_exposes_new_fields():
     fetched = db.get_run_by_id(run.id)
     assert fetched.current_phase == ""
     assert fetched.current_round == 0
+
+
+def _mk_user_proj_run(tmp_path, name="u"):
+    from app import db
+    user = db.create_user(name, "ph", "s")
+    proj = db.create_project(user_id=user.id, name=name, slug=name, root_path=str(tmp_path))
+    run = db.create_run(project_id=proj.id, target="http://x", status="running",
+                        engagement_root=str(tmp_path))
+    return user, proj, run
+
+
+def test_dispatch_crud_roundtrip(tmp_path):
+    from app import db
+    _, _, run = _mk_user_proj_run(tmp_path)
+    d = db.upsert_dispatch(
+        dispatch_id="B-17", run_id=run.id, phase="consume", round=2,
+        agent="vulnerability-analyst", slot="s0", task="API SQLi probes",
+        state="running", started_at=1712345678,
+    )
+    assert d.id == "B-17"
+    assert d.state == "running"
+    db.upsert_dispatch(
+        dispatch_id="B-17", run_id=run.id, phase="consume", round=2,
+        agent="vulnerability-analyst", slot="s0", task="API SQLi probes",
+        state="done", started_at=1712345678, finished_at=1712345700,
+    )
+    updated = db.get_dispatch("B-17")
+    assert updated.state == "done"
+    assert updated.finished_at == 1712345700
+
+
+def test_list_dispatches_filters_by_phase(tmp_path):
+    from app import db
+    _, _, run = _mk_user_proj_run(tmp_path, name="u2")
+    db.upsert_dispatch(dispatch_id="A", run_id=run.id, phase="recon", round=0,
+                       agent="recon", slot="s0", task="", state="done", started_at=1)
+    db.upsert_dispatch(dispatch_id="B", run_id=run.id, phase="consume", round=1,
+                       agent="v", slot="s0", task="", state="done", started_at=2)
+    assert [d.id for d in db.list_dispatches(run.id, phase="consume")] == ["B"]
+
+
+def test_case_crud_roundtrip(tmp_path):
+    from app import db
+    _, _, run = _mk_user_proj_run(tmp_path, name="u3")
+    # Prereq: dispatch B-17 must exist because cases.dispatch_id has an FK
+    # to dispatches(id) (set NULL on delete).
+    db.upsert_dispatch(
+        dispatch_id="B-17", run_id=run.id, phase="consume", round=2,
+        agent="vulnerability-analyst", slot="s0", task="API SQLi probes",
+        state="running", started_at=1712345678,
+    )
+    db.upsert_case(case_id=32, run_id=run.id, method="GET", path="/api/search",
+                   category="injection", state="queued")
+    db.upsert_case(case_id=32, run_id=run.id, method="GET", path="/api/search",
+                   category="injection", dispatch_id="B-17", state="finding",
+                   result="SQLi confirmed", finding_id="FINDING-VA-003",
+                   started_at=1712345678, finished_at=1712345690)
+    c = db.get_case(run.id, 32)
+    assert c.state == "finding"
+    assert c.finding_id == "FINDING-VA-003"
+    assert c.dispatch_id == "B-17"
+
+
+def test_create_event_stores_structured_fields(tmp_path):
+    from app import db
+    _, _, run = _mk_user_proj_run(tmp_path, name="u4")
+    e = db.create_event(
+        run.id, "agent", "consume", "", "vuln-analyst:s0", "",
+        kind="finding", level="info",
+        payload_json='{"finding_id":"F-1","severity":"critical"}',
+    )
+    assert e.kind == "finding"
+    assert e.level == "info"
+    assert '"severity":"critical"' in e.payload_json
