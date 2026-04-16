@@ -168,3 +168,13 @@ def test_cases_table_exists():
         "dispatch_id", "state", "result", "finding_id",
         "started_at", "finished_at",
     }
+
+
+def test_events_table_has_kind_level_payload():
+    from app import db
+    db.init_db()
+    with db.get_connection() as conn:
+        cols = {row["name"] for row in conn.execute("PRAGMA table_info(events)")}
+    assert "kind" in cols
+    assert "level" in cols
+    assert "payload_json" in cols

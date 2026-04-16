@@ -215,6 +215,19 @@ def init_db() -> None:
         connection.execute(
             "CREATE INDEX IF NOT EXISTS idx_cases_run_state ON cases(run_id, state)"
         )
+        for column_sql in [
+            "ALTER TABLE events ADD COLUMN kind TEXT NOT NULL DEFAULT 'legacy'",
+            "ALTER TABLE events ADD COLUMN level TEXT NOT NULL DEFAULT 'info'",
+            "ALTER TABLE events ADD COLUMN payload_json TEXT NOT NULL DEFAULT '{}'",
+        ]:
+            try:
+                connection.execute(column_sql)
+            except sqlite3.OperationalError as exc:
+                if "duplicate column" not in str(exc).lower():
+                    raise
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_events_run_kind ON events(run_id, kind)"
+        )
         connection.commit()
         _INITIALIZED_DB_PATH = current_db_path
 
