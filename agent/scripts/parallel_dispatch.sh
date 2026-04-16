@@ -5,6 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib/parallel_config.sh"
 
 FETCH_BATCH="$SCRIPT_DIR/fetch_batch_to_file.sh"
+EMIT_RUNTIME_EVENT="${EMIT_RUNTIME_EVENT:-$SCRIPT_DIR/emit_runtime_event.sh}"
 
 usage() {
   cat >&2 <<EOF
@@ -115,6 +116,30 @@ case "$SUBCMD" in
 
       TOTAL_CASES=$(( TOTAL_CASES + BATCH_COUNT ))
 
+      # Emit structured dispatch_start event for this slot (best-effort; async).
+      if [[ -f "$EMIT_RUNTIME_EVENT" && "$STATUS" == "fetched" ]]; then
+        dispatch_payload="$(jq -cn \
+            --arg batch "$BATCH_ID" \
+            --arg slot "s${SLOT_INDEX}" \
+            --argjson case_count "$BATCH_COUNT" \
+            --arg type "$batch_type" \
+            --arg agent_name "$agent" \
+            --arg agent_tag "$AGENT_TAG" \
+            --arg case_ids "$BATCH_IDS" \
+            --argjson round "${ORCHESTRATOR_ROUND:-0}" \
+            '{batch:$batch, slot:$slot, case_count:$case_count, type:$type,
+              agent:$agent_name, agent_tag:$agent_tag, case_ids:$case_ids,
+              round:$round}')"
+        bash "$EMIT_RUNTIME_EVENT" \
+            "dispatch.started" \
+            "${ORCHESTRATOR_PHASE:-consume}" \
+            "$BATCH_ID" \
+            "$AGENT_TAG" \
+            "${batch_type} batch ${BATCH_ID} (${BATCH_COUNT} cases)" \
+            --kind dispatch_start \
+            --payload-json "$dispatch_payload" || true
+      fi
+
       # Append slot to JSON array
       SLOTS_JSON="$(jq --arg bid "$BATCH_ID" \
                        --arg bt "$batch_type" \
@@ -198,6 +223,9 @@ case "$SUBCMD" in
       LOG_FILE="$(jq -r --argjson idx "$SLOT_IDX" '.slots[$idx].log_file' "$MANIFEST")"
       CASE_IDS_CSV="$(jq -r --argjson idx "$SLOT_IDX" '.slots[$idx].case_ids' "$MANIFEST")"
       BATCH_ID="$(jq -r --argjson idx "$SLOT_IDX" '.slots[$idx].batch_id' "$MANIFEST")"
+      BATCH_TYPE="$(jq -r --argjson idx "$SLOT_IDX" '.slots[$idx].type' "$MANIFEST")"
+      SLOT_AGENT="$(jq -r --argjson idx "$SLOT_IDX" '.slots[$idx].agent' "$MANIFEST")"
+      SLOT_AGENT_TAG="$(jq -r --argjson idx "$SLOT_IDX" '.slots[$idx].agent_tag' "$MANIFEST")"
 
       # Build list of manifest case IDs
       MANIFEST_IDS=""
@@ -206,12 +234,39 @@ case "$SUBCMD" in
       if [ ! -f "$OUTCOMES_FILE" ]; then
         # Missing outcomes — orphan recovery
         printf '[%s] WARNING: missing outcomes file %s — recovering %s cases to pending\n' "$BATCH_ID" "$OUTCOMES_FILE" "${#MANIFEST_ID_ARR[@]}" >> "$LOG_FILE"
+        MISSING_ORPHAN=0
         for oid in "${MANIFEST_ID_ARR[@]}"; do
           oid="$(echo "$oid" | tr -d ' ')"
           [ -z "$oid" ] && continue
           sqlite3 "$DB" ".timeout 5000" "UPDATE cases SET status='pending', assigned_agent=NULL WHERE id=$oid AND status='processing';"
           TOTAL_ORPHAN=$(( TOTAL_ORPHAN + 1 ))
+          MISSING_ORPHAN=$(( MISSING_ORPHAN + 1 ))
         done
+        if [ -f "$EMIT_RUNTIME_EVENT" ]; then
+          dispatch_done_payload="$(jq -cn \
+              --arg batch "$BATCH_ID" \
+              --arg agent "${SLOT_AGENT:-unknown}" \
+              --arg agent_tag "${SLOT_AGENT_TAG:-}" \
+              --arg type "${BATCH_TYPE:-}" \
+              --argjson case_count 0 \
+              --argjson done 0 \
+              --argjson requeue 0 \
+              --argjson errored 0 \
+              --argjson orphan "$MISSING_ORPHAN" \
+              --arg state "missing_outcomes" \
+              --argjson round "${ORCHESTRATOR_ROUND:-0}" \
+              '{batch:$batch, agent:$agent, agent_tag:$agent_tag, type:$type,
+                case_count:$case_count, done:$done, requeue:$requeue,
+                error:$errored, orphan:$orphan, state:$state, round:$round}')"
+          bash "$EMIT_RUNTIME_EVENT" \
+              "dispatch.done" \
+              "${ORCHESTRATOR_PHASE:-consume}" \
+              "$BATCH_ID" \
+              "${SLOT_AGENT_TAG:-unknown}" \
+              "batch $BATCH_ID orphan recovery ($MISSING_ORPHAN cases to pending)" \
+              --kind dispatch_done \
+              --payload-json "$dispatch_done_payload" || true
+        fi
         RECORDED_SLOTS=$(( RECORDED_SLOTS + 1 ))
         SLOT_IDX=$(( SLOT_IDX + 1 ))
         continue
@@ -285,6 +340,35 @@ case "$SUBCMD" in
             SLOT_ERROR=$(( SLOT_ERROR + 1 ))
             ;;
         esac
+
+        # Emit structured case_done event for this outcome (best-effort; async).
+        if [ -f "$EMIT_RUNTIME_EVENT" ]; then
+          # Extract the tail description after the second em-dash, if present.
+          case_summary_detail="${line#* }"                 # strip OUTCOME_TYPE
+          case_summary_detail="${case_summary_detail#* }"  # strip CASE_ID
+          case_summary_detail="${case_summary_detail# }"
+          case_summary_detail="${case_summary_detail#— }"
+          case_done_payload="$(jq -cn \
+              --argjson case_id "$CASE_ID" \
+              --arg outcome "$OUTCOME_TYPE" \
+              --arg dispatch "$BATCH_ID" \
+              --arg agent "${SLOT_AGENT:-unknown}" \
+              --arg agent_tag "${SLOT_AGENT_TAG:-}" \
+              --arg type "${BATCH_TYPE:-}" \
+              --arg detail "${case_summary_detail:-}" \
+              --argjson round "${ORCHESTRATOR_ROUND:-0}" \
+              '{case_id:$case_id, outcome:$outcome, dispatch:$dispatch,
+                agent:$agent, agent_tag:$agent_tag, type:$type,
+                detail:$detail, round:$round}')"
+          bash "$EMIT_RUNTIME_EVENT" \
+              "case.done" \
+              "${ORCHESTRATOR_PHASE:-consume}" \
+              "case-$CASE_ID" \
+              "${SLOT_AGENT_TAG:-unknown}" \
+              "$OUTCOME_TYPE case $CASE_ID (${BATCH_ID})" \
+              --kind case_done \
+              --payload-json "$case_done_payload" || true
+        fi
       done < "$OUTCOMES_FILE"
 
       # Execute dispatcher commands
@@ -322,6 +406,34 @@ case "$SUBCMD" in
 
       printf '[%s] Recorded: done=%d requeue=%d error=%d orphan=%d\n' \
         "$BATCH_ID" "$SLOT_DONE" "$SLOT_REQUEUE" "$SLOT_ERROR" "$SLOT_ORPHAN" >> "$LOG_FILE"
+
+      # Emit structured dispatch_done event for this slot (best-effort; async).
+      if [ -f "$EMIT_RUNTIME_EVENT" ]; then
+        slot_total=$(( SLOT_DONE + SLOT_REQUEUE + SLOT_ERROR ))
+        dispatch_done_payload="$(jq -cn \
+            --arg batch "$BATCH_ID" \
+            --arg agent "${SLOT_AGENT:-unknown}" \
+            --arg agent_tag "${SLOT_AGENT_TAG:-}" \
+            --arg type "${BATCH_TYPE:-}" \
+            --argjson case_count "$slot_total" \
+            --argjson done "$SLOT_DONE" \
+            --argjson requeue "$SLOT_REQUEUE" \
+            --argjson errored "$SLOT_ERROR" \
+            --argjson orphan "$SLOT_ORPHAN" \
+            --arg state "done" \
+            --argjson round "${ORCHESTRATOR_ROUND:-0}" \
+            '{batch:$batch, agent:$agent, agent_tag:$agent_tag, type:$type,
+              case_count:$case_count, done:$done, requeue:$requeue,
+              error:$errored, orphan:$orphan, state:$state, round:$round}')"
+        bash "$EMIT_RUNTIME_EVENT" \
+            "dispatch.done" \
+            "${ORCHESTRATOR_PHASE:-consume}" \
+            "$BATCH_ID" \
+            "${SLOT_AGENT_TAG:-unknown}" \
+            "batch $BATCH_ID recorded (done=$SLOT_DONE requeue=$SLOT_REQUEUE error=$SLOT_ERROR orphan=$SLOT_ORPHAN)" \
+            --kind dispatch_done \
+            --payload-json "$dispatch_done_payload" || true
+      fi
 
       TOTAL_DONE=$(( TOTAL_DONE + SLOT_DONE ))
       TOTAL_REQUEUE=$(( TOTAL_REQUEUE + SLOT_REQUEUE ))
