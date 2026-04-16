@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 
 from ..models.event import Event
 from ..security import CurrentUser
+from ..services import event_apply
 from ..services.events import create_event_for_run, list_events_for_run, summarize_events_for_run
 from ..ws import broadcaster
 
@@ -66,6 +67,12 @@ async def create_event(
         kind=request.kind or "legacy",
         level=request.level or "info",
         payload_json=json.dumps(request.payload or {}, separators=(",", ":")),
+    )
+    event_apply.apply(
+        run_id=event.run_id,
+        kind=event.kind,
+        phase=event.phase,
+        payload=request.payload or {},
     )
     response = _event_response(event)
     await broadcaster.publish(

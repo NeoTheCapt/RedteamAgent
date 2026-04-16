@@ -79,6 +79,38 @@ def test_post_event_without_kind_is_legacy(isolate_data_dir):
     assert row["payload_json"] == "{}"
 
 
+def test_post_dispatch_start_creates_dispatch_row(isolate_data_dir):
+    client = TestClient(app)
+    token = _register(client, "dan_c2")
+    p, run = _create_project_and_run(client, token, isolate_data_dir, "dan")
+    h = {"Authorization": f"Bearer {token}"}
+
+    r = client.post(
+        f"/projects/{p['id']}/runs/{run.id}/events",
+        headers=h,
+        json={
+            "event_type": "dispatch.started", "phase": "consume",
+            "task_name": "B-1", "agent_name": "vuln:s0",
+            "summary": "batch", "kind": "dispatch_start",
+            "payload": {
+                "batch": "B-1", "round": 1, "slot": "0",
+                "agent": "vuln-analyst", "case_count": 2,
+                "cases": [
+                    {"id": 1, "method": "GET", "path": "/a", "type": "api"},
+                    {"id": 2, "method": "GET", "path": "/b", "type": "api"},
+                ],
+            },
+        },
+    )
+    assert r.status_code == 201
+    d = db.get_dispatch("B-1")
+    assert d is not None
+    assert d.agent == "vuln-analyst"
+
+    cases = db.list_cases(run.id)
+    assert {c.case_id for c in cases} == {1, 2}
+
+
 def test_post_event_handles_empty_payload(isolate_data_dir):
     """kind + level but no payload => payload defaults to {}."""
     client = TestClient(app)
