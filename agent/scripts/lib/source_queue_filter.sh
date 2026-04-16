@@ -101,31 +101,6 @@ _source_queue_is_high_signal_data() {
     return 1
 }
 
-_source_queue_is_low_signal_state_api() {
-    local method_lower="$(_source_queue_lower "$1")"
-    local path_lower="$(_source_queue_lower "$2")"
-    local url_lower="$(_source_queue_lower "$3")"
-    local path_signal_re='(^|/)(challenge|challenges|score|scores|scoreboard|leaderboard|achievement|achievements|badge|badges|trophy|trophies|progress)(/|$)'
-    local query_signal_re='[/?&](challenge|challenges|score|scores|scoreboard|leaderboard|achievement|achievements|badge|badges|trophy|trophies|progress)(=|&|$)'
-    local value_signal_re='[/?&](key|name|type|event)=[^&#]*(challenge|scoreboard|leaderboard|achievement|badge|trophy|progress)'
-
-    [[ "$method_lower" =~ ^(get|head|options)$ ]] || return 1
-
-    if [[ "$path_lower" =~ $path_signal_re ]]; then
-        return 0
-    fi
-
-    if [[ "$url_lower" =~ $query_signal_re ]]; then
-        return 0
-    fi
-
-    if [[ "$url_lower" =~ $value_signal_re ]]; then
-        return 0
-    fi
-
-    return 1
-}
-
 should_enqueue_case() {
     local source_name="$(_source_queue_lower "$1")"
     local case_type="$(_source_queue_lower "$2")"
@@ -133,23 +108,15 @@ should_enqueue_case() {
     local url="$4"
     local url_path="$5"
     local path_lower
-    local url_lower
 
     if [[ "$source_name" != "source-analyzer" ]]; then
         return 0
     fi
 
     path_lower="$(_source_queue_lower "$(_source_queue_path "$url_path" "$url")")"
-    url_lower="$(_source_queue_lower "$url")"
 
     case "$case_type" in
-        api)
-            if _source_queue_is_low_signal_state_api "$_method" "$path_lower" "$url_lower"; then
-                return 1
-            fi
-            return 0
-            ;;
-        api-spec|graphql|form|upload|websocket|javascript|stylesheet)
+        api|api-spec|graphql|form|upload|websocket|javascript|stylesheet)
             return 0
             ;;
         data)

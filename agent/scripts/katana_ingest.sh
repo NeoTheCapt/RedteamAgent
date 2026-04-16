@@ -108,9 +108,8 @@ cleanup_katana_ingest() {
         INGEST_REMAINDER=""
     fi
     replay_fallback_error_log_hints >/dev/null 2>&1 || true
-    sanitize_katana_error_log >/dev/null 2>&1 || true
     rm -f "$KATANA_RAW_OUTPUT"
-    clear_pid_tracking "$(pid_file_path "$ENGAGEMENT_DIR/pids" "katana_ingest")"
+    rm -f "$(pid_file_path "$ENGAGEMENT_DIR/pids" "katana_ingest")"
 }
 trap cleanup_katana_ingest EXIT
 
@@ -788,125 +787,6 @@ if sanitized == last_line:
 
 with output_path.open("a", encoding="utf-8") as handle:
     handle.write(sanitized + "\n")
-PY
-}
-
-sanitize_katana_error_log() {
-    [[ -f "$KATANA_ERROR_LOG" ]] || return 0
-
-    python3 - "$TARGET" "$KATANA_ERROR_LOG" <<'PY'
-import json
-import re
-import sys
-from pathlib import Path
-from urllib.parse import urlsplit, urlunsplit
-
-target = sys.argv[1]
-error_log_path = Path(sys.argv[2])
-
-_LOOPBACK_RUNTIME_HOSTS = {"127.0.0.1", "localhost", "0.0.0.0", "::1"}
-_RUNTIME_HOST_GATEWAY_ALIAS = "host.docker.internal"
-_NOISY_ENDPOINT_PATTERNS = (
-    re.compile(r"/\.well-known/[^/?#]+/[0-9]{2,5}/\.well-known/[^/?#]+", re.IGNORECASE),
-    re.compile(r"['\"]\.concat\(", re.IGNORECASE),
-    re.compile(r"/\.concat\(", re.IGNORECASE),
-)
-
-
-def loopback_context(target_value: str):
-    try:
-        parsed = urlsplit((target_value or "").strip())
-    except ValueError:
-        return None
-    hostname = (parsed.hostname or "").strip().lower()
-    if parsed.scheme not in {"http", "https"} or hostname not in _LOOPBACK_RUNTIME_HOSTS:
-        return None
-    alias_netloc = _RUNTIME_HOST_GATEWAY_ALIAS
-    if parsed.port is not None:
-        alias_netloc = f"{alias_netloc}:{parsed.port}"
-    return {
-        "target_base": urlunsplit((parsed.scheme, parsed.netloc, "", "", "")),
-        "target_host": parsed.hostname or hostname,
-        "alias_base": urlunsplit((parsed.scheme, alias_netloc, "", "", "")),
-        "alias_host": _RUNTIME_HOST_GATEWAY_ALIAS,
-    }
-
-
-def rewrite_text(value: str, context):
-    if not value or context is None:
-        return value
-    rewritten = value.replace(context["alias_base"], context["target_base"])
-    rewritten = rewritten.replace(f"*.{context['alias_host']}", f"*.{context['target_host']}")
-    rewritten = rewritten.replace(context["alias_host"], context["target_host"])
-    return rewritten
-
-
-def rewrite_value(value, context):
-    if isinstance(value, dict):
-        return {key: rewrite_value(item, context) for key, item in value.items()}
-    if isinstance(value, list):
-        return [rewrite_value(item, context) for item in value]
-    if isinstance(value, str):
-        return rewrite_text(value, context)
-    return value
-
-
-def endpoint_is_noise(value):
-    if not isinstance(value, str):
-        return False
-    candidate = value.strip()
-    if not candidate:
-        return False
-    try:
-        parsed = urlsplit(candidate)
-        path = parsed.path or candidate
-    except ValueError:
-        path = candidate
-    return any(pattern.search(path) for pattern in _NOISY_ENDPOINT_PATTERNS)
-
-
-context = loopback_context(target)
-source_lines = error_log_path.read_text(encoding="utf-8", errors="replace").splitlines()
-kept_lines = []
-last_line = ""
-for raw_line in source_lines:
-    stripped = raw_line.strip()
-    if not stripped:
-        continue
-    try:
-        payload = json.loads(stripped)
-    except json.JSONDecodeError:
-        rewritten = rewrite_text(stripped, context)
-        if endpoint_is_noise(rewritten):
-            continue
-        if rewritten == last_line:
-            continue
-        kept_lines.append(rewritten)
-        last_line = rewritten
-        continue
-
-    sanitized_payload = rewrite_value(payload, context)
-    endpoint = ""
-    if isinstance(sanitized_payload, dict):
-        endpoint = str(
-            sanitized_payload.get("endpoint")
-            or ((sanitized_payload.get("request") or {}).get("endpoint") if isinstance(sanitized_payload.get("request"), dict) else "")
-            or ((sanitized_payload.get("request") or {}).get("url") if isinstance(sanitized_payload.get("request"), dict) else "")
-            or sanitized_payload.get("url")
-            or ""
-        )
-    if endpoint_is_noise(endpoint):
-        continue
-    serialized = json.dumps(sanitized_payload, separators=(",", ":"), ensure_ascii=False)
-    if serialized == last_line:
-        continue
-    kept_lines.append(serialized)
-    last_line = serialized
-
-content = ""
-if kept_lines:
-    content = "\n".join(kept_lines) + "\n"
-error_log_path.write_text(content, encoding="utf-8")
 PY
 }
 

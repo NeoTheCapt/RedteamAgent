@@ -83,23 +83,19 @@ Prioritized list of remediation actions, grouped by effort (quick wins vs. longe
 - Timeline of actions
 ```
 
-## Step 4: Report Handoff to Operator
+## Step 4: Finalize Engagement State
 
-After generating `report.md`, do **not** call `./scripts/finalize_engagement.sh` from `report-writer`.
-Finalization is operator-owned so the same post-report path works for both standard targets and continuous-observation targets.
+After generating `report.md`, run:
 
-Instead:
-- For standard targets, return a concise success handoff that names the report path and says the operator must run `./scripts/finalize_engagement.sh "$ENG_DIR"` next.
-- For continuous-observation targets, return the exact handoff marker below after writing `report.md` and stop there:
-
-```text
-Continuous-observation handoff:
-- report written: <report-path>
-- operator must enter continuous observation hold
-- operator must run ./scripts/finalize_engagement.sh "$ENG_DIR"
+```bash
+./scripts/finalize_engagement.sh "$ENG_DIR"
 ```
 
-Never mutate `scope.json`, `log.md`, or `report.md` status lines directly from `report-writer` after report generation. The operator-owned finalize step is the single supported completion path.
+This is the single supported finalize path. It updates:
+- `scope.json` (`status=complete`, `current_phase=complete`, `end_time`, `phases_completed += report`)
+- `log.md` (`Status: Completed`)
+- `report.md` header date/status lines
+- SQLite WAL/SHM sidecars via checkpoint + cleanup
 
 ## User Arguments
 

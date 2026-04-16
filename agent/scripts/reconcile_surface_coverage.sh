@@ -55,11 +55,8 @@ if surfaces_file.exists():
         rows.append(json.loads(raw))
 
 source_analysis_dir = eng_dir / "scans" / "source-analysis"
-browser_flow_dir = eng_dir / "scans" / "browser-flow"
 synthetic_route_surfaces = []
-synthetic_browser_surfaces = []
 seen_synthetic_route_targets = set()
-seen_synthetic_browser_targets = set()
 
 
 def normalize_source_analysis_route(route: str | None) -> str | None:
@@ -72,25 +69,16 @@ def normalize_source_analysis_route(route: str | None) -> str | None:
         return None
     if value.startswith(("http://", "https://")):
         parsed = urlparse(value)
-        path = parsed.path.strip() or "/"
-        if parsed.query:
-            path = f"{path}?{parsed.query}"
         if parsed.fragment:
-            fragment = parsed.fragment.strip()
-            if fragment.startswith("/"):
-                value = fragment
-            else:
-                return f"{path}#{fragment}" if fragment else path
+            value = parsed.fragment.strip()
         else:
-            value = path
+            value = parsed.path.strip()
         if not value:
             return None
     if value.startswith("/#/"):
         return value
     if value.startswith("#/"):
         return "/" + value
-    if "#" in value and value.startswith("/"):
-        return value
     if value.startswith("/"):
         return "/#" + value
     return "/#/" + value.lstrip('#/')
@@ -121,195 +109,7 @@ if source_analysis_dir.exists():
                 }
             )
 
-
-def normalize_browser_hint_reference(reference: str | None) -> str | None:
-    value = str(reference or "").strip()
-    if not value:
-        return None
-    if value.startswith("../"):
-        return None
-    if value.startswith("./"):
-        value = "/" + value[2:].lstrip("/")
-    if value.startswith("#/") or value.startswith("/#/"):
-        return normalize_source_analysis_route(value)
-    if value.startswith("/"):
-        return value
-    return None
-
-
-def browser_route_semantic_key(reference: str) -> str:
-    normalized = normalize_browser_hint_reference(reference) or reference
-    if normalized.startswith("/#/"):
-        return "/" + normalized.split("/#/", 1)[1].lstrip("/")
-    return normalized
-
-
-def prefer_browser_route_candidates(route_hints: list[str]) -> list[str]:
-    preferred: dict[str, str] = {}
-    for route in route_hints:
-        normalized = normalize_browser_hint_reference(route)
-        if not normalized:
-            continue
-        key = browser_route_semantic_key(normalized)
-        existing = preferred.get(key)
-        if existing is None:
-            preferred[key] = normalized
-            continue
-        if normalized.startswith("/#/") and not existing.startswith("/#/"):
-            preferred[key] = normalized
-    return list(preferred.values())
-
-
-_IMAGE_ASSET_EXTENSIONS = (
-    ".jpg",
-    ".jpeg",
-    ".png",
-    ".gif",
-    ".webp",
-    ".svg",
-)
-
-_NON_IMAGE_ASSET_EXTENSIONS = (
-    ".pdf",
-    ".zip",
-    ".7z",
-    ".rar",
-    ".tar",
-    ".gz",
-    ".mp4",
-    ".mov",
-    ".avi",
-    ".mkv",
-    ".webm",
-    ".txt",
-    ".md",
-    ".csv",
-    ".json",
-    ".xml",
-    ".yml",
-    ".yaml",
-    ".log",
-    ".sql",
-    ".db",
-    ".sqlite",
-    ".bak",
-    ".kdbx",
-    ".doc",
-    ".docx",
-    ".xls",
-    ".xlsx",
-    ".ppt",
-    ".pptx",
-    ".pyc",
-    ".exe",
-)
-
-_INTERESTING_ASSET_EXTENSIONS = _IMAGE_ASSET_EXTENSIONS + _NON_IMAGE_ASSET_EXTENSIONS
-
-_HIGH_SIGNAL_BROWSER_IMAGE_MARKERS = (
-    "/upload",
-    "/uploads/",
-    "/attachment",
-    "/attachments/",
-    "/avatar",
-    "/profile",
-    "/receipt",
-    "/invoice",
-    "/report",
-    "/export",
-    "/document",
-    "/documents/",
-    "/evidence",
-    "/gallery",
-    "/submitted",
-    "/generated",
-)
-
-_LOW_SIGNAL_BROWSER_IMAGE_MARKERS = (
-    "/products/",
-    "/product/",
-    "/carousel/",
-    "/padding/",
-    "/logo",
-    "/logos/",
-    "/banner/",
-    "/hero/",
-    "/icon/",
-    "/icons/",
-    "/favicon",
-)
-
-
-def normalize_browser_asset_hint(reference: str | None) -> str | None:
-    value = str(reference or "").strip()
-    if not value:
-        return None
-    if value.startswith("../"):
-        return None
-    if value.startswith("./"):
-        value = "/" + value[2:].lstrip("/")
-    elif not value.startswith("/"):
-        parsed = urlparse(value)
-        if parsed.scheme or parsed.netloc:
-            return None
-        value = "/" + value.lstrip("/")
-    lower = value.lower()
-    if any(lower.endswith(ext) for ext in _NON_IMAGE_ASSET_EXTENSIONS):
-        return value
-    if any(lower.endswith(ext) for ext in _IMAGE_ASSET_EXTENSIONS):
-        if any(marker in lower for marker in _LOW_SIGNAL_BROWSER_IMAGE_MARKERS):
-            return None
-        if any(marker in lower for marker in _HIGH_SIGNAL_BROWSER_IMAGE_MARKERS):
-            return value
-        return None
-    return None
-
-
-if browser_flow_dir.exists():
-    for summary_path in sorted(browser_flow_dir.glob("*/summary.json")):
-        try:
-            summary = json.loads(summary_path.read_text(encoding="utf-8"))
-        except Exception:
-            continue
-        dom_summary = summary.get("dom_summary") or {}
-        evidence_ref = str(summary_path.relative_to(eng_dir))
-
-        for route in prefer_browser_route_candidates(dom_summary.get("route_hints") or [])[:12]:
-            target = f"GET {route}"
-            if target in seen_synthetic_browser_targets:
-                continue
-            seen_synthetic_browser_targets.add(target)
-            synthetic_browser_surfaces.append(
-                {
-                    "surface_type": "dynamic_render",
-                    "target": target,
-                    "source": "browser-flow-summary",
-                    "rationale": "browser-flow summary exposed an unexercised internal route hint from live DOM evidence",
-                    "evidence_ref": evidence_ref,
-                    "status": "discovered",
-                }
-            )
-
-        for asset in (normalize_browser_asset_hint(item) for item in (dom_summary.get("asset_hints") or [])):
-            if not asset:
-                continue
-            target = f"GET {asset}"
-            if target in seen_synthetic_browser_targets:
-                continue
-            seen_synthetic_browser_targets.add(target)
-            synthetic_browser_surfaces.append(
-                {
-                    "surface_type": "file_handling",
-                    "target": target,
-                    "source": "browser-flow-summary",
-                    "rationale": "browser-flow summary exposed an interesting same-origin asset hint from live DOM evidence",
-                    "evidence_ref": evidence_ref,
-                    "status": "discovered",
-                }
-            )
-
 rows.extend(synthetic_route_surfaces)
-rows.extend(synthetic_browser_surfaces)
 
 conn = sqlite3.connect(str(eng_dir / "cases.db"))
 conn.row_factory = sqlite3.Row
@@ -546,21 +346,21 @@ def parse_target_request(target: str):
 
     if rest.startswith(("http://", "https://")):
         parsed = urlparse(rest)
-        path = parsed.path or "/"
-        if parsed.query:
-            path = f"{path}?{parsed.query}"
-        if parsed.fragment:
-            path = f"{path}#{parsed.fragment}"
+        fragment_path = normalize_source_analysis_route(f"#/{parsed.fragment.lstrip('/')}" if parsed.fragment and not parsed.fragment.startswith('#/') else parsed.fragment)
+        if fragment_path:
+            path = fragment_path
+        else:
+            path = parsed.path or "/"
+            if parsed.query:
+                path = f"{path}?{parsed.query}"
         return method or "GET", path, rest, (parsed.hostname or "").lower(), locale_scoped
 
     if method:
         return method, rest, None, None, locale_scoped
 
-    if rest.startswith("#/"):
-        return "GET", "/" + rest, None, None, locale_scoped
-
-    if rest.startswith("/"):
-        return "GET", rest, None, None, locale_scoped
+    if rest.startswith("/") or rest.startswith("#/"):
+        inferred_path = normalize_source_analysis_route(rest) if "#" in rest else rest
+        return "GET", inferred_path or rest, None, None, locale_scoped
 
     return None, None, None, None, locale_scoped
 
@@ -600,9 +400,6 @@ def finding_mentions(*needles: str) -> bool:
 def followup_type(method: str, path: str) -> str:
     if path.endswith("/file-upload") or path == "/file-upload":
         return "upload"
-    lowered_path = path.lower()
-    if any(lowered_path.endswith(ext) for ext in _INTERESTING_ASSET_EXTENSIONS):
-        return "data"
     if method != "GET":
         return "api"
     api_prefixes = (
