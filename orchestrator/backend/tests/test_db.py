@@ -178,3 +178,31 @@ def test_events_table_has_kind_level_payload():
     assert "kind" in cols
     assert "level" in cols
     assert "payload_json" in cols
+
+
+def test_runs_table_has_phase_round_config_benchmark():
+    from app import db
+    db.init_db()
+    with db.get_connection() as conn:
+        cols = {row["name"] for row in conn.execute("PRAGMA table_info(runs)")}
+    assert "current_phase" in cols
+    assert "current_round" in cols
+    assert "parallel_config" in cols
+    assert "benchmark_json" in cols
+
+
+def test_run_dataclass_exposes_new_fields():
+    from app import db
+    db.init_db()
+    user = db.create_user("r4u", "ph", "s")
+    proj = db.create_project(user_id=user.id, name="r4", slug="r4", root_path="/x")
+    run = db.create_run(project_id=proj.id, target="http://x",
+                        status="running", engagement_root="/x")
+    # Defaults post-ALTER:
+    assert run.current_phase == ""
+    assert run.current_round == 0
+    assert run.parallel_config == "{}"
+    assert run.benchmark_json == "{}"
+    fetched = db.get_run_by_id(run.id)
+    assert fetched.current_phase == ""
+    assert fetched.current_round == 0

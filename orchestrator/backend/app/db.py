@@ -228,6 +228,17 @@ def init_db() -> None:
         connection.execute(
             "CREATE INDEX IF NOT EXISTS idx_events_run_kind ON events(run_id, kind)"
         )
+        for column_sql in [
+            "ALTER TABLE runs ADD COLUMN current_phase TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE runs ADD COLUMN current_round INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE runs ADD COLUMN parallel_config TEXT NOT NULL DEFAULT '{}'",
+            "ALTER TABLE runs ADD COLUMN benchmark_json TEXT NOT NULL DEFAULT '{}'",
+        ]:
+            try:
+                connection.execute(column_sql)
+            except sqlite3.OperationalError as exc:
+                if "duplicate column" not in str(exc).lower():
+                    raise
         connection.commit()
         _INITIALIZED_DB_PATH = current_db_path
 
@@ -444,7 +455,8 @@ def create_run(project_id: int, target: str, status: str, engagement_root: str) 
         )
         row = connection.execute(
             """
-            SELECT id, project_id, target, status, engagement_root, created_at, updated_at
+            SELECT id, project_id, target, status, engagement_root, created_at, updated_at,
+                   current_phase, current_round, parallel_config, benchmark_json
             FROM runs
             WHERE id = ?
             """,
@@ -466,7 +478,8 @@ def update_run_engagement_root(run_id: int, engagement_root: str) -> Run:
         )
         row = connection.execute(
             """
-            SELECT id, project_id, target, status, engagement_root, created_at, updated_at
+            SELECT id, project_id, target, status, engagement_root, created_at, updated_at,
+                   current_phase, current_round, parallel_config, benchmark_json
             FROM runs
             WHERE id = ?
             """,
@@ -480,7 +493,8 @@ def list_runs_for_project(project_id: int) -> list[Run]:
     with get_connection() as connection:
         rows = connection.execute(
             """
-            SELECT id, project_id, target, status, engagement_root, created_at, updated_at
+            SELECT id, project_id, target, status, engagement_root, created_at, updated_at,
+                   current_phase, current_round, parallel_config, benchmark_json
             FROM runs
             WHERE project_id = ?
             ORDER BY id ASC
@@ -494,7 +508,8 @@ def list_runs_by_status(status_value: str) -> list[Run]:
     with get_connection() as connection:
         rows = connection.execute(
             """
-            SELECT id, project_id, target, status, engagement_root, created_at, updated_at
+            SELECT id, project_id, target, status, engagement_root, created_at, updated_at,
+                   current_phase, current_round, parallel_config, benchmark_json
             FROM runs
             WHERE status = ?
             ORDER BY id ASC
@@ -508,7 +523,8 @@ def get_run_by_id(run_id: int) -> Run | None:
     with get_connection() as connection:
         row = connection.execute(
             """
-            SELECT id, project_id, target, status, engagement_root, created_at, updated_at
+            SELECT id, project_id, target, status, engagement_root, created_at, updated_at,
+                   current_phase, current_round, parallel_config, benchmark_json
             FROM runs
             WHERE id = ?
             """,
@@ -540,7 +556,8 @@ def update_run_status(run_id: int, status: str) -> Run:
         )
         row = connection.execute(
             """
-            SELECT id, project_id, target, status, engagement_root, created_at, updated_at
+            SELECT id, project_id, target, status, engagement_root, created_at, updated_at,
+                   current_phase, current_round, parallel_config, benchmark_json
             FROM runs
             WHERE id = ?
             """,
@@ -566,7 +583,8 @@ def set_run_updated_at(run_id: int, updated_at: str) -> Run:
         )
         row = connection.execute(
             """
-            SELECT id, project_id, target, status, engagement_root, created_at, updated_at
+            SELECT id, project_id, target, status, engagement_root, created_at, updated_at,
+                   current_phase, current_round, parallel_config, benchmark_json
             FROM runs
             WHERE id = ?
             """,
@@ -634,7 +652,8 @@ def create_event(
         ).fetchone()
         run_row = connection.execute(
             """
-            SELECT id, project_id, target, status, engagement_root, created_at, updated_at
+            SELECT id, project_id, target, status, engagement_root, created_at, updated_at,
+                   current_phase, current_round, parallel_config, benchmark_json
             FROM runs
             WHERE id = ?
             """,
