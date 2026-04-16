@@ -192,6 +192,29 @@ def init_db() -> None:
         connection.execute(
             "CREATE INDEX IF NOT EXISTS idx_dispatches_run ON dispatches(run_id)"
         )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS cases (
+                case_id INTEGER NOT NULL,
+                run_id INTEGER NOT NULL,
+                method TEXT NOT NULL,
+                path TEXT NOT NULL,
+                category TEXT,
+                dispatch_id TEXT,
+                state TEXT NOT NULL,
+                result TEXT,
+                finding_id TEXT,
+                started_at INTEGER,
+                finished_at INTEGER,
+                PRIMARY KEY (run_id, case_id),
+                FOREIGN KEY(run_id) REFERENCES runs(id) ON DELETE CASCADE,
+                FOREIGN KEY(dispatch_id) REFERENCES dispatches(id) ON DELETE SET NULL
+            )
+            """
+        )
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_cases_run_state ON cases(run_id, state)"
+        )
         connection.commit()
         _INITIALIZED_DB_PATH = current_db_path
 

@@ -156,3 +156,15 @@ def test_dispatches_table_exists():
         "id", "run_id", "phase", "round", "agent", "slot",
         "task", "state", "started_at", "finished_at", "error",
     }
+
+
+def test_cases_table_exists():
+    from app import db
+    db.init_db()
+    with db.get_connection() as conn:
+        cols = {row["name"] for row in conn.execute("PRAGMA table_info(cases)")}
+    assert cols == {
+        "case_id", "run_id", "method", "path", "category",
+        "dispatch_id", "state", "result", "finding_id",
+        "started_at", "finished_at",
+    }
