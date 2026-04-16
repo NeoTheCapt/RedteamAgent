@@ -2969,3 +2969,51 @@ def test_run_summary_backfill_skips_placeholder_surface_candidates():
             "status": "discovered",
         }
     ]
+
+
+def test_summary_includes_dispatch_and_case_aggregates(isolate_data_dir):
+    from fastapi.testclient import TestClient
+    from app.main import app
+    from app import db
+
+    client = TestClient(app)
+    client.post("/auth/register", json={"username": "c5_agg", "password": "secret-password"})
+    token = client.post("/auth/login",
+                        json={"username": "c5_agg", "password": "secret-password"}).json()["access_token"]
+    user = db.get_user_by_username("c5_agg")
+    proj = db.create_project(user_id=user.id, name="c5", slug="c5",
+                             root_path=str(isolate_data_dir))
+    run = db.create_run(project_id=proj.id, target="http://x",
+                        status="running", engagement_root=str(isolate_data_dir))
+
+    db.upsert_dispatch(dispatch_id="A", run_id=run.id, phase="consume", round=1,
+                       agent="v", slot="s0", task="", state="done",
+                       started_at=1, finished_at=10)
+    db.upsert_dispatch(dispatch_id="B", run_id=run.id, phase="consume", round=1,
+                       agent="v", slot="s1", task="", state="running", started_at=5)
+    db.upsert_case(case_id=1, run_id=run.id, method="GET", path="/a", state="done")
+    db.upsert_case(case_id=2, run_id=run.id, method="GET", path="/b",
+                   state="finding", finding_id="F")
+    db.upsert_case(case_id=3, run_id=run.id, method="GET", path="/c", state="queued")
+
+    r = client.get(f"/projects/{proj.id}/runs/{run.id}/summary",
+                   headers={"Authorization": f"Bearer {token}"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+
+    # New aggregates
+    assert body["dispatches"]["total"] == 2
+    assert body["dispatches"]["active"] == 1
+    assert body["dispatches"]["done"] == 1
+    assert body["dispatches"]["failed"] == 0
+
+    assert body["cases"]["total"] == 3
+    assert body["cases"]["done"] == 1
+    assert body["cases"]["findings"] == 1
+    assert body["cases"]["queued"] == 1
+    assert body["cases"]["running"] == 0
+    assert body["cases"]["error"] == 0
+
+    # Existing fields still present (smoke check)
+    assert "target" in body
+    assert "overview" in body

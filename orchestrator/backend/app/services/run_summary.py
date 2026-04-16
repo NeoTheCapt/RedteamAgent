@@ -99,6 +99,8 @@ class RunSummary:
     current: dict
     phases: list[dict]
     agents: list[dict]
+    dispatches: dict
+    cases: dict
 
 
 @dataclass(frozen=True, slots=True)
@@ -1160,6 +1162,23 @@ def _summarize_existing_run(run: Run, project: Project, user: User) -> RunSummar
         available_agents=available_agents,
     )
 
+    dispatch_rows = db.list_dispatches(run.id)
+    case_rows = db.list_cases(run.id)
+    dispatch_agg = {
+        "total": len(dispatch_rows),
+        "active": sum(1 for d in dispatch_rows if d.state == "running"),
+        "done": sum(1 for d in dispatch_rows if d.state == "done"),
+        "failed": sum(1 for d in dispatch_rows if d.state == "failed"),
+    }
+    case_agg = {
+        "total": len(case_rows),
+        "done": sum(1 for c in case_rows if c.state == "done"),
+        "running": sum(1 for c in case_rows if c.state == "running"),
+        "queued": sum(1 for c in case_rows if c.state == "queued"),
+        "error": sum(1 for c in case_rows if c.state == "error"),
+        "findings": sum(1 for c in case_rows if c.state == "finding"),
+    }
+
     return RunSummary(
         target=_build_target_card(run, scope, active_root),
         overview={
@@ -1177,6 +1196,8 @@ def _summarize_existing_run(run: Run, project: Project, user: User) -> RunSummar
         current=current,
         phases=phases,
         agents=agents,
+        dispatches=dispatch_agg,
+        cases=case_agg,
     )
 
 
