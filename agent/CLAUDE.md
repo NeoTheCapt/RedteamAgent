@@ -92,28 +92,24 @@ PARALLEL: Independent tasks → parallel. Dependent → sequential.
    - every non-empty fetched batch MUST be followed by exactly one matching subagent task in the same loop pass
    - `api`, `graphql`, `form`, `upload`, and `websocket` batches MUST dispatch `vulnerability-analyst`
    - `api-spec`, `page`, `data`, `javascript`, `stylesheet`, and `unknown` batches MUST dispatch `source-analyzer`
-   - consume-test dispatch is SERIALIZED: fetch and dispatch exactly one non-empty batch at a time, wait for that subagent result, record its `### Case Outcomes`, then fetch the next batch
-   - a consume-test subagent handoff is not complete unless it includes a literal `### Case Outcomes` section that accounts for every fetched case ID exactly once with `DONE`, `REQUEUE`, or `ERROR`; if that section is missing or incomplete, immediately request a corrected handoff before touching queue state
-   - do NOT launch overlapping `task` calls inside the same consume-test pass, even when multiple fetched batch files are non-empty
-   - never leave fetched cases in `processing` without a dispatched subagent task
-   - after each dispatched subagent returns, immediately consume its `### Case Outcomes` and run the required `done` / `requeue` updates before the next fetch cycle
-   - once outcome recording starts for a consume-test batch, that SAME turn must either (a) finish the queue updates and immediately perform the next fetch+dispatch step, or (b) run the stop/completion checks and emit an explicit stop reason; never end on commentary-only text such as `[operator] Continuing consume_test.` while queue work remains
-   - if coverage-expanding source batches remain pending (`api-spec`, `javascript`, `unknown`, or a clearly seed-like `page` such as the root/bootstrap page), do NOT keep chaining vulnerability-analyst batches indefinitely; after any completed API-family batch, the next queue selection SHOULD attempt one of those `source-analyzer` batches before taking another API-family batch
-   - do NOT let generic low-yield `page`, `stylesheet`, or `data` backlog (for example redirects, media-heavy pages, or static assets) starve high-signal API-family work once coverage-expanding source batches have already been drained
-   - when benchmark quality is failing/regressing or surface coverage is unresolved, prefer draining one coverage-expanding `source-analyzer` batch before returning to another API-family batch so bundle-derived routes/surfaces can materialize into follow-up cases; once only generic low-yield source backlog remains, switch back to API-family testing instead of looping on more page churn
-   - when concrete `operator-surface-coverage` follow-up cases exist, treat them as higher-signal than generic route/help/locale backlog. Pull one surfaced exact route/workflow follow-up (especially `dynamic_render`, `auth_entry`, `privileged_write`, `file_handling`, or a consumer of a disclosed workflow primitive) before returning to low-yield static/page churn
-   - if subagent output includes `REQUEUE_CANDIDATE` or clearly says an endpoint still has an untested higher-risk family, do NOT mark that case exhausted; requeue the same case (or a narrowed sibling follow-up) before the next fetch
-   - outcome-recording bash blocks may do `done` / `requeue` / stats updates, but MUST NOT also prefetch the next non-empty batch unless that SAME assistant turn will immediately launch the matching subagent task
-   - do NOT hide the next non-empty fetch inside a "record outcomes" bash command and then leave the turn on commentary, a fresh `step_start`, or any other non-dispatch state; fetched cases may not sit in `processing` waiting for a later response
-   - NEVER combine outcome recording (`done`, `error`, `requeue`, `append_*`, queue stats, scope/findings/log updates) and `fetch_batch_to_file.sh` in the same bash/tool call. First record outcomes. Then do a dedicated fetch+dispatch step.
-   - ALWAYS fetch via `./scripts/fetch_batch_to_file.sh "$DIR/cases.db" <type> <limit> <agent> "$BATCH_FILE"`; it writes the full JSON batch to disk and prints only compact `BATCH_*` metadata for the model
-   - NEVER `cat "$BATCH_FILE"`, print raw fetched JSON, or paste full batch payloads back into the model context; dispatch from the saved file path instead
-   - treat the fetch output as a dispatch contract: if `BATCH_COUNT > 0`, the very next advancing action MUST be the matching `task(...)` call for that same `BATCH_AGENT`/`BATCH_FILE`; do not insert reads, grep, todo updates, queue summaries, or any other tool call in between
-   - use the emitted `BATCH_FILE`, `BATCH_TYPE`, `BATCH_AGENT`, `BATCH_IDS`, and `BATCH_PATHS` directly when framing the dispatch; do not reopen the batch file just to decide whether to dispatch
-   - if you are not ready to launch the matching subagent immediately, do NOT fetch yet
-   - immediately after a non-empty fetch, the SAME turn MUST launch the matching subagent task before any extra reads, summaries, todo updates, stop checks, or additional bash/tool calls
-   - if a tool result ends with `BATCH_COUNT > 0`, that assistant turn is not complete until the matching `task(...)` call has been issued; a fetch result alone never counts as progress
-   - treat `fetch_batch_to_file.sh` + the matching `task(...)` call as one atomic consume-test step; never stop after the fetch thinking the dispatch belongs to the next response
+   - consume-test dispatch uses `./scripts/parallel_dispatch.sh` for parallel execution:
+     1. Run `./scripts/dispatcher.sh "$DIR/cases.db" stats` to see pending counts by type
+     2. Decide which types to fetch and how many batches (up to REDTEAM_MAX_PARALLEL_BATCHES)
+     3. Call: `./scripts/parallel_dispatch.sh fetch "$DIR" "<type>:<limit>:<agent>" [...]`
+        - `api`, `graphql`, `form`, `upload`, `websocket` → `vulnerability-analyst`
+        - `api-spec`, `page`, `data`, `javascript`, `stylesheet`, `unknown` → `source-analyzer`
+     4. Read the manifest output. For each slot with status=fetched, launch a `task()` call. Launch ALL non-empty slot tasks in the SAME assistant turn (parallel dispatch).
+     5. Wait for all tasks to return. Each task must produce a `### Case Outcomes` section.
+     6. Save each task's full output to the slot's `outcomes_file` path from the manifest.
+     7. Call: `./scripts/parallel_dispatch.sh record "$DIR"` to process all outcomes at once.
+     8. Read the consolidated stats. Decide: fetch another round, or exit consume-test.
+   - Parallel dispatch rules:
+     - Follow the manifest mechanically. Do not re-decide what to dispatch after fetching.
+     - Save ALL task outputs to their outcomes_files BEFORE calling record.
+     - Finish one round completely (fetch → dispatch all → collect all → record) before starting the next.
+     - A subagent handoff is not complete unless it includes `### Case Outcomes` accounting for every case ID with DONE, REQUEUE, or ERROR.
+     - If a task times out or crashes, record will auto-recover those cases to pending.
+     - if subagent output includes `REQUEUE_CANDIDATE` or clearly says an endpoint still has an untested higher-risk family, do NOT mark that case exhausted; requeue it before the next round.
    Before leaving Test phase, run `./scripts/reconcile_surface_coverage.sh "$DIR" --ingest-followups` and then `./scripts/check_surface_coverage.sh "$DIR"`.
    `reconcile_surface_coverage.sh` auto-promotes already-validated surfaces to `covered`/`not_applicable` and can enqueue concrete follow-up cases for unresolved, requestable surfaces. If it adds follow-up cases, stay in consume-test and work that queue before checking coverage again.
    If coverage still fails, do not advance. In that SAME turn, either mark the surface with `./scripts/append_surface.sh "$DIR" <surface_type> <target> <source> <rationale> [evidence_ref] covered|not_applicable|deferred` (status last) using existing evidence or dispatch exactly one bounded surface-coverage follow-up batch. Do NOT grep the scripts directory and then idle.
