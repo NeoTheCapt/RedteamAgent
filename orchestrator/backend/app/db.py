@@ -171,6 +171,27 @@ def init_db() -> None:
             )
             """
         )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS dispatches (
+                id TEXT PRIMARY KEY,
+                run_id INTEGER NOT NULL,
+                phase TEXT NOT NULL,
+                round INTEGER NOT NULL DEFAULT 0,
+                agent TEXT NOT NULL,
+                slot TEXT NOT NULL,
+                task TEXT,
+                state TEXT NOT NULL,
+                started_at INTEGER,
+                finished_at INTEGER,
+                error TEXT,
+                FOREIGN KEY(run_id) REFERENCES runs(id) ON DELETE CASCADE
+            )
+            """
+        )
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_dispatches_run ON dispatches(run_id)"
+        )
         connection.commit()
         _INITIALIZED_DB_PATH = current_db_path
 

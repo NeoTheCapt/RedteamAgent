@@ -145,3 +145,14 @@ def test_concurrent_inserts_do_not_deadlock(tmp_path):
             "SELECT COUNT(*) FROM events WHERE run_id = ?", (run.id,)
         ).fetchone()[0]
     assert count == 200
+
+
+def test_dispatches_table_exists():
+    from app import db
+    db.init_db()
+    with db.get_connection() as conn:
+        cols = {row["name"] for row in conn.execute("PRAGMA table_info(dispatches)")}
+    assert cols == {
+        "id", "run_id", "phase", "round", "agent", "slot",
+        "task", "state", "started_at", "finished_at", "error",
+    }
