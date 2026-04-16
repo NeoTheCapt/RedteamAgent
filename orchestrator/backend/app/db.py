@@ -44,7 +44,12 @@ def _connect_database(*, timeout: float = 5.0) -> sqlite3.Connection:
     last_error: sqlite3.OperationalError | None = None
     for attempt in range(_DB_OPEN_RETRY_ATTEMPTS):
         try:
-            return sqlite3.connect(db_path, timeout=timeout)
+            connection = sqlite3.connect(db_path, timeout=timeout)
+            connection.execute("PRAGMA journal_mode=WAL")
+            connection.execute("PRAGMA synchronous=NORMAL")
+            connection.execute("PRAGMA busy_timeout=5000")
+            connection.execute("PRAGMA foreign_keys=ON")
+            return connection
         except sqlite3.OperationalError as exc:
             if not _is_retryable_open_error(exc) or attempt == _DB_OPEN_RETRY_ATTEMPTS - 1:
                 raise

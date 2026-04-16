@@ -94,3 +94,54 @@ def test_summary_endpoint_retries_transient_db_open_error_during_auth(monkeypatc
     assert response.status_code == 200
     assert response.json()["overview"]["current_phase"] == "collect"
     assert attempts["remaining"] == 0
+
+
+def test_connection_uses_wal_mode():
+    from app import db
+    db.init_db()
+    with db.get_connection() as conn:
+        mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
+        busy = conn.execute("PRAGMA busy_timeout").fetchone()[0]
+        sync = conn.execute("PRAGMA synchronous").fetchone()[0]
+        fk = conn.execute("PRAGMA foreign_keys").fetchone()[0]
+    assert mode.lower() == "wal"
+    assert busy >= 5000
+    assert sync == 1  # NORMAL
+    assert fk == 1
+
+
+def test_concurrent_inserts_do_not_deadlock(tmp_path):
+    """10 threads x 20 inserts each complete under 5s with WAL."""
+    import threading, time
+    from app import db
+    db.init_db()
+    user = db.create_user("cc_user", "ph", "s")
+    proj = db.create_project(
+        user_id=user.id, name="cc", slug="cc", root_path=str(tmp_path),
+    )
+    run = db.create_run(
+        project_id=proj.id, target="http://x", status="running",
+        engagement_root=str(tmp_path),
+    )
+
+    errors = []
+    def worker(tid):
+        try:
+            for i in range(20):
+                db.create_event(run.id, "task.status", "consume", f"t{tid}", "vuln", f"i{i}")
+        except Exception as e:
+            errors.append(e)
+
+    start = time.time()
+    threads = [threading.Thread(target=worker, args=(i,)) for i in range(10)]
+    for t in threads: t.start()
+    for t in threads: t.join()
+    elapsed = time.time() - start
+
+    assert errors == []
+    assert elapsed < 5.0
+    with db.get_connection() as conn:
+        count = conn.execute(
+            "SELECT COUNT(*) FROM events WHERE run_id = ?", (run.id,)
+        ).fetchone()[0]
+    assert count == 200
