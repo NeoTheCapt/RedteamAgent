@@ -152,6 +152,7 @@ __pycache__/
 .env.*
 !.env.example
 !agent/.env.example
+!agent/.env.parallel.example
 
 # ============================================
 # CLI runtime files (local overrides, state, caches)
