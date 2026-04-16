@@ -118,6 +118,13 @@ case "$SUBCMD" in
 
       # Emit structured dispatch_start event for this slot (best-effort; async).
       if [[ -f "$EMIT_RUNTIME_EVENT" && "$STATUS" == "fetched" ]]; then
+        # Project the cases array from the batch file for orchestrator upsert.
+        # Orchestrator uses `path`, agent uses `url_path`, so rename in projection.
+        if [[ -f "$BATCH_FILE" ]]; then
+          cases_array="$(jq -c '[.[] | {id, method, path: .url_path, type}]' "$BATCH_FILE" 2>/dev/null || echo '[]')"
+        else
+          cases_array="[]"
+        fi
         dispatch_payload="$(jq -cn \
             --arg batch "$BATCH_ID" \
             --arg slot "s${SLOT_INDEX}" \
@@ -127,9 +134,10 @@ case "$SUBCMD" in
             --arg agent_tag "$AGENT_TAG" \
             --arg case_ids "$BATCH_IDS" \
             --argjson round "${ORCHESTRATOR_ROUND:-0}" \
+            --argjson cases "$cases_array" \
             '{batch:$batch, slot:$slot, case_count:$case_count, type:$type,
               agent:$agent_name, agent_tag:$agent_tag, case_ids:$case_ids,
-              round:$round}')"
+              round:$round, cases:$cases}')"
         bash "$EMIT_RUNTIME_EVENT" \
             "dispatch.started" \
             "${ORCHESTRATOR_PHASE:-consume}" \
