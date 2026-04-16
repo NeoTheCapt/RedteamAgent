@@ -15,8 +15,8 @@ Subcommands:
     slot_spec format: <type>:<limit>:<agent>
     e.g.: "api:5:vulnerability-analyst" "javascript:3:source-analyzer"
 
-  record <engagement_dir> ...
-    (not yet implemented)
+  record <engagement_dir>
+    Record outcomes from parallel dispatch slots back into the queue.
 EOF
   exit 1
 }
@@ -162,8 +162,187 @@ case "$SUBCMD" in
     ;;
 
   record)
-    echo "ERROR: record not yet implemented" >&2
-    exit 1
+    DIR="${1:?Missing engagement_dir}"
+    shift
+
+    DB="$DIR/cases.db"
+    BATCHES_DIR="$DIR/batches"
+    MANIFEST="$BATCHES_DIR/manifest.json"
+    DISPATCHER="$SCRIPT_DIR/dispatcher.sh"
+
+    if [[ ! -f "$DB" ]]; then
+      echo "ERROR: cases.db not found at $DB" >&2
+      exit 1
+    fi
+    if [[ ! -f "$MANIFEST" ]]; then
+      echo "ERROR: manifest.json not found at $MANIFEST" >&2
+      exit 1
+    fi
+
+    SLOT_COUNT="$(jq '.slots | length' "$MANIFEST")"
+    RECORDED_SLOTS=0
+    TOTAL_DONE=0
+    TOTAL_REQUEUE=0
+    TOTAL_ERROR=0
+    TOTAL_ORPHAN=0
+
+    SLOT_IDX=0
+    while [ "$SLOT_IDX" -lt "$SLOT_COUNT" ]; do
+      SLOT_STATUS="$(jq -r --argjson idx "$SLOT_IDX" '.slots[$idx].status' "$MANIFEST")"
+      if [ "$SLOT_STATUS" != "fetched" ]; then
+        SLOT_IDX=$(( SLOT_IDX + 1 ))
+        continue
+      fi
+
+      OUTCOMES_FILE="$(jq -r --argjson idx "$SLOT_IDX" '.slots[$idx].outcomes_file' "$MANIFEST")"
+      LOG_FILE="$(jq -r --argjson idx "$SLOT_IDX" '.slots[$idx].log_file' "$MANIFEST")"
+      CASE_IDS_CSV="$(jq -r --argjson idx "$SLOT_IDX" '.slots[$idx].case_ids' "$MANIFEST")"
+      BATCH_ID="$(jq -r --argjson idx "$SLOT_IDX" '.slots[$idx].batch_id' "$MANIFEST")"
+
+      # Build list of manifest case IDs
+      MANIFEST_IDS=""
+      IFS=',' read -r -a MANIFEST_ID_ARR <<< "$CASE_IDS_CSV"
+
+      if [ ! -f "$OUTCOMES_FILE" ]; then
+        # Missing outcomes — orphan recovery
+        printf '[%s] WARNING: missing outcomes file %s — recovering %s cases to pending\n' "$BATCH_ID" "$OUTCOMES_FILE" "${#MANIFEST_ID_ARR[@]}" >> "$LOG_FILE"
+        for oid in "${MANIFEST_ID_ARR[@]}"; do
+          oid="$(echo "$oid" | tr -d ' ')"
+          [ -z "$oid" ] && continue
+          sqlite3 "$DB" ".timeout 5000" "UPDATE cases SET status='pending', assigned_agent=NULL WHERE id=$oid AND status='processing';"
+          TOTAL_ORPHAN=$(( TOTAL_ORPHAN + 1 ))
+        done
+        RECORDED_SLOTS=$(( RECORDED_SLOTS + 1 ))
+        SLOT_IDX=$(( SLOT_IDX + 1 ))
+        continue
+      fi
+
+      # Parse ### Case Outcomes section
+      IN_OUTCOMES=0
+      DONE_IDS=""
+      REQUEUE_IDS=""
+      ERROR_IDS=""
+      SEEN_IDS=""
+      SLOT_DONE=0
+      SLOT_REQUEUE=0
+      SLOT_ERROR=0
+
+      while IFS= read -r line; do
+        case "$line" in
+          "### Case Outcomes"*)
+            IN_OUTCOMES=1
+            continue
+            ;;
+        esac
+        if [ "$IN_OUTCOMES" -eq 0 ]; then
+          continue
+        fi
+        # Stop at next section header
+        case "$line" in
+          "### "* | "## "* | "# "*)
+            break
+            ;;
+        esac
+        # Parse: DONE|REQUEUE|ERROR <id> — ...
+        OUTCOME_TYPE="$(echo "$line" | awk '{print $1}')"
+        CASE_ID="$(echo "$line" | awk '{print $2}')"
+
+        # Skip lines that don't start with a valid outcome keyword
+        case "$OUTCOME_TYPE" in
+          DONE|REQUEUE|ERROR) ;;
+          *) continue ;;
+        esac
+        # Skip non-numeric IDs
+        case "$CASE_ID" in
+          ''|*[!0-9]*) continue ;;
+        esac
+
+        SEEN_IDS="${SEEN_IDS}${CASE_ID},"
+
+        case "$OUTCOME_TYPE" in
+          DONE)
+            if [ -z "$DONE_IDS" ]; then
+              DONE_IDS="$CASE_ID"
+            else
+              DONE_IDS="${DONE_IDS},${CASE_ID}"
+            fi
+            SLOT_DONE=$(( SLOT_DONE + 1 ))
+            ;;
+          REQUEUE)
+            if [ -z "$REQUEUE_IDS" ]; then
+              REQUEUE_IDS="$CASE_ID"
+            else
+              REQUEUE_IDS="${REQUEUE_IDS},${CASE_ID}"
+            fi
+            SLOT_REQUEUE=$(( SLOT_REQUEUE + 1 ))
+            ;;
+          ERROR)
+            if [ -z "$ERROR_IDS" ]; then
+              ERROR_IDS="$CASE_ID"
+            else
+              ERROR_IDS="${ERROR_IDS},${CASE_ID}"
+            fi
+            SLOT_ERROR=$(( SLOT_ERROR + 1 ))
+            ;;
+        esac
+      done < "$OUTCOMES_FILE"
+
+      # Execute dispatcher commands
+      if [ -n "$DONE_IDS" ]; then
+        "$DISPATCHER" "$DB" done "$DONE_IDS" >> "$LOG_FILE" 2>&1
+      fi
+      if [ -n "$ERROR_IDS" ]; then
+        "$DISPATCHER" "$DB" error "$ERROR_IDS" >> "$LOG_FILE" 2>&1
+      fi
+      # Requeue via direct SQL
+      if [ -n "$REQUEUE_IDS" ]; then
+        IFS=',' read -r -a RQ_ARR <<< "$REQUEUE_IDS"
+        for rid in "${RQ_ARR[@]}"; do
+          rid="$(echo "$rid" | tr -d ' ')"
+          [ -z "$rid" ] && continue
+          sqlite3 "$DB" ".timeout 5000" "UPDATE cases SET status='pending', assigned_agent=NULL WHERE id=$rid AND status='processing';"
+        done
+        printf '[%s] Requeued: %s\n' "$BATCH_ID" "$REQUEUE_IDS" >> "$LOG_FILE"
+      fi
+
+      # Orphan detection: manifest IDs not seen in outcomes
+      SLOT_ORPHAN=0
+      for mid in "${MANIFEST_ID_ARR[@]}"; do
+        mid="$(echo "$mid" | tr -d ' ')"
+        [ -z "$mid" ] && continue
+        case ",$SEEN_IDS" in
+          *",$mid,"*) ;;
+          *)
+            sqlite3 "$DB" ".timeout 5000" "UPDATE cases SET status='pending', assigned_agent=NULL WHERE id=$mid AND status='processing';"
+            SLOT_ORPHAN=$(( SLOT_ORPHAN + 1 ))
+            printf '[%s] Orphan recovered: case %s\n' "$BATCH_ID" "$mid" >> "$LOG_FILE"
+            ;;
+        esac
+      done
+
+      printf '[%s] Recorded: done=%d requeue=%d error=%d orphan=%d\n' \
+        "$BATCH_ID" "$SLOT_DONE" "$SLOT_REQUEUE" "$SLOT_ERROR" "$SLOT_ORPHAN" >> "$LOG_FILE"
+
+      TOTAL_DONE=$(( TOTAL_DONE + SLOT_DONE ))
+      TOTAL_REQUEUE=$(( TOTAL_REQUEUE + SLOT_REQUEUE ))
+      TOTAL_ERROR=$(( TOTAL_ERROR + SLOT_ERROR ))
+      TOTAL_ORPHAN=$(( TOTAL_ORPHAN + SLOT_ORPHAN ))
+      RECORDED_SLOTS=$(( RECORDED_SLOTS + 1 ))
+
+      SLOT_IDX=$(( SLOT_IDX + 1 ))
+    done
+
+    # Get remaining stats from DB
+    PENDING_REMAINING="$(sqlite3 "$DB" ".timeout 5000" "SELECT COUNT(*) FROM cases WHERE status='pending';")"
+    PROCESSING_REMAINING="$(sqlite3 "$DB" ".timeout 5000" "SELECT COUNT(*) FROM cases WHERE status='processing';")"
+
+    printf 'RECORDED_SLOTS=%s\n' "$RECORDED_SLOTS"
+    printf 'TOTAL_DONE=%s\n' "$TOTAL_DONE"
+    printf 'TOTAL_REQUEUE=%s\n' "$TOTAL_REQUEUE"
+    printf 'TOTAL_ERROR=%s\n' "$TOTAL_ERROR"
+    printf 'TOTAL_ORPHAN=%s\n' "$TOTAL_ORPHAN"
+    printf 'PENDING_REMAINING=%s\n' "$PENDING_REMAINING"
+    printf 'PROCESSING_REMAINING=%s\n' "$PROCESSING_REMAINING"
     ;;
 
   *)
