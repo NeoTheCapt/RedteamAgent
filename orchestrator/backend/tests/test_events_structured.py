@@ -103,7 +103,7 @@ def test_post_dispatch_start_creates_dispatch_row(isolate_data_dir):
         },
     )
     assert r.status_code == 201
-    d = db.get_dispatch("B-1")
+    d = db.get_dispatch(run.id, "B-1")
     assert d is not None
     assert d.agent == "vuln-analyst"
 

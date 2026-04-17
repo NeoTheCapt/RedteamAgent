@@ -173,10 +173,26 @@ def init_db() -> None:
             )
             """
         )
+        # Migration from branch-early schema: if dispatches had singleton PK on `id`,
+        # rebuild with composite PK (run_id, id). Safe because this table only gained
+        # rows after this branch landed and dev DBs carry no production data.
+        # Order matters: drop `cases` BEFORE `dispatches` because cases has an FK
+        # into dispatches — dropping dispatches first would leave cases pointing at
+        # a phantom.
+        cases_row = connection.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='cases'"
+        ).fetchone()
+        if cases_row is not None and "FOREIGN KEY(run_id, dispatch_id)" not in (cases_row[0] or ""):
+            connection.execute("DROP TABLE IF EXISTS cases")
+        dispatches_row = connection.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='dispatches'"
+        ).fetchone()
+        if dispatches_row is not None and "PRIMARY KEY (run_id" not in (dispatches_row[0] or ""):
+            connection.execute("DROP TABLE IF EXISTS dispatches")
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS dispatches (
-                id TEXT PRIMARY KEY,
+                id TEXT NOT NULL,
                 run_id INTEGER NOT NULL,
                 phase TEXT NOT NULL,
                 round INTEGER NOT NULL DEFAULT 0,
@@ -187,6 +203,7 @@ def init_db() -> None:
                 started_at INTEGER,
                 finished_at INTEGER,
                 error TEXT,
+                PRIMARY KEY (run_id, id),
                 FOREIGN KEY(run_id) REFERENCES runs(id) ON DELETE CASCADE
             )
             """
@@ -210,7 +227,7 @@ def init_db() -> None:
                 finished_at INTEGER,
                 PRIMARY KEY (run_id, case_id),
                 FOREIGN KEY(run_id) REFERENCES runs(id) ON DELETE CASCADE,
-                FOREIGN KEY(dispatch_id) REFERENCES dispatches(id) ON DELETE SET NULL
+                FOREIGN KEY(run_id, dispatch_id) REFERENCES dispatches(run_id, id) ON DELETE SET NULL
             )
             """
         )
@@ -741,7 +758,7 @@ def upsert_dispatch(
             INSERT INTO dispatches (id, run_id, phase, round, agent, slot, task,
                                     state, started_at, finished_at, error)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET
+            ON CONFLICT(run_id, id) DO UPDATE SET
                 state=excluded.state,
                 task=COALESCE(excluded.task, dispatches.task),
                 finished_at=COALESCE(excluded.finished_at, dispatches.finished_at),
@@ -751,14 +768,14 @@ def upsert_dispatch(
              state, started_at, finished_at, error),
         )
         conn.commit()
-    return get_dispatch(dispatch_id)
+    return get_dispatch(run_id, dispatch_id)
 
 
-def get_dispatch(dispatch_id: str) -> Dispatch | None:
+def get_dispatch(run_id: int, dispatch_id: str) -> Dispatch | None:
     with get_connection() as conn:
         row = conn.execute(
-            "SELECT * FROM dispatches WHERE id = ?",
-            (dispatch_id,),
+            "SELECT * FROM dispatches WHERE run_id = ? AND id = ?",
+            (run_id, dispatch_id),
         ).fetchone()
     return Dispatch.from_row(row) if row else None
 

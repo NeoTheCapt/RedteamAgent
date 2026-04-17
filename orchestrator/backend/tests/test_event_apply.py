@@ -24,7 +24,7 @@ def test_apply_dispatch_start_creates_dispatch(tmp_path):
             "task": "API batch",
         },
     )
-    d = db.get_dispatch("B-1")
+    d = db.get_dispatch(run.id, "B-1")
     assert d is not None
     assert d.state == "running"
     assert d.round == 2
@@ -61,13 +61,13 @@ def test_apply_dispatch_done_updates_existing(tmp_path):
         payload={"batch": "B-3", "round": 1, "slot": "0",
                  "case_count": 1, "agent": "v"},
     )
-    assert db.get_dispatch("B-3").state == "running"
+    assert db.get_dispatch(run.id, "B-3").state == "running"
 
     event_apply.apply(
         run_id=run.id, kind="dispatch_done", phase="consume",
         payload={"batch": "B-3", "state": "done"},
     )
-    d = db.get_dispatch("B-3")
+    d = db.get_dispatch(run.id, "B-3")
     assert d.state == "done"
     assert d.finished_at is not None
 

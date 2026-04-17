@@ -232,7 +232,7 @@ def test_dispatch_crud_roundtrip(tmp_path):
         agent="vulnerability-analyst", slot="s0", task="API SQLi probes",
         state="done", started_at=1712345678, finished_at=1712345700,
     )
-    updated = db.get_dispatch("B-17")
+    updated = db.get_dispatch(run.id, "B-17")
     assert updated.state == "done"
     assert updated.finished_at == 1712345700
 
@@ -280,3 +280,33 @@ def test_create_event_stores_structured_fields(tmp_path):
     assert e.kind == "finding"
     assert e.level == "info"
     assert '"severity":"critical"' in e.payload_json
+
+
+def test_dispatch_id_is_scoped_to_run(tmp_path):
+    """Two runs can use the same BATCH_ID without collision."""
+    from app import db
+    db.init_db()
+    user = db.create_user("scope_test", "ph", "s")
+    proj = db.create_project(user_id=user.id, name="st", slug="st", root_path=str(tmp_path))
+    run_a = db.create_run(project_id=proj.id, target="http://a", status="running",
+                          engagement_root=str(tmp_path / "a"))
+    run_b = db.create_run(project_id=proj.id, target="http://b", status="running",
+                          engagement_root=str(tmp_path / "b"))
+
+    # Both runs emit a dispatch with the same ID (the bug scenario)
+    db.upsert_dispatch(dispatch_id="batch-1000-0", run_id=run_a.id,
+                       phase="consume", round=1, agent="va", slot="0",
+                       task="A task", state="running", started_at=1000)
+    db.upsert_dispatch(dispatch_id="batch-1000-0", run_id=run_b.id,
+                       phase="consume", round=1, agent="vb", slot="0",
+                       task="B task", state="running", started_at=1000)
+
+    # They must be distinct rows, each belonging to its own run
+    d_a = db.get_dispatch(run_a.id, "batch-1000-0")
+    d_b = db.get_dispatch(run_b.id, "batch-1000-0")
+    assert d_a is not None and d_a.task == "A task" and d_a.run_id == run_a.id
+    assert d_b is not None and d_b.task == "B task" and d_b.run_id == run_b.id
+
+    # list_dispatches per run sees only its own
+    assert [d.id for d in db.list_dispatches(run_a.id)] == ["batch-1000-0"]
+    assert [d.id for d in db.list_dispatches(run_b.id)] == ["batch-1000-0"]

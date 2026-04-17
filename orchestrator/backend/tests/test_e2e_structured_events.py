@@ -108,7 +108,7 @@ def test_dispatch_to_finding_flow_populates_all_tables(isolate_data_dir):
     assert run_fetched.current_phase == "consume"
 
     # --- Verify dispatch row ---
-    dispatch = db.get_dispatch("B-1")
+    dispatch = db.get_dispatch(run.id, "B-1")
     assert dispatch is not None
     assert dispatch.state == "done"
     assert dispatch.finished_at is not None

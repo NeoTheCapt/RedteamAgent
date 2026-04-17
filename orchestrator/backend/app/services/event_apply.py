@@ -69,7 +69,7 @@ def _apply_dispatch_done(run_id: int, payload: dict[str, Any]) -> None:
     batch_id = str(payload.get("batch", ""))
     if not batch_id:
         return
-    existing = db.get_dispatch(batch_id)
+    existing = db.get_dispatch(run_id, batch_id)
     if existing is None:
         return
     db.upsert_dispatch(
