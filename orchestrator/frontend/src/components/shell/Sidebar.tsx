@@ -10,13 +10,6 @@ type SidebarProps = {
   projectIdForRun: (run: Run) => number;
 };
 
-const STATUS_STATES = ["all", "active", "done", "failed"] as const;
-type StatusFilter = (typeof STATUS_STATES)[number];
-
-function runIsActive(run: Run): boolean {
-  return !["completed", "failed", "error"].includes(run.status.toLowerCase());
-}
-
 function runStateClass(run: Run): "running" | "done" | "failed" | "queued" {
   const s = run.status.toLowerCase();
   if (s === "completed") return "done";
@@ -28,37 +21,11 @@ function runStateClass(run: Run): "running" | "done" | "failed" | "queued" {
 export function Sidebar({
   runs, selectedRunId, onSelectRun, onNewRun, username, onLogout, projectIdForRun,
 }: SidebarProps) {
-  const filter: StatusFilter = "all"; // Filter UI placeholder — wired in a later plan
-  const search: string = "";
-
-  const visible = runs.filter((r) => {
-    if (filter !== "all") {
-      if (filter === "active" && !runIsActive(r)) return false;
-      if (filter === "done" && r.status.toLowerCase() !== "completed") return false;
-      if (filter === "failed" && !["failed", "error"].includes(r.status.toLowerCase())) return false;
-    }
-    if (search && !r.target.toLowerCase().includes(search.toLowerCase())) return false;
-    return true;
-  });
-
   return (
     <nav className="sidebar" aria-label="Runs">
       <header className="sidebar__head">
         <div className="sidebar__brand">RED<span>TEAM</span></div>
         <div className="sidebar__brand-sub">orchestrator · {runs.length} runs</div>
-        <div className="sidebar__filters" role="tablist">
-          {STATUS_STATES.map((s) => (
-            <button
-              key={s}
-              className={`sidebar__filter ${s === filter ? "sidebar__filter--on" : ""}`}
-              role="tab"
-              aria-selected={s === filter}
-              type="button"
-            >
-              {s.toUpperCase()}
-            </button>
-          ))}
-        </div>
       </header>
 
       <div className="sidebar__actions">
@@ -68,7 +35,7 @@ export function Sidebar({
       </div>
 
       <ul className="sidebar__list">
-        {visible.map((run) => {
+        {runs.map((run) => {
           const stateClass = runStateClass(run);
           const isSelected = run.id === selectedRunId;
           return (
