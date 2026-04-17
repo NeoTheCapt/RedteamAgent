@@ -5,6 +5,7 @@
   overflow-x: auto;
   overflow-y: hidden;
   padding-bottom: var(--sp-2);
+  position: relative;
 }
 
 /* --- Kanban column --- */
