@@ -1164,11 +1164,14 @@ def _summarize_existing_run(run: Run, project: Project, user: User) -> RunSummar
 
     dispatch_rows = db.list_dispatches(run.id)
     case_rows = db.list_cases(run.id)
+    # "failed" buckets both explicit failures and missing_outcomes orphan-recovery
+    # dispatches. These are surfaced separately in the dispatch detail views.
+    _failure_states = {"failed", "missing_outcomes"}
     dispatch_agg = {
         "total": len(dispatch_rows),
         "active": sum(1 for d in dispatch_rows if d.state == "running"),
         "done": sum(1 for d in dispatch_rows if d.state == "done"),
-        "failed": sum(1 for d in dispatch_rows if d.state == "failed"),
+        "failed": sum(1 for d in dispatch_rows if d.state in _failure_states),
     }
     case_agg = {
         "total": len(case_rows),

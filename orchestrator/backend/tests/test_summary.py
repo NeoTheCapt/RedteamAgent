@@ -3048,3 +3048,44 @@ def test_summary_falls_back_to_coverage_when_cases_table_empty(isolate_data_dir)
     body = r.json()
     assert body["cases"]["total"] >= 0
     assert body["dispatches"]["total"] == 0
+
+
+def test_summary_counts_missing_outcomes_as_failed(isolate_data_dir):
+    from fastapi.testclient import TestClient
+    from app.main import app
+    from app import db
+
+    client = TestClient(app)
+    client.post("/auth/register", json={"username": "missoutc", "password": "secret-password"})
+    token = client.post("/auth/login",
+                        json={"username": "missoutc", "password": "secret-password"}).json()["access_token"]
+    user = db.get_user_by_username("missoutc")
+    proj = db.create_project(user_id=user.id, name="mo", slug="mo",
+                             root_path=str(isolate_data_dir))
+    run = db.create_run(project_id=proj.id, target="http://x",
+                        status="running", engagement_root=str(isolate_data_dir))
+
+    db.upsert_dispatch(
+        dispatch_id="A", run_id=run.id, phase="consume", round=1,
+        agent="v", slot="0", task="", state="done",
+        started_at=1, finished_at=10,
+    )
+    db.upsert_dispatch(
+        dispatch_id="B", run_id=run.id, phase="consume", round=1,
+        agent="v", slot="1", task="", state="missing_outcomes",
+        started_at=2, finished_at=12,
+    )
+    db.upsert_dispatch(
+        dispatch_id="C", run_id=run.id, phase="consume", round=1,
+        agent="v", slot="2", task="", state="failed",
+        started_at=3, finished_at=15,
+    )
+
+    r = client.get(f"/projects/{proj.id}/runs/{run.id}/summary",
+                   headers={"Authorization": f"Bearer {token}"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["dispatches"]["total"] == 3
+    assert body["dispatches"]["done"] == 1
+    # both "failed" and "missing_outcomes" count toward failed
+    assert body["dispatches"]["failed"] == 2
