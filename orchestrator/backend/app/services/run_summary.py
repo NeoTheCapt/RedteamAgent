@@ -1179,6 +1179,19 @@ def _summarize_existing_run(run: Run, project: Project, user: User) -> RunSummar
         "findings": sum(1 for c in case_rows if c.state == "finding"),
     }
 
+    # Legacy-run fallback: if structured cases table is empty but coverage
+    # has data (populated by the agent's own cases.db), backfill the KPI
+    # aggregate so historical runs don't show 0/0 in the dashboard.
+    if case_agg["total"] == 0 and int(cases.get("total_cases", 0)) > 0:
+        case_agg = {
+            "total":    int(cases.get("total_cases", 0)),
+            "done":     int(cases.get("completed_cases", 0)),
+            "running":  int(cases.get("processing_cases", 0)),
+            "queued":   int(cases.get("pending_cases", 0)),
+            "error":    int(cases.get("error_cases", 0)),
+            "findings": 0,  # not derivable from coverage; legacy runs lose this
+        }
+
     return RunSummary(
         target=_build_target_card(run, scope, active_root),
         overview={
