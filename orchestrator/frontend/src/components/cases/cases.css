@@ -148,3 +148,97 @@
   color: var(--c-text-dim);
   font-style: italic;
 }
+
+.case-side__head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  border-bottom: 1px solid var(--c-border);
+  padding-bottom: var(--sp-3);
+  margin-bottom: var(--sp-3);
+}
+
+.case-side__label {
+  font-size: var(--fs-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--c-text-dim);
+}
+
+.case-side__id {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xl);
+  color: var(--c-text);
+  font-weight: var(--fw-bold);
+}
+
+.case-side__close {
+  background: transparent;
+  border: none;
+  color: var(--c-text-muted);
+  font-size: var(--fs-lg);
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: var(--r-sm);
+}
+.case-side__close:hover { color: var(--c-text); background: var(--c-panel-soft); }
+
+.case-side__loading, .case-side__error {
+  padding: var(--sp-3) 0;
+  color: var(--c-text-muted);
+  font-size: var(--fs-sm);
+}
+
+.case-side__error { color: var(--c-red); }
+
+.case-side__body {
+  display: grid;
+  grid-template-columns: 100px 1fr;
+  gap: var(--sp-2) var(--sp-3);
+  margin: 0;
+  font-size: var(--fs-sm);
+}
+
+.case-side__body dt {
+  color: var(--c-text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-semibold);
+  align-self: center;
+}
+
+.case-side__body dd {
+  margin: 0;
+  color: var(--c-text);
+  word-break: break-word;
+}
+
+.case-side__mono { font-family: var(--font-mono); }
+
+.case-side__badge {
+  display: inline-block;
+  padding: 2px 8px;
+  background: var(--c-panel-soft);
+  color: var(--c-accent);
+  font-family: var(--font-mono);
+  font-weight: var(--fw-semibold);
+  border-radius: var(--r-sm);
+  font-size: var(--fs-xs);
+}
+
+.case-side__state {
+  font-family: var(--font-mono);
+  font-weight: var(--fw-semibold);
+}
+.case-side__state--done    { color: var(--c-green); }
+.case-side__state--finding { color: var(--c-red); }
+.case-side__state--running { color: var(--c-amber); }
+.case-side__state--error   { color: var(--c-hot); }
+.case-side__state--queued  { color: var(--c-text-muted); }
+
+.case-side__finding {
+  color: var(--c-red);
+  font-family: var(--font-mono);
+  font-weight: var(--fw-semibold);
+}
