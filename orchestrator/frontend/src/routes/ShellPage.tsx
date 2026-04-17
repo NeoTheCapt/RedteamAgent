@@ -108,6 +108,7 @@ export function ShellPage(props: ShellPageProps) {
 
   const tabCounts: Partial<Record<TabId, number | string>> | undefined = summary
     ? {
+        progress: summary.dispatches.active || undefined,
         cases: summary.cases.total || undefined,
         events: "live",
       }
