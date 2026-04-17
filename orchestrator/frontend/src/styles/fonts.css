@@ -1,0 +1,4 @@
+/* Locally-bundled font faces. @fontsource ships woff2 subsets that Vite
+ * fingerprints into the production build. */
+@import "@fontsource-variable/inter";
+@import "@fontsource-variable/jetbrains-mono";

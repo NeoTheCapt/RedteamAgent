@@ -9,14 +9,18 @@
  * --fs-base is the single knob; all other sizes are explicit px values rounded
  * to integers. Consumers use --fs-* vars, never raw px.
  * Line-height tokens let dense tables drop to 1.25 without recomputing.
+ *
+ * Fonts are self-hosted via @fontsource-variable — no third-party CDN
+ * fetches at app-load (important for air-gapped deployments). Both Inter
+ * (UI) and JetBrains Mono (code) are bundled as variable-font WOFF2.
  */
 
-@import url("https://rsms.me/inter/inter.css");
+@import "./fonts.css";
 
 :root {
   /* -------- Typography -------- */
-  --font-ui: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  --font-mono: "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+  --font-ui: "Inter Variable", "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono Variable", "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
 
   --fs-xs: 11px;
   --fs-sm: 12px;
