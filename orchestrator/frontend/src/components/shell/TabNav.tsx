@@ -6,12 +6,12 @@ type TabNavProps = {
   counts?: Partial<Record<TabId, number | string>>;
 };
 
-const TABS: { id: TabId; label: string; icon: string }[] = [
-  { id: "dashboard",  label: "Dashboard", icon: "📊" },
-  { id: "progress",   label: "Progress",  icon: "🎯" },
-  { id: "cases",      label: "Cases",     icon: "📋" },
-  { id: "documents",  label: "Documents", icon: "📄" },
-  { id: "events",     label: "Events",    icon: "📡" },
+const TABS: { id: TabId; label: string }[] = [
+  { id: "dashboard",  label: "Dashboard" },
+  { id: "progress",   label: "Progress"  },
+  { id: "cases",      label: "Cases"     },
+  { id: "documents",  label: "Documents" },
+  { id: "events",     label: "Events"    },
 ];
 
 export function TabNav({ current, onSelect, counts = {} }: TabNavProps) {
@@ -29,7 +29,6 @@ export function TabNav({ current, onSelect, counts = {} }: TabNavProps) {
             onClick={() => onSelect(t.id)}
             type="button"
           >
-            <span aria-hidden>{t.icon}</span>
             <span>{t.label}</span>
             {count !== undefined && <span className="tab-nav__count">{count}</span>}
           </button>
