@@ -4,6 +4,8 @@ import { RunPanel } from "../components/shell/RunPanel";
 import { TabNav, type TabId } from "../components/shell/TabNav";
 import { EmptyTab } from "../components/shell/EmptyTab";
 import { DashboardTab } from "../components/dashboard/DashboardTab";
+import { ProgressTab } from "../components/progress/ProgressTab";
+import { CasesTab } from "../components/cases/CasesTab";
 import { NewRunForm } from "../components/home/NewRunForm";
 import type { Project, Run, RunSummary } from "../lib/api";
 import { getRunSummary } from "../lib/api";
@@ -25,12 +27,16 @@ type Route =
 const VALID_TABS: readonly TabId[] = ["dashboard", "progress", "cases", "documents", "events"] as const;
 
 function parseRoute(hash: string): Route {
-  const h = hash.replace(/^#/, "").replace(/\/$/, "");
-  const match = h.match(/^\/projects\/(\d+)\/runs\/(\d+)(?:\/([\w-]+))?$/);
+  const raw = hash.replace(/^#/, "");
+  // Split off query string first, then normalize trailing slash on the path.
+  const qIdx = raw.indexOf("?");
+  const pathOnlyRaw = qIdx < 0 ? raw : raw.slice(0, qIdx);
+  const pathOnly = pathOnlyRaw.replace(/\/$/, "");
+  const match = pathOnly.match(/^\/projects\/(\d+)\/runs\/(\d+)(?:\/([\w-]+))?$/);
   if (match) {
-    const raw = match[3];
-    const tab: TabId = raw && (VALID_TABS as readonly string[]).includes(raw)
-      ? (raw as TabId)
+    const rawTab = match[3];
+    const tab: TabId = rawTab && (VALID_TABS as readonly string[]).includes(rawTab)
+      ? (rawTab as TabId)
       : "dashboard";
     return { kind: "run", projectId: Number(match[1]), runId: Number(match[2]), tab };
   }
@@ -126,9 +132,22 @@ export function ShellPage(props: ShellPageProps) {
       case "dashboard":
         return <DashboardTab summary={summary} />;
       case "progress":
-        return <EmptyTab label="Progress" note="Kanban view arrives in Plan 3." />;
+        return (
+          <ProgressTab
+            token={token}
+            projectId={selected.__projectId}
+            runId={selected.id}
+            currentPhase={summary.overview.current_phase ?? null}
+          />
+        );
       case "cases":
-        return <EmptyTab label="Cases" note="Case explorer arrives in Plan 3." />;
+        return (
+          <CasesTab
+            token={token}
+            projectId={selected.__projectId}
+            runId={selected.id}
+          />
+        );
       case "documents":
         return <EmptyTab label="Documents" note="Document browser arrives in Plan 4." />;
       case "events":
