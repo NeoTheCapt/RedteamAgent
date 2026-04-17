@@ -191,3 +191,20 @@
   font-weight: var(--fw-semibold);
   font-family: var(--font-mono);
 }
+
+.dashboard {
+  display: flex;
+  flex-direction: column;
+}
+
+.dashboard__grid {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: var(--sp-4);
+}
+
+.dashboard__col {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
