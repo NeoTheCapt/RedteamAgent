@@ -162,7 +162,14 @@ export function ShellPage(props: ShellPageProps) {
                 navigate(`/projects/${route.projectId}/runs/${route.runId}/${tab}`)
               }
             />
-            <div className="tab-content">{renderTab(route.tab)}</div>
+            <div
+              className="tab-content"
+              role="tabpanel"
+              id={`tabpanel-${route.tab}`}
+              aria-labelledby={`tab-${route.tab}`}
+            >
+              {renderTab(route.tab)}
+            </div>
           </RunPanel>
         )}
         {route.kind === "run" && !selected && (
