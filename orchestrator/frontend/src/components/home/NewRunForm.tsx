@@ -5,13 +5,20 @@ import "./NewRunForm.css";
 type NewRunFormProps = {
   projects: Project[];
   onCreateRun: (projectId: number, target: string) => Promise<void>;
+  onCreateProject: (name: string) => Promise<void>;
 };
 
-export function NewRunForm({ projects, onCreateRun }: NewRunFormProps) {
+export function NewRunForm({ projects, onCreateRun, onCreateProject }: NewRunFormProps) {
   const [projectId, setProjectId] = useState<number | "">(projects[0]?.id ?? "");
   const [target, setTarget] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const [newProjectName, setNewProjectName] = useState("");
+  const [creatingProject, setCreatingProject] = useState(false);
+  const [projectError, setProjectError] = useState<string | null>(null);
+  // Expand the create-project block automatically when no projects exist.
+  const [createOpen, setCreateOpen] = useState(projects.length === 0);
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
@@ -28,6 +35,24 @@ export function NewRunForm({ projects, onCreateRun }: NewRunFormProps) {
     }
   }
 
+  async function onSubmitNewProject(e: FormEvent) {
+    e.preventDefault();
+    const name = newProjectName.trim();
+    if (!name) return;
+    setCreatingProject(true);
+    setProjectError(null);
+    try {
+      await onCreateProject(name);
+      setNewProjectName("");
+      // Do NOT close the block automatically — let the user see the new project
+      // appear in the dropdown below before they decide whether to create another.
+    } catch (err) {
+      setProjectError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setCreatingProject(false);
+    }
+  }
+
   return (
     <form className="new-run" onSubmit={onSubmit} aria-label="New Run">
       <header className="new-run__head">
@@ -39,10 +64,54 @@ export function NewRunForm({ projects, onCreateRun }: NewRunFormProps) {
       </header>
 
       <section className="new-run__section">
-        <h2 className="new-run__sec-title">Target</h2>
+        <header className="new-run__section-head">
+          <h2 className="new-run__sec-title">Project</h2>
+          <button
+            type="button"
+            className="new-run__link"
+            onClick={() => setCreateOpen((v) => !v)}
+            aria-expanded={createOpen}
+          >
+            {createOpen ? "Hide" : "+ Create project"}
+          </button>
+        </header>
+
+        {createOpen && (
+          <div className="new-run__create-project">
+            <label className="new-run__field">
+              <span className="new-run__label">New project name</span>
+              <input
+                className="new-run__input"
+                type="text"
+                value={newProjectName}
+                onChange={(e) => setNewProjectName(e.target.value)}
+                placeholder="e.g. juice-shop-lab"
+                disabled={creatingProject}
+              />
+              <span className="new-run__hint">
+                Advanced configuration (provider, model, API key, scope, env) can
+                be edited from the project settings — coming in a later plan.
+              </span>
+            </label>
+            {projectError && (
+              <div className="new-run__error" role="alert">{projectError}</div>
+            )}
+            <div className="new-run__inline-actions">
+              <button
+                type="button"
+                className="new-run__secondary"
+                onClick={onSubmitNewProject}
+                disabled={creatingProject || !newProjectName.trim()}
+              >
+                {creatingProject ? "Creating..." : "Create project"}
+              </button>
+            </div>
+          </div>
+        )}
+
         <div className="new-run__grid">
           <label className="new-run__field">
-            <span className="new-run__label">Project</span>
+            <span className="new-run__label">Use project</span>
             <select
               className="new-run__input"
               value={projectId}
@@ -50,7 +119,7 @@ export function NewRunForm({ projects, onCreateRun }: NewRunFormProps) {
               disabled={projects.length === 0 || submitting}
               required
             >
-              {projects.length === 0 && <option value="">No projects — create one first</option>}
+              {projects.length === 0 && <option value="">No projects — create one above</option>}
               {projects.map((p) => (
                 <option key={p.id} value={p.id}>{p.name}</option>
               ))}

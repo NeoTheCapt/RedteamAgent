@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import {
   ApiError,
+  createProject,
   createRun,
   listProjects,
   listRuns,
@@ -120,6 +121,28 @@ export default function App() {
     navigate(`/projects/${projectId}/runs/${run.id}/dashboard`);
   }
 
+  const handleCreateProject = useCallback(async (name: string) => {
+    if (!session) return;
+    try {
+      await createProject(session.token, name);
+      // Refresh projects so the new one appears in the sidebar + dropdown.
+      const nextProjects = await listProjects(session.token);
+      setProjects(nextProjects);
+      const entries = await Promise.all(
+        nextProjects.map(
+          async (project) => [project.id, await listRuns(session.token, project.id)] as const,
+        ),
+      );
+      setRunsByProject(Object.fromEntries(entries));
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) {
+        expireSession();
+        return;
+      }
+      throw err;
+    }
+  }, [session, expireSession]);
+
   if (!session) {
     return <LoginPage onLogin={handleLogin} onRegister={handleRegister} />;
   }
@@ -132,6 +155,7 @@ export default function App() {
       runsByProject={runsByProject}
       onLogout={expireSession}
       onCreateRun={handleCreateRun}
+      onCreateProject={handleCreateProject}
     />
   );
 }

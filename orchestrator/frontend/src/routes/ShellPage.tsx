@@ -15,6 +15,7 @@ type ShellPageProps = {
   runsByProject: Record<number, Run[]>;
   onLogout: () => void;
   onCreateRun: (projectId: number, target: string) => Promise<void>;
+  onCreateProject: (name: string) => Promise<void>;
 };
 
 type Route =
@@ -41,7 +42,7 @@ function navigate(route: string) {
 }
 
 export function ShellPage(props: ShellPageProps) {
-  const { token, username, projects, runsByProject, onLogout, onCreateRun } = props;
+  const { token, username, projects, runsByProject, onLogout, onCreateRun, onCreateProject } = props;
   const [route, setRoute] = useState<Route>(parseRoute(window.location.hash));
   const [summary, setSummary] = useState<RunSummary | null>(null);
 
@@ -125,7 +126,7 @@ export function ShellPage(props: ShellPageProps) {
       <main className="shell__main">
         {route.kind === "home" && (
           <div style={{ padding: "var(--sp-6)", overflowY: "auto" }}>
-            <NewRunForm projects={projects} onCreateRun={onCreateRun} />
+            <NewRunForm projects={projects} onCreateRun={onCreateRun} onCreateProject={onCreateProject} />
           </div>
         )}
         {route.kind === "run" && selected && (
