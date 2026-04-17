@@ -5,6 +5,7 @@ export default defineConfig({
   base: "/",
   plugins: [react()],
   server: {
+    allowedHosts: true,
     proxy: {
       "/auth": "http://127.0.0.1:18000",
       "/projects": "http://127.0.0.1:18000",

@@ -45,6 +45,7 @@ export function ShellPage(props: ShellPageProps) {
   const { token, username, projects, runsByProject, onLogout, onCreateRun, onCreateProject } = props;
   const [route, setRoute] = useState<Route>(parseRoute(window.location.hash));
   const [summary, setSummary] = useState<RunSummary | null>(null);
+  const [summaryError, setSummaryError] = useState<string | null>(null);
 
   useEffect(() => {
     const handler = () => setRoute(parseRoute(window.location.hash));
@@ -74,6 +75,7 @@ export function ShellPage(props: ShellPageProps) {
   useEffect(() => {
     if (!selected) {
       setSummary(null);
+      setSummaryError(null);
       return;
     }
     let cancelled = false;
@@ -82,13 +84,17 @@ export function ShellPage(props: ShellPageProps) {
     async function tick() {
       try {
         const s = await getRunSummary(token, currentRun.__projectId, currentRun.id);
-        if (!cancelled) setSummary(s);
+        if (!cancelled) {
+          setSummary(s);
+          setSummaryError(null);
+        }
       } catch (err) {
         // Transient fetch errors: keep the last known summary so the dashboard
         // doesn't flash to "Loading..." on a blip. Only the very first load
         // failure clears the panel, and only because we never had data.
         if (!cancelled) {
           setSummary((prev) => (prev ? prev : null));
+          setSummaryError(err instanceof Error ? err.message : "refresh failed");
         }
         console.warn("summary fetch failed:", err);
       }
@@ -108,6 +114,7 @@ export function ShellPage(props: ShellPageProps) {
 
   const tabCounts: Partial<Record<TabId, number | string>> | undefined = summary
     ? {
+        progress: summary.dispatches.active || undefined,
         cases: summary.cases.total || undefined,
         events: "live",
       }
@@ -155,6 +162,11 @@ export function ShellPage(props: ShellPageProps) {
             currentPhase={summary?.overview.current_phase}
             onStop={undefined}
           >
+            {summaryError && summary && (
+              <div className="run-panel__alert" role="alert">
+                Summary refresh failed — showing last known state · {summaryError}
+              </div>
+            )}
             <TabNav
               current={route.tab}
               counts={tabCounts}
@@ -162,7 +174,14 @@ export function ShellPage(props: ShellPageProps) {
                 navigate(`/projects/${route.projectId}/runs/${route.runId}/${tab}`)
               }
             />
-            <div className="tab-content">{renderTab(route.tab)}</div>
+            <div
+              className="tab-content"
+              role="tabpanel"
+              id={`tabpanel-${route.tab}`}
+              aria-labelledby={`tab-${route.tab}`}
+            >
+              {renderTab(route.tab)}
+            </div>
           </RunPanel>
         )}
         {route.kind === "run" && !selected && (

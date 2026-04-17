@@ -104,7 +104,7 @@
 }
 
 .new-run__submit {
-  background: linear-gradient(135deg, var(--c-hot), #e14626);
+  background: linear-gradient(135deg, var(--c-hot), var(--c-hot-dark));
   color: #fff;
   padding: 10px 20px;
   border: none;

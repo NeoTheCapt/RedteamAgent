@@ -34,7 +34,7 @@ export function RunPanel({ run, runtimeLabel, currentPhase, onStop, children }: 
             <span className="run-panel__badge">{currentPhase.toUpperCase()}</span>
           )}
         </div>
-        <div className="run-panel__ctx-right" style={{ display: "flex", alignItems: "center", gap: 14 }}>
+        <div className="run-panel__ctx-right">
           {runtimeLabel && <span className="run-panel__time">{runtimeLabel}</span>}
           {isRunning && onStop && (
             <button type="button" className="run-panel__stop" onClick={onStop}>
