@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import json
+from typing import Any
+
 from fastapi import APIRouter, status
 from pydantic import BaseModel, Field
 
 from ..models.event import Event
 from ..security import CurrentUser
+from ..services import event_apply
 from ..services.events import create_event_for_run, list_events_for_run, summarize_events_for_run
 from ..ws import broadcaster
 
@@ -17,6 +21,9 @@ class CreateEventRequest(BaseModel):
     task_name: str = Field(min_length=1, max_length=128)
     agent_name: str = Field(min_length=1, max_length=128)
     summary: str = Field(min_length=1, max_length=512)
+    kind: str | None = Field(default=None, max_length=64)
+    level: str | None = Field(default=None, max_length=16)
+    payload: dict[str, Any] | None = None
 
 
 class EventResponse(BaseModel):
@@ -57,6 +64,15 @@ async def create_event(
         task_name=request.task_name,
         agent_name=request.agent_name,
         summary=request.summary,
+        kind=request.kind or "legacy",
+        level=request.level or "info",
+        payload_json=json.dumps(request.payload or {}, separators=(",", ":")),
+    )
+    event_apply.apply(
+        run_id=event.run_id,
+        kind=event.kind,
+        phase=event.phase,
+        payload=request.payload or {},
     )
     response = _event_response(event)
     await broadcaster.publish(
@@ -66,7 +82,12 @@ async def create_event(
             "type": "event.created",
             "project_id": project_id,
             "run_id": run_id,
-            "event": response.model_dump(),
+            "event": {
+                **response.model_dump(),
+                "kind": event.kind,
+                "level": event.level,
+                "payload": request.payload or {},
+            },
         },
     )
     return response

@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Iterator
 
 from .config import settings
+from .models.case import Case
+from .models.dispatch import Dispatch
 from .models.event import Event
 from .models.project import Project
 from .models.run import Run
@@ -44,7 +46,12 @@ def _connect_database(*, timeout: float = 5.0) -> sqlite3.Connection:
     last_error: sqlite3.OperationalError | None = None
     for attempt in range(_DB_OPEN_RETRY_ATTEMPTS):
         try:
-            return sqlite3.connect(db_path, timeout=timeout)
+            connection = sqlite3.connect(db_path, timeout=timeout)
+            connection.execute("PRAGMA journal_mode=WAL")
+            connection.execute("PRAGMA synchronous=NORMAL")
+            connection.execute("PRAGMA busy_timeout=5000")
+            connection.execute("PRAGMA foreign_keys=ON")
+            return connection
         except sqlite3.OperationalError as exc:
             if not _is_retryable_open_error(exc) or attempt == _DB_OPEN_RETRY_ATTEMPTS - 1:
                 raise
@@ -166,6 +173,91 @@ def init_db() -> None:
             )
             """
         )
+        # Migration from branch-early schema: if dispatches had singleton PK on `id`,
+        # rebuild with composite PK (run_id, id). Safe because this table only gained
+        # rows after this branch landed and dev DBs carry no production data.
+        # Order matters: drop `cases` BEFORE `dispatches` because cases has an FK
+        # into dispatches — dropping dispatches first would leave cases pointing at
+        # a phantom.
+        cases_row = connection.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='cases'"
+        ).fetchone()
+        if cases_row is not None and "FOREIGN KEY(run_id, dispatch_id)" not in (cases_row[0] or ""):
+            connection.execute("DROP TABLE IF EXISTS cases")
+        dispatches_row = connection.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='dispatches'"
+        ).fetchone()
+        if dispatches_row is not None and "PRIMARY KEY (run_id" not in (dispatches_row[0] or ""):
+            connection.execute("DROP TABLE IF EXISTS dispatches")
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS dispatches (
+                id TEXT NOT NULL,
+                run_id INTEGER NOT NULL,
+                phase TEXT NOT NULL,
+                round INTEGER NOT NULL DEFAULT 0,
+                agent TEXT NOT NULL,
+                slot TEXT NOT NULL,
+                task TEXT,
+                state TEXT NOT NULL,
+                started_at INTEGER,
+                finished_at INTEGER,
+                error TEXT,
+                PRIMARY KEY (run_id, id),
+                FOREIGN KEY(run_id) REFERENCES runs(id) ON DELETE CASCADE
+            )
+            """
+        )
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_dispatches_run ON dispatches(run_id)"
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS cases (
+                case_id INTEGER NOT NULL,
+                run_id INTEGER NOT NULL,
+                method TEXT NOT NULL,
+                path TEXT NOT NULL,
+                category TEXT,
+                dispatch_id TEXT,
+                state TEXT NOT NULL,
+                result TEXT,
+                finding_id TEXT,
+                started_at INTEGER,
+                finished_at INTEGER,
+                PRIMARY KEY (run_id, case_id),
+                FOREIGN KEY(run_id) REFERENCES runs(id) ON DELETE CASCADE,
+                FOREIGN KEY(run_id, dispatch_id) REFERENCES dispatches(run_id, id) ON DELETE SET NULL
+            )
+            """
+        )
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_cases_run_state ON cases(run_id, state)"
+        )
+        for column_sql in [
+            "ALTER TABLE events ADD COLUMN kind TEXT NOT NULL DEFAULT 'legacy'",
+            "ALTER TABLE events ADD COLUMN level TEXT NOT NULL DEFAULT 'info'",
+            "ALTER TABLE events ADD COLUMN payload_json TEXT NOT NULL DEFAULT '{}'",
+        ]:
+            try:
+                connection.execute(column_sql)
+            except sqlite3.OperationalError as exc:
+                if "duplicate column" not in str(exc).lower():
+                    raise
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_events_run_kind ON events(run_id, kind)"
+        )
+        for column_sql in [
+            "ALTER TABLE runs ADD COLUMN current_phase TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE runs ADD COLUMN current_round INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE runs ADD COLUMN parallel_config TEXT NOT NULL DEFAULT '{}'",
+            "ALTER TABLE runs ADD COLUMN benchmark_json TEXT NOT NULL DEFAULT '{}'",
+        ]:
+            try:
+                connection.execute(column_sql)
+            except sqlite3.OperationalError as exc:
+                if "duplicate column" not in str(exc).lower():
+                    raise
         connection.commit()
         _INITIALIZED_DB_PATH = current_db_path
 
@@ -382,7 +474,8 @@ def create_run(project_id: int, target: str, status: str, engagement_root: str) 
         )
         row = connection.execute(
             """
-            SELECT id, project_id, target, status, engagement_root, created_at, updated_at
+            SELECT id, project_id, target, status, engagement_root, created_at, updated_at,
+                   current_phase, current_round, parallel_config, benchmark_json
             FROM runs
             WHERE id = ?
             """,
@@ -404,7 +497,8 @@ def update_run_engagement_root(run_id: int, engagement_root: str) -> Run:
         )
         row = connection.execute(
             """
-            SELECT id, project_id, target, status, engagement_root, created_at, updated_at
+            SELECT id, project_id, target, status, engagement_root, created_at, updated_at,
+                   current_phase, current_round, parallel_config, benchmark_json
             FROM runs
             WHERE id = ?
             """,
@@ -418,7 +512,8 @@ def list_runs_for_project(project_id: int) -> list[Run]:
     with get_connection() as connection:
         rows = connection.execute(
             """
-            SELECT id, project_id, target, status, engagement_root, created_at, updated_at
+            SELECT id, project_id, target, status, engagement_root, created_at, updated_at,
+                   current_phase, current_round, parallel_config, benchmark_json
             FROM runs
             WHERE project_id = ?
             ORDER BY id ASC
@@ -432,7 +527,8 @@ def list_runs_by_status(status_value: str) -> list[Run]:
     with get_connection() as connection:
         rows = connection.execute(
             """
-            SELECT id, project_id, target, status, engagement_root, created_at, updated_at
+            SELECT id, project_id, target, status, engagement_root, created_at, updated_at,
+                   current_phase, current_round, parallel_config, benchmark_json
             FROM runs
             WHERE status = ?
             ORDER BY id ASC
@@ -446,7 +542,8 @@ def get_run_by_id(run_id: int) -> Run | None:
     with get_connection() as connection:
         row = connection.execute(
             """
-            SELECT id, project_id, target, status, engagement_root, created_at, updated_at
+            SELECT id, project_id, target, status, engagement_root, created_at, updated_at,
+                   current_phase, current_round, parallel_config, benchmark_json
             FROM runs
             WHERE id = ?
             """,
@@ -478,7 +575,8 @@ def update_run_status(run_id: int, status: str) -> Run:
         )
         row = connection.execute(
             """
-            SELECT id, project_id, target, status, engagement_root, created_at, updated_at
+            SELECT id, project_id, target, status, engagement_root, created_at, updated_at,
+                   current_phase, current_round, parallel_config, benchmark_json
             FROM runs
             WHERE id = ?
             """,
@@ -504,7 +602,8 @@ def set_run_updated_at(run_id: int, updated_at: str) -> Run:
         )
         row = connection.execute(
             """
-            SELECT id, project_id, target, status, engagement_root, created_at, updated_at
+            SELECT id, project_id, target, status, engagement_root, created_at, updated_at,
+                   current_phase, current_round, parallel_config, benchmark_json
             FROM runs
             WHERE id = ?
             """,
@@ -544,6 +643,10 @@ def create_event(
     task_name: str,
     agent_name: str,
     summary: str,
+    *,
+    kind: str = "legacy",
+    level: str = "info",
+    payload_json: str = "{}",
 ) -> Event:
     with get_connection() as connection:
         if event_type != "run.heartbeat":
@@ -557,14 +660,18 @@ def create_event(
             )
         cursor = connection.execute(
             """
-            INSERT INTO events (run_id, event_type, phase, task_name, agent_name, summary)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO events
+                (run_id, event_type, phase, task_name, agent_name, summary,
+                 kind, level, payload_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (run_id, event_type, phase, task_name, agent_name, summary),
+            (run_id, event_type, phase, task_name, agent_name, summary,
+             kind, level, payload_json),
         )
         row = connection.execute(
             """
-            SELECT id, run_id, event_type, phase, task_name, agent_name, summary, created_at
+            SELECT id, run_id, event_type, phase, task_name, agent_name, summary, created_at,
+                   kind, level, payload_json
             FROM events
             WHERE id = ?
             """,
@@ -572,7 +679,8 @@ def create_event(
         ).fetchone()
         run_row = connection.execute(
             """
-            SELECT id, project_id, target, status, engagement_root, created_at, updated_at
+            SELECT id, project_id, target, status, engagement_root, created_at, updated_at,
+                   current_phase, current_round, parallel_config, benchmark_json
             FROM runs
             WHERE id = ?
             """,
@@ -628,3 +736,122 @@ def get_latest_non_heartbeat_event_for_run(run_id: int, prefix: str = "") -> Eve
             (run_id, f"{prefix}%"),
         ).fetchone()
     return Event.from_row(row) if row else None
+
+
+def upsert_dispatch(
+    *,
+    dispatch_id: str,
+    run_id: int,
+    phase: str,
+    round: int,
+    agent: str,
+    slot: str,
+    task: str | None,
+    state: str,
+    started_at: int | None = None,
+    finished_at: int | None = None,
+    error: str | None = None,
+) -> Dispatch:
+    with get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO dispatches (id, run_id, phase, round, agent, slot, task,
+                                    state, started_at, finished_at, error)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(run_id, id) DO UPDATE SET
+                state=excluded.state,
+                task=COALESCE(excluded.task, dispatches.task),
+                finished_at=COALESCE(excluded.finished_at, dispatches.finished_at),
+                error=COALESCE(excluded.error, dispatches.error)
+            """,
+            (dispatch_id, run_id, phase, round, agent, slot, task,
+             state, started_at, finished_at, error),
+        )
+        conn.commit()
+    return get_dispatch(run_id, dispatch_id)
+
+
+def get_dispatch(run_id: int, dispatch_id: str) -> Dispatch | None:
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM dispatches WHERE run_id = ? AND id = ?",
+            (run_id, dispatch_id),
+        ).fetchone()
+    return Dispatch.from_row(row) if row else None
+
+
+def list_dispatches(run_id: int, phase: str | None = None) -> list[Dispatch]:
+    sql = "SELECT * FROM dispatches WHERE run_id = ?"
+    args: list = [run_id]
+    if phase:
+        sql += " AND phase = ?"
+        args.append(phase)
+    sql += " ORDER BY started_at IS NULL, started_at, id"
+    with get_connection() as conn:
+        rows = conn.execute(sql, args).fetchall()
+    return [Dispatch.from_row(r) for r in rows]
+
+
+def upsert_case(
+    *,
+    case_id: int,
+    run_id: int,
+    method: str,
+    path: str,
+    category: str | None = None,
+    dispatch_id: str | None = None,
+    state: str,
+    result: str | None = None,
+    finding_id: str | None = None,
+    started_at: int | None = None,
+    finished_at: int | None = None,
+) -> Case:
+    with get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO cases (case_id, run_id, method, path, category, dispatch_id,
+                               state, result, finding_id, started_at, finished_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(run_id, case_id) DO UPDATE SET
+                method=excluded.method,
+                path=excluded.path,
+                category=COALESCE(excluded.category, cases.category),
+                dispatch_id=COALESCE(excluded.dispatch_id, cases.dispatch_id),
+                state=excluded.state,
+                result=COALESCE(excluded.result, cases.result),
+                finding_id=COALESCE(excluded.finding_id, cases.finding_id),
+                started_at=COALESCE(excluded.started_at, cases.started_at),
+                finished_at=COALESCE(excluded.finished_at, cases.finished_at)
+            """,
+            (case_id, run_id, method, path, category, dispatch_id,
+             state, result, finding_id, started_at, finished_at),
+        )
+        conn.commit()
+    return get_case(run_id, case_id)
+
+
+def get_case(run_id: int, case_id: int) -> Case | None:
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM cases WHERE run_id = ? AND case_id = ?",
+            (run_id, case_id),
+        ).fetchone()
+    return Case.from_row(row) if row else None
+
+
+def list_cases(
+    run_id: int, *,
+    state: str | None = None,
+    method: str | None = None,
+    category: str | None = None,
+) -> list[Case]:
+    sql = "SELECT * FROM cases WHERE run_id = ?"
+    args: list = [run_id]
+    for col, val in (("state", state), ("method", method), ("category", category)):
+        if val:
+            sql += f" AND {col} = ?"
+            args.append(val)
+    sql += " ORDER BY case_id"
+    with get_connection() as conn:
+        rows = conn.execute(sql, args).fetchall()
+    return [Case.from_row(r) for r in rows]

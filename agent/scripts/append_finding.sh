@@ -49,11 +49,25 @@ update_finding_count "$FINDINGS_FILE"
 
 rm -f "$tmp_file"
 if [[ -f "$EMIT_RUNTIME_EVENT" ]]; then
+    # Best-effort extraction: severity/category are optional.
+    # Parse from body lines like "**Severity**: critical" / "**Category**: injection".
+    severity="$(grep -oE '^\*\*Severity\*\*:[[:space:]]*[A-Za-z]+' "$BODY_FILE" 2>/dev/null \
+                | sed 's/^.*:[[:space:]]*//' | tr 'A-Z' 'a-z' || true)"
+    category="$(grep -oE '^\*\*Category\*\*:[[:space:]]*[A-Za-z0-9-]+' "$BODY_FILE" 2>/dev/null \
+                | sed 's/^.*:[[:space:]]*//' | tr 'A-Z' 'a-z' || true)"
+    payload="$(jq -cn \
+        --arg finding_id "$finding_id" \
+        --arg severity "${severity:-}" \
+        --arg category "${category:-}" \
+        --arg title "${candidate_title:-}" \
+        '{finding_id:$finding_id, severity:$severity, category:$category, title:$title}')"
     bash "$EMIT_RUNTIME_EVENT" \
         "finding.created" \
         "${ORCHESTRATOR_PHASE:-unknown}" \
         "$finding_id" \
         "$AGENT_NAME" \
-        "Added $finding_id"
+        "${candidate_title:-Added $finding_id}" \
+        --kind finding \
+        --payload-json "$payload"
 fi
 printf '%s\n' "$finding_id"

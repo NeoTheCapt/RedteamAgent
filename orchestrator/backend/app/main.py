@@ -4,6 +4,9 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 
 from .api.artifacts import router as artifacts_router
+from .api.cases import router as cases_router
+from .api.dispatches import router as dispatches_router
+from .api.documents import router as documents_router
 from .api.events import router as events_router
 from .api.projects import router as projects_router
 from .api.runs import router as runs_router
@@ -26,6 +29,9 @@ app.include_router(auth_router)
 app.include_router(projects_router)
 app.include_router(runs_router)
 app.include_router(events_router)
+app.include_router(dispatches_router)
+app.include_router(cases_router)
+app.include_router(documents_router)
 app.include_router(artifacts_router)
 
 

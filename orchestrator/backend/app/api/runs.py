@@ -115,6 +115,22 @@ class RunSummaryCoverageResponse(BaseModel):
     surface_types: list[RunSummaryCoverageTypeResponse]
 
 
+class RunSummaryDispatchesResponse(BaseModel):
+    total: int
+    active: int
+    done: int
+    failed: int
+
+
+class RunSummaryCasesResponse(BaseModel):
+    total: int
+    done: int
+    running: int
+    queued: int
+    error: int
+    findings: int
+
+
 class RunSummaryResponse(BaseModel):
     target: RunSummaryTargetResponse
     overview: RunSummaryOverviewResponse
@@ -123,6 +139,8 @@ class RunSummaryResponse(BaseModel):
     current: RunSummaryCurrentResponse
     phases: list[RunSummaryPhaseResponse]
     agents: list[RunSummaryAgentResponse]
+    dispatches: RunSummaryDispatchesResponse
+    cases: RunSummaryCasesResponse
 
 
 class ObservedPathResponse(BaseModel):
@@ -179,6 +197,8 @@ def get_run_summary(project_id: int, run_id: int, current_user: CurrentUser) -> 
         current=RunSummaryCurrentResponse(**summary.current),
         phases=[RunSummaryPhaseResponse(**item) for item in summary.phases],
         agents=[RunSummaryAgentResponse(**item) for item in summary.agents],
+        dispatches=RunSummaryDispatchesResponse(**summary.dispatches),
+        cases=RunSummaryCasesResponse(**summary.cases),
     )
 
 

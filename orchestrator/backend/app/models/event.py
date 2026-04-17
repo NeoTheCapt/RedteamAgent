@@ -14,9 +14,13 @@ class Event:
     agent_name: str
     summary: str
     created_at: str
+    kind: str = "legacy"
+    level: str = "info"
+    payload_json: str = "{}"
 
     @classmethod
     def from_row(cls, row: Row) -> "Event":
+        keys = set(row.keys())
         return cls(
             id=row["id"],
             run_id=row["run_id"],
@@ -26,4 +30,7 @@ class Event:
             agent_name=row["agent_name"],
             summary=row["summary"],
             created_at=row["created_at"],
+            kind=row["kind"] if "kind" in keys else "legacy",
+            level=row["level"] if "level" in keys else "info",
+            payload_json=row["payload_json"] if "payload_json" in keys else "{}",
         )
