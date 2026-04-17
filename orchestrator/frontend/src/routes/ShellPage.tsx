@@ -21,11 +21,16 @@ type Route =
   | { kind: "home" }
   | { kind: "run"; projectId: number; runId: number; tab: TabId };
 
+const VALID_TABS: readonly TabId[] = ["dashboard", "progress", "cases", "documents", "events"] as const;
+
 function parseRoute(hash: string): Route {
-  const h = hash.replace(/^#/, "");
-  const match = h.match(/^\/projects\/(\d+)\/runs\/(\d+)(?:\/(\w+))?$/);
+  const h = hash.replace(/^#/, "").replace(/\/$/, "");
+  const match = h.match(/^\/projects\/(\d+)\/runs\/(\d+)(?:\/([\w-]+))?$/);
   if (match) {
-    const tab = (match[3] ?? "dashboard") as TabId;
+    const raw = match[3];
+    const tab: TabId = raw && (VALID_TABS as readonly string[]).includes(raw)
+      ? (raw as TabId)
+      : "dashboard";
     return { kind: "run", projectId: Number(match[1]), runId: Number(match[2]), tab };
   }
   return { kind: "home" };
