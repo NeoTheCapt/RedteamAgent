@@ -77,10 +77,29 @@ export function ShellPage(props: ShellPageProps) {
       return;
     }
     let cancelled = false;
-    getRunSummary(token, selected.__projectId, selected.id)
-      .then((s) => { if (!cancelled) setSummary(s); })
-      .catch(() => { if (!cancelled) setSummary(null); });
-    return () => { cancelled = true; };
+    const currentRun = selected;
+
+    async function tick() {
+      try {
+        const s = await getRunSummary(token, currentRun.__projectId, currentRun.id);
+        if (!cancelled) setSummary(s);
+      } catch (err) {
+        // Transient fetch errors: keep the last known summary so the dashboard
+        // doesn't flash to "Loading..." on a blip. Only the very first load
+        // failure clears the panel, and only because we never had data.
+        if (!cancelled) {
+          setSummary((prev) => (prev ? prev : null));
+        }
+        console.warn("summary fetch failed:", err);
+      }
+    }
+
+    void tick();
+    const interval = window.setInterval(() => { void tick(); }, 5000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
   }, [token, runKey]);
 
   const runtimeLabel = selected && summary
