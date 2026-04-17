@@ -227,3 +227,56 @@ def test_case_done_with_existing_dispatch_links_correctly(tmp_path):
     )
     c = db.get_case(run.id, 88)
     assert c.dispatch_id == "B-ok"  # linked when available
+
+
+def test_dispatch_done_before_dispatch_start_persists_terminal_state(tmp_path):
+    """Out-of-order: dispatch_done arrives first. Must create a terminal row
+    so the completion doesn't get lost."""
+    run = _mk_run(tmp_path, name="ea_dd_first")
+
+    event_apply.apply(
+        run_id=run.id, kind="dispatch_done", phase="consume",
+        payload={"batch": "B-orphan", "state": "done"},
+    )
+    d = db.get_dispatch(run.id, "B-orphan")
+    assert d is not None
+    assert d.state == "done"
+    assert d.finished_at is not None
+
+
+def test_dispatch_start_after_done_does_not_resurrect_running(tmp_path):
+    """If dispatch_done landed first and created a terminal row, a late
+    dispatch_start must not revert it to running."""
+    run = _mk_run(tmp_path, name="ea_late_start")
+    event_apply.apply(
+        run_id=run.id, kind="dispatch_done", phase="consume",
+        payload={"batch": "B-x", "state": "done"},
+    )
+    event_apply.apply(
+        run_id=run.id, kind="dispatch_start", phase="consume",
+        payload={"batch": "B-x", "round": 1, "slot": "0", "case_count": 0,
+                 "agent": "v", "cases": []},
+    )
+    d = db.get_dispatch(run.id, "B-x")
+    assert d.state == "done"
+    # agent metadata filled in from the late start event
+    assert d.agent == "v"
+
+
+def test_missing_outcomes_state_persists(tmp_path):
+    """dispatch_done with state='missing_outcomes' survives a late dispatch_start."""
+    run = _mk_run(tmp_path, name="ea_missing")
+    event_apply.apply(
+        run_id=run.id, kind="dispatch_done", phase="consume",
+        payload={"batch": "B-m", "state": "missing_outcomes"},
+    )
+    d = db.get_dispatch(run.id, "B-m")
+    assert d.state == "missing_outcomes"
+    # A subsequent dispatch_start does not reset this.
+    event_apply.apply(
+        run_id=run.id, kind="dispatch_start", phase="consume",
+        payload={"batch": "B-m", "round": 1, "slot": "0", "case_count": 0,
+                 "agent": "v", "cases": []},
+    )
+    d2 = db.get_dispatch(run.id, "B-m")
+    assert d2.state == "missing_outcomes"
