@@ -140,3 +140,35 @@ def test_apply_legacy_kind_is_noop(tmp_path):
     )
     assert db.list_dispatches(run.id) == []
     assert db.list_cases(run.id) == []
+
+
+def test_case_done_before_dispatch_start_keeps_case_without_dispatch_link(tmp_path):
+    run = _mk_run(tmp_path, name="ea_ooo")
+    # case_done arrives FIRST (dispatch_start delayed/dropped)
+    event_apply.apply(
+        run_id=run.id, kind="case_done", phase="consume",
+        payload={"case_id": 99, "outcome": "DONE", "dispatch": "B-late",
+                 "agent": "v", "type": "api", "detail": "ok"},
+    )
+    c = db.get_case(run.id, 99)
+    assert c is not None
+    assert c.state == "done"
+    assert c.dispatch_id is None  # FK-safe fallback
+
+
+def test_case_done_with_existing_dispatch_links_correctly(tmp_path):
+    run = _mk_run(tmp_path, name="ea_ordered")
+    # Pre-seed the dispatch
+    event_apply.apply(
+        run_id=run.id, kind="dispatch_start", phase="consume",
+        payload={"batch": "B-ok", "round": 1, "slot": "0",
+                 "case_count": 1, "agent": "v"},
+    )
+    # case_done for the existing dispatch
+    event_apply.apply(
+        run_id=run.id, kind="case_done", phase="consume",
+        payload={"case_id": 88, "outcome": "DONE", "dispatch": "B-ok",
+                 "agent": "v", "type": "api", "detail": "ok"},
+    )
+    c = db.get_case(run.id, 88)
+    assert c.dispatch_id == "B-ok"  # linked when available

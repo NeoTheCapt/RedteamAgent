@@ -1,0 +1,86 @@
+/*
+ * Design tokens — orchestrator frontend
+ *
+ * Typography decision (see plan 2026-04-17-orchestrator-refactor-frontend-shell.md):
+ * Chose Inter (UI) + JetBrains Mono (code) after considering SF Pro / SF Mono
+ * (license-restricted to Apple platforms) and system-ui (inconsistent across OSs).
+ * Scale derived from a 1.125 ratio anchored at 14px, which matches Linear's
+ * density while staying readable on Retina and 1080p at default browser zoom.
+ * --fs-base is the single knob; all other sizes are explicit px values rounded
+ * to integers. Consumers use --fs-* vars, never raw px.
+ * Line-height tokens let dense tables drop to 1.25 without recomputing.
+ *
+ * Fonts are self-hosted via @fontsource-variable — no third-party CDN
+ * fetches at app-load (important for air-gapped deployments). Both Inter
+ * (UI) and JetBrains Mono (code) are bundled as variable-font WOFF2.
+ */
+
+@import "./fonts.css";
+
+:root {
+  /* -------- Typography -------- */
+  --font-ui: "Inter Variable", "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono Variable", "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+
+  --fs-xs: 11px;
+  --fs-sm: 12px;
+  --fs-md: 13px;
+  --fs-base: 14px;
+  --fs-lg: 16px;
+  --fs-xl: 18px;
+  --fs-2xl: 20px;
+  --fs-3xl: 24px;
+  --fs-num: 30px;
+  --fs-bignum: 36px;
+
+  --lh-dense: 1.25;
+  --lh-body: 1.5;
+  --lh-heading: 1.3;
+
+  --fw-regular: 400;
+  --fw-medium: 500;
+  --fw-semibold: 600;
+  --fw-bold: 700;
+
+  /* -------- Color (ported from app.css, retained names where possible) -------- */
+  --c-bg: #08111a;
+  --c-bg-elev: #0f1a26;
+  --c-panel: #131f2c;
+  --c-panel-strong: #0f1823;
+  --c-panel-soft: #1a2634;
+  --c-border: rgba(173, 205, 255, 0.12);
+  --c-border-strong: rgba(173, 205, 255, 0.24);
+  --c-text: #edf4ff;
+  --c-text-muted: #9bb0c8;
+  --c-text-dim: #7f92aa;
+  --c-text-dimmer: #5a6b83;
+  --c-accent: #5cc8ff;
+  --c-accent-strong: #89d6ff;
+  --c-hot: #ff7a59;
+  --c-hot-soft: rgba(255, 122, 89, 0.16);
+  --c-amber: #ffb84d;
+  --c-green: #45d48b;
+  --c-red: #ff6a85;
+  --c-pending: #7b8da6;
+
+  /* -------- Spacing -------- */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 20px;
+  --sp-6: 24px;
+  --sp-8: 32px;
+
+  /* -------- Radius / Shadow -------- */
+  --r-sm: 4px;
+  --r-md: 6px;
+  --r-lg: 10px;
+  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.24);
+  --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.32);
+
+  color-scheme: dark;
+  font-family: var(--font-ui);
+  font-size: var(--fs-base);
+  line-height: var(--lh-body);
+}

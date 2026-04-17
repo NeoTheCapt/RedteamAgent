@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "react": "^19.1.0",
@@ -15,10 +17,18 @@
     "remark-gfm": "^4.0.1"
   },
   "devDependencies": {
+    "@fontsource-variable/inter": "^5.2.8",
+    "@fontsource-variable/jetbrains-mono": "^5.2.8",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.1",
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",
     "@vitejs/plugin-react": "^5.0.2",
+    "@vitest/ui": "^4.1.4",
+    "jsdom": "^29.0.2",
     "typescript": "^5.9.2",
-    "vite": "^7.1.4"
+    "vite": "^7.1.4",
+    "vitest": "^4.1.4"
   }
 }

@@ -1,46 +1,24 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import {
   ApiError,
   createProject,
   createRun,
-  deleteProject,
-  deleteRun,
   listProjects,
   listRuns,
   login,
   register,
-  updateProject,
 } from "./lib/api";
-import type { Project, ProjectConfigInput, Run } from "./lib/api";
+import type { Project, Run } from "./lib/api";
 import { LoginPage } from "./routes/LoginPage";
-import { ProjectsPage } from "./routes/ProjectsPage";
-import { RunPage } from "./routes/RunPage";
+import { ShellPage } from "./routes/ShellPage";
 
 type SessionState = {
   token: string;
   username: string;
 };
 
-type RunRoute = {
-  projectId: number;
-  runId: number;
-};
-
 const SESSION_STORAGE_KEY = "redteam-orchestrator-session";
-
-function currentRoute(): string {
-  const hashRoute = window.location.hash.replace(/^#/, "");
-  return hashRoute || "/projects";
-}
-
-function parseRunRoute(route: string): RunRoute | null {
-  const match = route.match(/^\/projects\/(\d+)\/runs\/(\d+)$/);
-  if (!match) {
-    return null;
-  }
-  return { projectId: Number(match[1]), runId: Number(match[2]) };
-}
 
 function navigate(route: string) {
   window.location.hash = route;
@@ -48,25 +26,30 @@ function navigate(route: string) {
 
 export default function App() {
   const [session, setSession] = useState<SessionState | null>(() => {
-    const raw = window.localStorage.getItem(SESSION_STORAGE_KEY);
-    return raw ? (JSON.parse(raw) as SessionState) : null;
+    try {
+      const raw = window.localStorage.getItem(SESSION_STORAGE_KEY);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed.token === "string" && typeof parsed.username === "string") {
+        return parsed as SessionState;
+      }
+      return null;
+    } catch {
+      // Mangled localStorage entry — log and start fresh rather than white-screen.
+      console.warn("Invalid session payload; clearing.");
+      window.localStorage.removeItem(SESSION_STORAGE_KEY);
+      return null;
+    }
   });
-  const [route, setRoute] = useState(currentRoute());
   const [projects, setProjects] = useState<Project[]>([]);
   const [runsByProject, setRunsByProject] = useState<Record<number, Run[]>>({});
 
-  function expireSession() {
+  const expireSession = useCallback(() => {
     window.localStorage.removeItem(SESSION_STORAGE_KEY);
     setSession(null);
     setProjects([]);
     setRunsByProject({});
-    navigate("/login");
-  }
-
-  useEffect(() => {
-    const handler = () => setRoute(currentRoute());
-    window.addEventListener("hashchange", handler);
-    return () => window.removeEventListener("hashchange", handler);
+    navigate("/");
   }, []);
 
   useEffect(() => {
@@ -77,14 +60,17 @@ export default function App() {
     }
 
     let cancelled = false;
+    const token = session.token;
 
-    async function refreshProjects() {
+    async function tick() {
       try {
-        const nextProjects = await listProjects(session.token);
+        const nextProjects = await listProjects(token);
         if (cancelled) return;
         setProjects(nextProjects);
         const entries = await Promise.all(
-          nextProjects.map(async (project) => [project.id, await listRuns(session.token, project.id)] as const),
+          nextProjects.map(
+            async (project) => [project.id, await listRuns(token, project.id)] as const,
+          ),
         );
         if (cancelled) return;
         setRunsByProject(Object.fromEntries(entries));
@@ -98,18 +84,16 @@ export default function App() {
       }
     }
 
-    void refreshProjects();
+    void tick();
     const interval = window.setInterval(() => {
-      void refreshProjects();
+      void tick();
     }, 5000);
 
     return () => {
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [session]);
-
-  const runRoute = useMemo(() => parseRunRoute(route), [route]);
+  }, [session, expireSession]);
 
   async function handleLogin(username: string, password: string) {
     const response = await login(username, password);
@@ -119,25 +103,12 @@ export default function App() {
     };
     window.localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(nextSession));
     setSession(nextSession);
-    navigate("/projects");
+    navigate("/");
   }
 
   async function handleRegister(username: string, password: string) {
     await register(username, password);
     await handleLogin(username, password);
-  }
-
-  async function handleCreateProject(name: string, config: ProjectConfigInput) {
-    if (!session) return;
-    const project = await createProject(session.token, name, config);
-    setProjects((current) => [...current, project]);
-    setRunsByProject((current) => ({ ...current, [project.id]: [] }));
-  }
-
-  async function handleUpdateProject(projectId: number, config: ProjectConfigInput) {
-    if (!session) return;
-    const project = await updateProject(session.token, projectId, config);
-    setProjects((current) => current.map((item) => (item.id === project.id ? project : item)));
   }
 
   async function handleCreateRun(projectId: number, target: string) {
@@ -147,63 +118,44 @@ export default function App() {
       ...current,
       [projectId]: [...(current[projectId] ?? []), run],
     }));
-    navigate(`/projects/${projectId}/runs/${run.id}`);
+    navigate(`/projects/${projectId}/runs/${run.id}/dashboard`);
   }
 
-  async function handleDeleteProject(projectId: number) {
+  const handleCreateProject = useCallback(async (name: string) => {
     if (!session) return;
-    await deleteProject(session.token, projectId);
-    setProjects((current) => current.filter((project) => project.id !== projectId));
-    setRunsByProject((current) => {
-      const next = { ...current };
-      delete next[projectId];
-      return next;
-    });
-    navigate("/projects");
-  }
-
-  async function handleDeleteRun(projectId: number, runId: number) {
-    if (!session) return;
-    await deleteRun(session.token, projectId, runId);
-    setRunsByProject((current) => ({
-      ...current,
-      [projectId]: (current[projectId] ?? []).filter((run) => run.id !== runId),
-    }));
-    navigate("/projects");
-  }
-
-  function handleLogout() {
-    expireSession();
-  }
+    try {
+      await createProject(session.token, name);
+      // Refresh projects so the new one appears in the sidebar + dropdown.
+      const nextProjects = await listProjects(session.token);
+      setProjects(nextProjects);
+      const entries = await Promise.all(
+        nextProjects.map(
+          async (project) => [project.id, await listRuns(session.token, project.id)] as const,
+        ),
+      );
+      setRunsByProject(Object.fromEntries(entries));
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) {
+        expireSession();
+        return;
+      }
+      throw err;
+    }
+  }, [session, expireSession]);
 
   if (!session) {
     return <LoginPage onLogin={handleLogin} onRegister={handleRegister} />;
   }
 
-  if (runRoute) {
-    return (
-      <RunPage
-        token={session.token}
-        projectId={runRoute.projectId}
-        runId={runRoute.runId}
-        onBack={() => navigate("/projects")}
-        onDeleteRun={handleDeleteRun}
-      />
-    );
-  }
-
   return (
-    <ProjectsPage
+    <ShellPage
+      token={session.token}
       username={session.username}
       projects={projects}
       runsByProject={runsByProject}
-      onCreateProject={handleCreateProject}
-      onUpdateProject={handleUpdateProject}
+      onLogout={expireSession}
       onCreateRun={handleCreateRun}
-      onDeleteProject={handleDeleteProject}
-      onDeleteRun={handleDeleteRun}
-      onOpenRun={(projectId, runId) => navigate(`/projects/${projectId}/runs/${runId}`)}
-      onLogout={handleLogout}
+      onCreateProject={handleCreateProject}
     />
   );
 }
