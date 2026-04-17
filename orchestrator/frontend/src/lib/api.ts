@@ -103,6 +103,20 @@ export type RunSummary = {
     summary: string;
     updated_at: string;
   }>;
+  dispatches: {
+    total: number;
+    active: number;
+    done: number;
+    failed: number;
+  };
+  cases: {
+    total: number;
+    done: number;
+    running: number;
+    queued: number;
+    error: number;
+    findings: number;
+  };
 };
 
 export type EventRecord = {
@@ -138,6 +152,59 @@ export type ObservedPathRecord = {
   status: string;
   assigned_agent: string;
   source: string;
+};
+
+export type Dispatch = {
+  id: string;
+  phase: string;
+  round: number;
+  agent: string;
+  slot: string;
+  task: string | null;
+  state: string;
+  started_at: number | null;
+  finished_at: number | null;
+  error: string | null;
+};
+
+export type Case = {
+  case_id: number;
+  method: string;
+  path: string;
+  category: string | null;
+  dispatch_id: string | null;
+  state: string;
+  result: string | null;
+  finding_id: string | null;
+  started_at: number | null;
+  finished_at: number | null;
+  duration_ms: number | null;
+};
+
+export type CaseListFilter = {
+  state?: string;
+  method?: string;
+  category?: string;
+};
+
+export type DocumentEntry = {
+  name: string;
+  path: string;
+  size: number;
+  mtime: number;
+};
+
+export type DocumentTree = {
+  findings: DocumentEntry[];
+  reports: DocumentEntry[];
+  intel: DocumentEntry[];
+  surface: DocumentEntry[];
+  other: DocumentEntry[];
+};
+
+export type DocumentContent = {
+  path: string;
+  content: string;
 };
 
 export class ApiError extends Error {
@@ -319,4 +386,84 @@ export function runWebSocketUrl(projectId: number, runId: number, ticket: string
   );
   httpUrl.protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
   return httpUrl.toString();
+}
+
+export function listDispatches(
+  token: string,
+  projectId: number,
+  runId: number,
+  phase?: string,
+) {
+  const query = phase ? `?phase=${encodeURIComponent(phase)}` : "";
+  return request<Dispatch[]>(
+    `/projects/${projectId}/runs/${runId}/dispatches${query}`,
+    {},
+    token,
+  );
+}
+
+export function listCases(
+  token: string,
+  projectId: number,
+  runId: number,
+  filter: CaseListFilter = {},
+) {
+  const params = new URLSearchParams();
+  if (filter.state) {
+    params.set("state", filter.state);
+  }
+  if (filter.method) {
+    params.set("method", filter.method);
+  }
+  if (filter.category) {
+    params.set("category", filter.category);
+  }
+  const query = params.toString();
+  const suffix = query ? `?${query}` : "";
+  return request<Case[]>(
+    `/projects/${projectId}/runs/${runId}/cases${suffix}`,
+    {},
+    token,
+  );
+}
+
+export function getCase(
+  token: string,
+  projectId: number,
+  runId: number,
+  caseId: number,
+) {
+  return request<Case>(
+    `/projects/${projectId}/runs/${runId}/cases/${caseId}`,
+    {},
+    token,
+  );
+}
+
+export function listDocuments(token: string, projectId: number, runId: number) {
+  return request<DocumentTree>(
+    `/projects/${projectId}/runs/${runId}/documents`,
+    {},
+    token,
+  );
+}
+
+export function getDocument(
+  token: string,
+  projectId: number,
+  runId: number,
+  path: string,
+) {
+  // Backend route is /documents/{path:path}; percent-encode each segment so
+  // interior "/" separators are preserved for nested paths like
+  // "runtime/process.log" while spaces / special chars are safely escaped.
+  const encodedPath = path
+    .split("/")
+    .map((segment) => encodeURIComponent(segment))
+    .join("/");
+  return request<DocumentContent>(
+    `/projects/${projectId}/runs/${runId}/documents/${encodedPath}`,
+    {},
+    token,
+  );
 }
