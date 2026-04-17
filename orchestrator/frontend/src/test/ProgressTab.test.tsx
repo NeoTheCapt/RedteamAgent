@@ -115,4 +115,30 @@ describe("ProgressTab", () => {
       expect(screen.getByRole("alert")).toHaveTextContent("backend down");
     });
   });
+
+  it("renders orphaned (dispatch_id=null) cases as unassigned in the active phase", async () => {
+    mockDispatches.mockResolvedValue([
+      { id: "d1", phase: "consume", round: 1, agent: "v", slot: "0",
+        task: null, state: "running", started_at: 1, finished_at: null, error: null },
+    ]);
+    mockCases.mockResolvedValue([
+      // Case without a dispatch_id — was orphaned or delivered before dispatch_start
+      { case_id: 99, method: "GET", path: "/api/orphan",
+        category: null, dispatch_id: null,
+        state: "queued", result: null, finding_id: null,
+        started_at: null, finished_at: null, duration_ms: null },
+      // Normal case under d1
+      { case_id: 1, method: "GET", path: "/api/normal",
+        category: null, dispatch_id: "d1",
+        state: "done", result: null, finding_id: null,
+        started_at: null, finished_at: null, duration_ms: null },
+    ]);
+
+    render(<ProgressTab token="t" projectId={1} runId={2} currentPhase="consume" />);
+    await waitFor(() => screen.getByText("/api/orphan"));
+    // Orphan is rendered in an "unassigned" slot (same column as active phase).
+    expect(screen.getByText("unassigned")).toBeInTheDocument();
+    // Normal case also rendered
+    expect(screen.getByText("/api/normal")).toBeInTheDocument();
+  });
 });

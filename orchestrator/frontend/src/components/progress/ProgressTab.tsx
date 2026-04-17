@@ -101,16 +101,24 @@ export function ProgressTab({ token, projectId, runId, currentPhase }: ProgressT
           Failed to load progress: {error}
         </div>
       )}
-      {CANONICAL_PHASES.map(({ phase, label }) => (
-        <KanbanColumn
-          key={phase}
-          phase={phase}
-          label={label}
-          state={columnState(phase, currentPhase, dispatchesByPhase.get(phase) ?? [])}
-          dispatches={dispatchesByPhase.get(phase) ?? []}
-          casesByDispatchId={casesByDispatch}
-        />
-      ))}
+      {CANONICAL_PHASES.map(({ phase, label }) => {
+        const dispatches = dispatchesByPhase.get(phase) ?? [];
+        const colState = columnState(phase, currentPhase, dispatches);
+        const unassigned = colState === "active"
+          ? (casesByDispatch.get(null) ?? [])
+          : [];
+        return (
+          <KanbanColumn
+            key={phase}
+            phase={phase}
+            label={label}
+            state={colState}
+            dispatches={dispatches}
+            casesByDispatchId={casesByDispatch}
+            unassignedCases={unassigned}
+          />
+        );
+      })}
     </div>
   );
 }

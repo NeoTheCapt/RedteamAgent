@@ -96,6 +96,17 @@
 .dispatch-card--failed  { border-left-color: var(--c-red); }
 .dispatch-card--queued  { border-left-color: var(--c-text-dim); }
 
+.dispatch-card--unassigned {
+  border-left-color: var(--c-text-dimmer);
+  border-style: dashed;
+  background: transparent;
+}
+
+.dispatch-card--unassigned .dispatch-card__agent {
+  color: var(--c-text-dim);
+  font-style: italic;
+}
+
 .dispatch-card__head {
   display: flex;
   align-items: center;
