@@ -760,7 +760,15 @@ def upsert_dispatch(
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(run_id, id) DO UPDATE SET
                 state=excluded.state,
+                -- Preserve metadata from the first non-empty write (supports
+                -- out-of-order delivery where dispatch_done arrives before
+                -- dispatch_start with an empty-string placeholder row).
+                phase=CASE WHEN excluded.phase != '' THEN excluded.phase ELSE dispatches.phase END,
+                round=CASE WHEN excluded.round != 0 THEN excluded.round ELSE dispatches.round END,
+                agent=CASE WHEN excluded.agent != '' THEN excluded.agent ELSE dispatches.agent END,
+                slot=CASE WHEN excluded.slot != '' THEN excluded.slot ELSE dispatches.slot END,
                 task=COALESCE(excluded.task, dispatches.task),
+                started_at=COALESCE(excluded.started_at, dispatches.started_at),
                 finished_at=COALESCE(excluded.finished_at, dispatches.finished_at),
                 error=COALESCE(excluded.error, dispatches.error)
             """,

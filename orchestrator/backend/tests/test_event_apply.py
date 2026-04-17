@@ -156,6 +156,61 @@ def test_case_done_before_dispatch_start_keeps_case_without_dispatch_link(tmp_pa
     assert c.dispatch_id is None  # FK-safe fallback
 
 
+def test_dispatch_start_after_case_done_preserves_terminal_state(tmp_path):
+    """Out-of-order delivery: case_done lands first, then dispatch_start.
+    The late dispatch_start must NOT reset the terminal state back to queued.
+    """
+    run = _mk_run(tmp_path, name="ea_ooo_terminal")
+    # case_done arrives FIRST
+    event_apply.apply(
+        run_id=run.id, kind="case_done", phase="consume",
+        payload={"case_id": 51, "outcome": "DONE", "dispatch": "B-late",
+                 "agent": "v", "type": "api", "detail": "ok"},
+    )
+    c_after_case_done = db.get_case(run.id, 51)
+    assert c_after_case_done.state == "done"
+
+    # dispatch_start arrives LATER with the same case in its cases[] array
+    event_apply.apply(
+        run_id=run.id, kind="dispatch_start", phase="consume",
+        payload={"batch": "B-late", "round": 1, "slot": "0",
+                 "case_count": 1, "agent": "v",
+                 "cases": [{"id": 51, "method": "GET", "path": "/api/x", "type": "api"}]},
+    )
+
+    c_final = db.get_case(run.id, 51)
+    # State must still be "done", NOT reset to "queued"
+    assert c_final.state == "done"
+    # Dispatch linkage is filled in (orphan case reunited with its dispatch)
+    assert c_final.dispatch_id == "B-late"
+
+
+def test_dispatch_start_reseat_is_idempotent_for_linked_cases(tmp_path):
+    """If the case is already linked to a dispatch, dispatch_start does nothing destructive."""
+    run = _mk_run(tmp_path, name="ea_idem_link")
+    event_apply.apply(
+        run_id=run.id, kind="dispatch_start", phase="consume",
+        payload={"batch": "B-1", "round": 1, "slot": "0", "case_count": 1,
+                 "agent": "v",
+                 "cases": [{"id": 60, "method": "GET", "path": "/a", "type": "api"}]},
+    )
+    event_apply.apply(
+        run_id=run.id, kind="case_done", phase="consume",
+        payload={"case_id": 60, "outcome": "DONE", "dispatch": "B-1",
+                 "agent": "v", "type": "api", "detail": "ok"},
+    )
+    # Simulate a retry: dispatch_start replayed
+    event_apply.apply(
+        run_id=run.id, kind="dispatch_start", phase="consume",
+        payload={"batch": "B-1", "round": 1, "slot": "0", "case_count": 1,
+                 "agent": "v",
+                 "cases": [{"id": 60, "method": "GET", "path": "/a", "type": "api"}]},
+    )
+    c = db.get_case(run.id, 60)
+    assert c.state == "done"
+    assert c.dispatch_id == "B-1"
+
+
 def test_case_done_with_existing_dispatch_links_correctly(tmp_path):
     run = _mk_run(tmp_path, name="ea_ordered")
     # Pre-seed the dispatch
@@ -172,3 +227,56 @@ def test_case_done_with_existing_dispatch_links_correctly(tmp_path):
     )
     c = db.get_case(run.id, 88)
     assert c.dispatch_id == "B-ok"  # linked when available
+
+
+def test_dispatch_done_before_dispatch_start_persists_terminal_state(tmp_path):
+    """Out-of-order: dispatch_done arrives first. Must create a terminal row
+    so the completion doesn't get lost."""
+    run = _mk_run(tmp_path, name="ea_dd_first")
+
+    event_apply.apply(
+        run_id=run.id, kind="dispatch_done", phase="consume",
+        payload={"batch": "B-orphan", "state": "done"},
+    )
+    d = db.get_dispatch(run.id, "B-orphan")
+    assert d is not None
+    assert d.state == "done"
+    assert d.finished_at is not None
+
+
+def test_dispatch_start_after_done_does_not_resurrect_running(tmp_path):
+    """If dispatch_done landed first and created a terminal row, a late
+    dispatch_start must not revert it to running."""
+    run = _mk_run(tmp_path, name="ea_late_start")
+    event_apply.apply(
+        run_id=run.id, kind="dispatch_done", phase="consume",
+        payload={"batch": "B-x", "state": "done"},
+    )
+    event_apply.apply(
+        run_id=run.id, kind="dispatch_start", phase="consume",
+        payload={"batch": "B-x", "round": 1, "slot": "0", "case_count": 0,
+                 "agent": "v", "cases": []},
+    )
+    d = db.get_dispatch(run.id, "B-x")
+    assert d.state == "done"
+    # agent metadata filled in from the late start event
+    assert d.agent == "v"
+
+
+def test_missing_outcomes_state_persists(tmp_path):
+    """dispatch_done with state='missing_outcomes' survives a late dispatch_start."""
+    run = _mk_run(tmp_path, name="ea_missing")
+    event_apply.apply(
+        run_id=run.id, kind="dispatch_done", phase="consume",
+        payload={"batch": "B-m", "state": "missing_outcomes"},
+    )
+    d = db.get_dispatch(run.id, "B-m")
+    assert d.state == "missing_outcomes"
+    # A subsequent dispatch_start does not reset this.
+    event_apply.apply(
+        run_id=run.id, kind="dispatch_start", phase="consume",
+        payload={"batch": "B-m", "round": 1, "slot": "0", "case_count": 0,
+                 "agent": "v", "cases": []},
+    )
+    d2 = db.get_dispatch(run.id, "B-m")
+    assert d2.state == "missing_outcomes"

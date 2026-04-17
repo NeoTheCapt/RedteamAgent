@@ -37,16 +37,26 @@ def _apply_dispatch_start(run_id: int, phase: str, payload: dict[str, Any]) -> N
     if not batch_id:
         return
     round_val = int(payload.get("round", 0))
+
+    # If dispatch_done arrived before us (async out-of-order), the row is already
+    # in a terminal state. Fill in missing metadata but do NOT reset state back
+    # to "running".
+    existing = db.get_dispatch(run_id, batch_id)
+    is_terminal = existing is not None and existing.state != "running"
+    target_state = existing.state if is_terminal else "running"
+    started_ts = existing.started_at if (existing and existing.started_at) else int(time.time())
+
     db.upsert_dispatch(
         dispatch_id=batch_id,
         run_id=run_id,
-        phase=phase or "consume",
+        phase=phase or (existing.phase if existing else "consume"),
         round=round_val,
-        agent=str(payload.get("agent", "")),
-        slot=str(payload.get("slot", "")),
-        task=payload.get("task"),
-        state="running",
-        started_at=int(time.time()),
+        agent=str(payload.get("agent", "")) or (existing.agent if existing else ""),
+        slot=str(payload.get("slot", "")) or (existing.slot if existing else ""),
+        task=payload.get("task") if payload.get("task") is not None
+              else (existing.task if existing else None),
+        state=target_state,
+        started_at=started_ts,
     )
     # Pre-seed case rows from the cases[] array (B2.1)
     for case in payload.get("cases") or []:
@@ -54,23 +64,60 @@ def _apply_dispatch_start(run_id: int, phase: str, payload: dict[str, Any]) -> N
             case_id = int(case["id"])
         except (KeyError, TypeError, ValueError):
             continue
-        db.upsert_case(
-            case_id=case_id,
-            run_id=run_id,
-            method=str(case.get("method", "")),
-            path=str(case.get("path", "")),
-            category=case.get("type"),
-            dispatch_id=batch_id,
-            state="queued",
-        )
+        # Do not clobber terminal state if case_done arrived before dispatch_start.
+        # Only seed when the row is absent; if it exists, fill dispatch_id if missing.
+        existing = db.get_case(run_id, case_id)
+        if existing is None:
+            db.upsert_case(
+                case_id=case_id,
+                run_id=run_id,
+                method=str(case.get("method", "")),
+                path=str(case.get("path", "")),
+                category=case.get("type"),
+                dispatch_id=batch_id,
+                state="queued",
+            )
+        elif existing.dispatch_id is None:
+            # Link orphan to this dispatch; preserve everything else.
+            db.upsert_case(
+                case_id=case_id,
+                run_id=run_id,
+                method=existing.method or str(case.get("method", "")),
+                path=existing.path or str(case.get("path", "")),
+                category=existing.category or case.get("type"),
+                dispatch_id=batch_id,
+                state=existing.state,
+                result=existing.result,
+                finding_id=existing.finding_id,
+                started_at=existing.started_at,
+                finished_at=existing.finished_at,
+            )
+        # else: case exists and is already linked — leave it alone.
 
 
 def _apply_dispatch_done(run_id: int, payload: dict[str, Any]) -> None:
     batch_id = str(payload.get("batch", ""))
     if not batch_id:
         return
+    new_state = str(payload.get("state", "done"))
+    finished_ts = int(time.time())
     existing = db.get_dispatch(run_id, batch_id)
     if existing is None:
+        # dispatch_done arrived before dispatch_start (async out-of-order delivery
+        # or dropped emit). Create a minimal terminal row so the completion
+        # survives; a later dispatch_start will fill metadata without resetting.
+        db.upsert_dispatch(
+            dispatch_id=batch_id,
+            run_id=run_id,
+            phase="",
+            round=0,
+            agent="",
+            slot="",
+            task=None,
+            state=new_state,
+            started_at=None,
+            finished_at=finished_ts,
+        )
         return
     db.upsert_dispatch(
         dispatch_id=batch_id,
@@ -80,9 +127,9 @@ def _apply_dispatch_done(run_id: int, payload: dict[str, Any]) -> None:
         agent=existing.agent,
         slot=existing.slot,
         task=existing.task,
-        state=str(payload.get("state", "done")),
+        state=new_state,
         started_at=existing.started_at,
-        finished_at=int(time.time()),
+        finished_at=finished_ts,
     )
 
 
