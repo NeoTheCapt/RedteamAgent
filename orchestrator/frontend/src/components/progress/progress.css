@@ -233,3 +233,16 @@
 .case-chip__value { color: var(--c-text); }
 .case-chip__value--mono { font-family: var(--font-mono); }
 .case-chip__value--finding { color: var(--c-red); font-weight: var(--fw-semibold); }
+
+.progress__error {
+  position: absolute;
+  top: var(--sp-2);
+  right: var(--sp-4);
+  padding: var(--sp-2) var(--sp-3);
+  background: rgba(255, 106, 133, 0.16);
+  color: var(--c-red);
+  border: 1px solid rgba(255, 106, 133, 0.32);
+  border-radius: var(--r-sm);
+  font-size: var(--fs-sm);
+  z-index: 10;
+}
