@@ -14,7 +14,6 @@ type ShellPageProps = {
   projects: Project[];
   runsByProject: Record<number, Run[]>;
   onLogout: () => void;
-  onRefreshProjects: () => Promise<void>;
   onCreateRun: (projectId: number, target: string) => Promise<void>;
 };
 
@@ -65,7 +64,6 @@ export function ShellPage(props: ShellPageProps) {
       : null;
 
   const runKey = selected ? `${selected.__projectId}:${selected.id}` : null;
-  const routeTab = route.kind === "run" ? route.tab : null;
 
   useEffect(() => {
     if (!selected) {
@@ -77,7 +75,7 @@ export function ShellPage(props: ShellPageProps) {
       .then((s) => { if (!cancelled) setSummary(s); })
       .catch(() => { if (!cancelled) setSummary(null); });
     return () => { cancelled = true; };
-  }, [token, runKey, routeTab]);
+  }, [token, runKey]);
 
   const runtimeLabel = selected && summary
     ? `updated ${new Date(summary.overview.updated_at).toLocaleTimeString()}`

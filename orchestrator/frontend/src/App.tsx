@@ -39,26 +39,6 @@ export default function App() {
     navigate("/");
   }, []);
 
-  const refreshProjects = useCallback(async () => {
-    if (!session) return;
-    try {
-      const nextProjects = await listProjects(session.token);
-      setProjects(nextProjects);
-      const entries = await Promise.all(
-        nextProjects.map(
-          async (project) => [project.id, await listRuns(session.token, project.id)] as const,
-        ),
-      );
-      setRunsByProject(Object.fromEntries(entries));
-    } catch (error) {
-      if (error instanceof ApiError && error.status === 401) {
-        expireSession();
-        return;
-      }
-      throw error;
-    }
-  }, [session, expireSession]);
-
   useEffect(() => {
     if (!session) {
       setProjects([]);
@@ -139,7 +119,6 @@ export default function App() {
       projects={projects}
       runsByProject={runsByProject}
       onLogout={expireSession}
-      onRefreshProjects={refreshProjects}
       onCreateRun={handleCreateRun}
     />
   );
