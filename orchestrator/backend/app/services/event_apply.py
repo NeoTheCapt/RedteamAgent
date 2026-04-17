@@ -99,13 +99,24 @@ def _apply_case_done(run_id: int, payload: dict[str, Any]) -> None:
     method = existing.method if existing else ""
     path = existing.path if existing else ""
 
+    # FK safety: the cases table has ON DELETE SET NULL FK into dispatches(run_id, id).
+    # If dispatch_start hasn't been applied yet (async out-of-order delivery,
+    # dropped emit, retry window), setting dispatch_id would trigger an
+    # IntegrityError. Drop the reference in that case so the case row still lands.
+    dispatch_id_raw = payload.get("dispatch")
+    dispatch_id: str | None = None
+    if dispatch_id_raw:
+        dispatch_id_str = str(dispatch_id_raw)
+        if db.get_dispatch(run_id, dispatch_id_str) is not None:
+            dispatch_id = dispatch_id_str
+
     db.upsert_case(
         case_id=case_id,
         run_id=run_id,
         method=method,
         path=path,
         category=payload.get("type") or (existing.category if existing else None),
-        dispatch_id=payload.get("dispatch"),
+        dispatch_id=dispatch_id,
         state=state,
         result=payload.get("detail") or payload.get("result"),
         finished_at=int(time.time()),
