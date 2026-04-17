@@ -365,3 +365,18 @@
   cursor: pointer;
 }
 .sidebar__logout:hover { color: var(--c-text); border-color: var(--c-border-strong); }
+
+.run-panel__stop {
+  background: rgba(255, 106, 133, 0.12);
+  color: var(--c-red);
+  border: 1px solid rgba(255, 106, 133, 0.32);
+  padding: 5px 12px;
+  border-radius: var(--r-sm);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+  font-weight: var(--fw-semibold);
+}
+
+.run-panel__stop:hover {
+  background: rgba(255, 106, 133, 0.24);
+}
