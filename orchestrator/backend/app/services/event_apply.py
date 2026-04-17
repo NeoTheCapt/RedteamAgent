@@ -54,15 +54,35 @@ def _apply_dispatch_start(run_id: int, phase: str, payload: dict[str, Any]) -> N
             case_id = int(case["id"])
         except (KeyError, TypeError, ValueError):
             continue
-        db.upsert_case(
-            case_id=case_id,
-            run_id=run_id,
-            method=str(case.get("method", "")),
-            path=str(case.get("path", "")),
-            category=case.get("type"),
-            dispatch_id=batch_id,
-            state="queued",
-        )
+        # Do not clobber terminal state if case_done arrived before dispatch_start.
+        # Only seed when the row is absent; if it exists, fill dispatch_id if missing.
+        existing = db.get_case(run_id, case_id)
+        if existing is None:
+            db.upsert_case(
+                case_id=case_id,
+                run_id=run_id,
+                method=str(case.get("method", "")),
+                path=str(case.get("path", "")),
+                category=case.get("type"),
+                dispatch_id=batch_id,
+                state="queued",
+            )
+        elif existing.dispatch_id is None:
+            # Link orphan to this dispatch; preserve everything else.
+            db.upsert_case(
+                case_id=case_id,
+                run_id=run_id,
+                method=existing.method or str(case.get("method", "")),
+                path=existing.path or str(case.get("path", "")),
+                category=existing.category or case.get("type"),
+                dispatch_id=batch_id,
+                state=existing.state,
+                result=existing.result,
+                finding_id=existing.finding_id,
+                started_at=existing.started_at,
+                finished_at=existing.finished_at,
+            )
+        # else: case exists and is already linked — leave it alone.
 
 
 def _apply_dispatch_done(run_id: int, payload: dict[str, Any]) -> None:
