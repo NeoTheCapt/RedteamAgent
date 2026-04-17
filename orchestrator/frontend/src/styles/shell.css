@@ -380,3 +380,11 @@
 .run-panel__stop:hover {
   background: rgba(255, 106, 133, 0.24);
 }
+
+.run-panel__alert {
+  padding: var(--sp-2) var(--sp-5);
+  background: rgba(255, 184, 77, 0.12);
+  color: var(--c-amber);
+  font-size: var(--fs-sm);
+  border-top: 1px solid rgba(255, 184, 77, 0.32);
+}
