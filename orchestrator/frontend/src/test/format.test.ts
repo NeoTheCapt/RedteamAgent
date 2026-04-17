@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { formatDurationMs, formatRelativeTime, severityColor, percentage } from "../lib/format";
+import { formatDurationMs, formatRelativeTime, severityColor, percentage, parseServerTimestamp } from "../lib/format";
 
 describe("formatDurationMs", () => {
   it("returns dash for null", () => { expect(formatDurationMs(null)).toBe("—"); });
@@ -56,5 +56,29 @@ describe("percentage", () => {
   });
   it("computes exact values", () => {
     expect(percentage(50, 100)).toBe("50%");
+  });
+});
+
+describe("parseServerTimestamp", () => {
+  it("returns null for empty / null / undefined", () => {
+    expect(parseServerTimestamp("")).toBeNull();
+    expect(parseServerTimestamp(null)).toBeNull();
+    expect(parseServerTimestamp(undefined)).toBeNull();
+  });
+
+  it("parses ISO 8601", () => {
+    const d = parseServerTimestamp("2026-04-17T12:00:00Z");
+    expect(d).not.toBeNull();
+    expect(d!.toISOString()).toBe("2026-04-17T12:00:00.000Z");
+  });
+
+  it("coerces SQLite timestamps to UTC ISO", () => {
+    const d = parseServerTimestamp("2026-04-17 12:00:00");
+    expect(d).not.toBeNull();
+    expect(d!.toISOString()).toBe("2026-04-17T12:00:00.000Z");
+  });
+
+  it("returns null for garbage", () => {
+    expect(parseServerTimestamp("not a date")).toBeNull();
   });
 });

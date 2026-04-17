@@ -9,6 +9,7 @@ import { CasesTab } from "../components/cases/CasesTab";
 import { NewRunForm } from "../components/home/NewRunForm";
 import type { Project, Run, RunSummary } from "../lib/api";
 import { getRunSummary } from "../lib/api";
+import { parseServerTimestamp } from "../lib/format";
 
 type ShellPageProps = {
   token: string;
@@ -114,9 +115,12 @@ export function ShellPage(props: ShellPageProps) {
     };
   }, [token, runKey]);
 
-  const runtimeLabel = selected && summary
-    ? `updated ${new Date(summary.overview.updated_at).toLocaleTimeString()}`
-    : undefined;
+  const runtimeLabel = (() => {
+    if (!selected || !summary) return undefined;
+    const parsed = parseServerTimestamp(summary.overview.updated_at);
+    if (!parsed) return "not yet updated";
+    return `updated ${parsed.toLocaleTimeString()}`;
+  })();
 
   const tabCounts: Partial<Record<TabId, number | string>> | undefined = summary
     ? {
