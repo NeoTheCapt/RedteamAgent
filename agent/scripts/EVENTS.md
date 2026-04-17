@@ -100,8 +100,13 @@ After events land, the structured data is available via:
 - `GET /projects/:p/runs/:r/dispatches?phase=consume` — list of dispatch records.
 - `GET /projects/:p/runs/:r/cases?state=finding&method=GET&category=injection` — filterable case list.
 - `GET /projects/:p/runs/:r/cases/:case_id` — single case detail with `duration_ms`.
-- `GET /projects/:p/runs/:r/documents` — folder-scoped file tree (findings/intel/surface/artifacts/reports).
-- `GET /projects/:p/runs/:r/documents/{path:path}` — file content (text, ≤1 MB).
+- `GET /projects/:p/runs/:r/documents` — tree of engagement files grouped into
+  `findings` / `reports` / `intel` / `surface` / `other` buckets. Files are
+  categorized by filename convention (`findings.md`, `report.md`, `intel.md`,
+  `surfaces.jsonl`) or by top-level subdirectory. Sensitive files (`auth.json`,
+  `intel-secrets.json`) are omitted.
+- `GET /projects/:p/runs/:r/documents/{path:path}` — file content (text, ≤1 MB);
+  sensitive files return 404.
 
 See `docs/superpowers/specs/2026-04-17-orchestrator-refactor-design.md` for the
 full architectural context.
