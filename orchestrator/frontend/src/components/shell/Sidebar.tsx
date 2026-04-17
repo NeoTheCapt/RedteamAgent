@@ -29,7 +29,7 @@ export function Sidebar({
   runs, selectedRunId, onSelectRun, onNewRun, username, onLogout, projectIdForRun,
 }: SidebarProps) {
   const filter: StatusFilter = "all"; // Filter UI placeholder — wired in a later plan
-  const search = "";
+  const search: string = "";
 
   const visible = runs.filter((r) => {
     if (filter !== "all") {
