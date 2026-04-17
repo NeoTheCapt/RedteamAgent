@@ -25,8 +25,20 @@ function navigate(route: string) {
 
 export default function App() {
   const [session, setSession] = useState<SessionState | null>(() => {
-    const raw = window.localStorage.getItem(SESSION_STORAGE_KEY);
-    return raw ? (JSON.parse(raw) as SessionState) : null;
+    try {
+      const raw = window.localStorage.getItem(SESSION_STORAGE_KEY);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed.token === "string" && typeof parsed.username === "string") {
+        return parsed as SessionState;
+      }
+      return null;
+    } catch {
+      // Mangled localStorage entry — log and start fresh rather than white-screen.
+      console.warn("Invalid session payload; clearing.");
+      window.localStorage.removeItem(SESSION_STORAGE_KEY);
+      return null;
+    }
   });
   const [projects, setProjects] = useState<Project[]>([]);
   const [runsByProject, setRunsByProject] = useState<Record<number, Run[]>>({});
