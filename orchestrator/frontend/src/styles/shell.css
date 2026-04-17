@@ -226,7 +226,7 @@
 
 .sidebar__new-run {
   width: 100%;
-  background: linear-gradient(135deg, var(--c-hot), #e14626);
+  background: linear-gradient(135deg, var(--c-hot), var(--c-hot-dark));
   color: #fff;
   padding: var(--sp-3);
   border: none;
@@ -387,4 +387,10 @@
   color: var(--c-amber);
   font-size: var(--fs-sm);
   border-top: 1px solid rgba(255, 184, 77, 0.32);
+}
+
+.run-panel__ctx-right {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
 }
