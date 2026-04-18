@@ -40,6 +40,24 @@ def _serialize(c) -> dict:
     }
 
 
+def _merge_case(cases_db_row: dict, structured: dict) -> dict:
+    """Per-field merge: structured wins EXCEPT for empty/null fields.
+
+    When ``case_done`` arrives before ``dispatch_start``, ``event_apply``
+    creates a structured row with ``method=''`` and ``path=''``.  A plain
+    "structured wins wholesale" merge would erase the real route data
+    already stored in cases.db.  This helper falls back to the cases.db
+    value for any field where the structured value is None or an empty
+    string.
+    """
+    merged = dict(cases_db_row)
+    for key, value in structured.items():
+        if value is None or (isinstance(value, str) and value == ""):
+            continue
+        merged[key] = value
+    return merged
+
+
 # Status mapping from the agent's cases.db status values to the structured schema states.
 _AGENT_STATUS_TO_STATE: dict[str, str] = {
     "done": "done",
@@ -50,13 +68,22 @@ _AGENT_STATUS_TO_STATE: dict[str, str] = {
 
 
 def _agent_db_row_to_api(payload: dict, fallback_case_id: int) -> dict:
-    """Convert a raw cases.db row dict to the API response shape."""
+    """Convert a raw cases.db row dict to the API response shape.
+
+    Prefers ``url_path`` (route-only) over ``url`` (absolute) for the
+    ``path`` field, falling back to ``url`` when ``url_path`` is absent
+    or empty.  This prevents the Cases tab from showing full absolute URLs
+    when the agent DB schema includes a dedicated ``url_path`` column.
+    """
     raw_status = str(payload.get("status") or "").strip().lower()
     state = _AGENT_STATUS_TO_STATE.get(raw_status, raw_status or "queued")
+    url_path = str(payload.get("url_path") or "").strip()
+    url_fallback = str(payload.get("url") or "").strip()
+    path_value = url_path or url_fallback
     return {
         "case_id": int(payload.get("id") or fallback_case_id),
         "method": str(payload.get("method") or "GET").strip() or "GET",
-        "path": str(payload.get("url") or "").strip(),
+        "path": path_value,
         "category": str(payload.get("type") or "").strip() or None,
         "dispatch_id": None,
         "state": state,
@@ -74,13 +101,15 @@ def _read_case_from_agent_db(cases_db_path: Path, case_id: int) -> dict | None:
     Mirrors ``_read_cases_from_agent_db`` but adds a WHERE id=? filter and
     returns one dict (in the API shape) or None when the row is absent.
     Uses ``_read_sqlite_with_fallback`` to handle WAL-locked databases.
+    Selects ``url_path`` when present so the ``path`` field prefers the
+    route-only value over the absolute URL.
     """
     def _reader(conn: sqlite3.Connection) -> tuple | None:
         col_rows = conn.execute("PRAGMA table_info(cases)").fetchall()
         col_names = {str(r[1]) for r in col_rows}
         if not col_names:
             return None
-        select = [c for c in ("id", "method", "url", "type", "status") if c in col_names]
+        select = [c for c in ("id", "method", "url_path", "url", "type", "status") if c in col_names]
         if not select:
             return None
         row = conn.execute(
@@ -112,7 +141,7 @@ def _read_cases_from_agent_db(cases_db_path: Path) -> list[dict]:
         col_names = {str(r[1]) for r in col_rows}
         if not col_names:
             return None
-        select = [c for c in ("id", "method", "url", "type", "status") if c in col_names]
+        select = [c for c in ("id", "method", "url_path", "url", "type", "status") if c in col_names]
         if not select:
             return None
         rows = conn.execute(
@@ -167,13 +196,19 @@ def list_cases(
         pass
 
     # Merge: cases.db provides the base set; structured rows overlay with richer
-    # metadata.  Structured wins for all fields (it has more detail); cases.db
-    # contributes rows that are absent from the structured table entirely.
+    # metadata.  Per-field merge: structured wins only when its value is
+    # non-empty/non-null.  This handles the out-of-order case where a
+    # case_done event arrives before dispatch_start, causing the structured
+    # row to have blank method/path placeholders that would otherwise
+    # overwrite the real route data from cases.db.
     merged: dict[int, dict] = {}
     for row in cases_db_rows:
         merged[row["case_id"]] = row
     for case_id, case in structured.items():
-        merged[case_id] = case
+        if case_id in merged:
+            merged[case_id] = _merge_case(merged[case_id], case)
+        else:
+            merged[case_id] = case
 
     if not merged:
         return []
@@ -205,18 +240,26 @@ def get_case(
     if run is None or run.project_id != project.id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
     c = db.get_case(run.id, case_id)
-    if c is None:
-        # Fall back to agent cases.db (same pattern as list_cases).
-        run_root = Path(run.engagement_root)
-        try:
-            active_root = _active_engagement_root(run_root)
-            cases_db_path = _resolve_cases_db(run_root, active_root)
-        except Exception:
-            cases_db_path = None
-        if cases_db_path is not None:
-            fallback = _read_case_from_agent_db(cases_db_path, case_id)
-            if fallback is not None:
-                return fallback
-    if c is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Case not found")
-    return _serialize(c)
+
+    # Always attempt to read the cases.db row so we can merge it with the
+    # structured row.  This handles the out-of-order case_done-before-
+    # dispatch_start scenario where the structured row has blank method/path.
+    run_root = Path(run.engagement_root)
+    cases_db_row: dict | None = None
+    try:
+        active_root = _active_engagement_root(run_root)
+        cases_db_path = _resolve_cases_db(run_root, active_root)
+        cases_db_row = _read_case_from_agent_db(cases_db_path, case_id)
+    except Exception:
+        pass
+
+    if c is not None:
+        serialized = _serialize(c)
+        if cases_db_row is not None:
+            return _merge_case(cases_db_row, serialized)
+        return serialized
+
+    # Structured row absent — fall back to cases.db only.
+    if cases_db_row is not None:
+        return cases_db_row
+    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Case not found")
