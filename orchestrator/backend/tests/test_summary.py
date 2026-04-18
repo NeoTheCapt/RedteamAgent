@@ -3089,3 +3089,105 @@ def test_summary_counts_missing_outcomes_as_failed(isolate_data_dir):
     assert body["dispatches"]["done"] == 1
     # both "failed" and "missing_outcomes" count toward failed
     assert body["dispatches"]["failed"] == 2
+
+
+def test_run_summary_case_total_uses_cases_db_when_structured_is_partial():
+    """Bug 2: partial structured rows must not reduce the case total.
+
+    When the structured table has 5 rows but cases.db has 10 rows (5 overlap
+    + 5 db-only), the summary cases.total must be 10, not 5.
+    """
+    from app import db
+
+    client = TestClient(app)
+    token = register_and_login(client, "partial_sum")
+    project = create_project(client, token, name="PartialSum")
+    run_resp = create_run(client, token, project["id"], "https://target.example")
+    run = db.get_run_by_id(run_resp["id"])
+    active_dir = setup_active_engagement(run_resp)
+
+    (active_dir / "scope.json").write_text(
+        json.dumps({"hostname": "target.example", "status": "in_progress", "current_phase": "consume-test"}),
+        encoding="utf-8",
+    )
+
+    # Build cases.db with 10 rows (ids 1-10).
+    cases_db = active_dir / "cases.db"
+    with sqlite3.connect(cases_db) as connection:
+        connection.execute(
+            "CREATE TABLE cases (id INTEGER PRIMARY KEY, method TEXT, url TEXT, type TEXT, status TEXT)"
+        )
+        connection.executemany(
+            "INSERT INTO cases (id, method, url, type, status) VALUES (?, ?, ?, ?, ?)",
+            [
+                (i, "GET", f"/api/endpoint{i}", "api", "pending" if i > 5 else "done")
+                for i in range(1, 11)
+            ],
+        )
+        connection.commit()
+
+    # Insert only 5 structured rows (ids 1-5), simulating partial dispatch_start coverage.
+    for i in range(1, 6):
+        db.upsert_case(case_id=i, run_id=run.id, method="GET", path=f"/api/endpoint{i}",
+                       state="done")
+
+    r = client.get(f"/projects/{project['id']}/runs/{run_resp['id']}/summary",
+                   headers={"Authorization": f"Bearer {token}"})
+    assert r.status_code == 200
+    body = r.json()
+
+    # cases.total must reflect the full cases.db count, not the partial structured count.
+    assert body["cases"]["total"] == 10, (
+        f"Expected total=10 (from cases.db) but got {body['cases']['total']} "
+        "(structured partial rows leaked into total)"
+    )
+    # done count must be at least 5 (structured) — cases.db shows 5 done too.
+    assert body["cases"]["done"] >= 5
+
+
+def test_run_summary_case_total_uses_structured_when_cases_db_is_smaller():
+    """Bug 2 corollary: when structured has more rows than cases.db, use structured.
+
+    Verifies the fix doesn't regress the normal direction — structured should
+    win when it has a higher count (e.g. cases.db was cleaned up but structured
+    retains historical rows).
+    """
+    from app import db
+
+    client = TestClient(app)
+    token = register_and_login(client, "struct_larger")
+    project = create_project(client, token, name="StructLarger")
+    run_resp = create_run(client, token, project["id"], "https://target.example")
+    run = db.get_run_by_id(run_resp["id"])
+    active_dir = setup_active_engagement(run_resp)
+
+    (active_dir / "scope.json").write_text(
+        json.dumps({"hostname": "target.example", "status": "in_progress", "current_phase": "consume-test"}),
+        encoding="utf-8",
+    )
+
+    # cases.db has only 3 rows; structured has 8.
+    cases_db = active_dir / "cases.db"
+    with sqlite3.connect(cases_db) as connection:
+        connection.execute(
+            "CREATE TABLE cases (id INTEGER PRIMARY KEY, method TEXT, url TEXT, type TEXT, status TEXT)"
+        )
+        connection.executemany(
+            "INSERT INTO cases (id, method, url, type, status) VALUES (?, ?, ?, ?, ?)",
+            [(i, "GET", f"/api/ep{i}", "api", "done") for i in range(1, 4)],
+        )
+        connection.commit()
+
+    for i in range(1, 9):
+        db.upsert_case(case_id=i, run_id=run.id, method="GET", path=f"/api/ep{i}",
+                       state="done")
+
+    r = client.get(f"/projects/{project['id']}/runs/{run_resp['id']}/summary",
+                   headers={"Authorization": f"Bearer {token}"})
+    assert r.status_code == 200
+    body = r.json()
+
+    # cases.db has 3, structured has 8 — should use structured (8 >= 3).
+    assert body["cases"]["total"] == 8, (
+        f"Expected total=8 (from structured) but got {body['cases']['total']}"
+    )

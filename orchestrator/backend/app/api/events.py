@@ -34,9 +34,18 @@ class EventResponse(BaseModel):
     agent_name: str
     summary: str
     created_at: str
+    kind: str | None = None
+    level: str | None = None
+    payload: dict[str, Any] | None = None
 
 
 def _event_response(event: Event) -> EventResponse:
+    try:
+        payload_data: dict[str, Any] | None = json.loads(event.payload_json) if event.payload_json else None
+        if payload_data == {}:
+            payload_data = None
+    except (json.JSONDecodeError, AttributeError):
+        payload_data = None
     return EventResponse(
         id=event.id,
         event_type=event.event_type,
@@ -45,6 +54,9 @@ def _event_response(event: Event) -> EventResponse:
         agent_name=event.agent_name,
         summary=event.summary,
         created_at=event.created_at,
+        kind=event.kind if event.kind not in (None, "", "legacy") else None,
+        level=event.level if event.level not in (None, "", "info") else None,
+        payload=payload_data,
     )
 
 

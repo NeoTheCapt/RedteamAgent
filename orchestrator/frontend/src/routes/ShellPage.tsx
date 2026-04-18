@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Sidebar } from "../components/shell/Sidebar";
 import { RunPanel } from "../components/shell/RunPanel";
 import { TabNav, type TabId } from "../components/shell/TabNav";
@@ -6,9 +6,11 @@ import { EmptyTab } from "../components/shell/EmptyTab";
 import { DashboardTab } from "../components/dashboard/DashboardTab";
 import { ProgressTab } from "../components/progress/ProgressTab";
 import { CasesTab } from "../components/cases/CasesTab";
+import { DocumentsTab } from "../components/documents/DocumentsTab";
+import { EventsTab } from "../components/events/EventsTab";
 import { NewRunForm } from "../components/home/NewRunForm";
 import type { Project, Run, RunSummary } from "../lib/api";
-import { getRunSummary } from "../lib/api";
+import { getRunSummary, stopRun } from "../lib/api";
 import { parseServerTimestamp } from "../lib/format";
 
 type ShellPageProps = {
@@ -78,13 +80,23 @@ export function ShellPage(props: ShellPageProps) {
       : null;
 
   const runKey = selected ? `${selected.__projectId}:${selected.id}` : null;
+  const prevRunKeyRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (!selected) {
       setSummary(null);
       setSummaryError(null);
+      prevRunKeyRef.current = null;
       return;
     }
+    // If this is a DIFFERENT run than last time, clear summary immediately so
+    // the previous run's data doesn't persist until the new run's first fetch.
+    if (prevRunKeyRef.current !== runKey) {
+      setSummary(null);
+      setSummaryError(null);
+    }
+    prevRunKeyRef.current = runKey;
+
     let cancelled = false;
     const currentRun = selected;
 
@@ -130,6 +142,15 @@ export function ShellPage(props: ShellPageProps) {
       }
     : undefined;
 
+  async function handleStop(projectId: number, runId: number) {
+    try {
+      await stopRun(token, projectId, runId);
+      // Optimistic refetch — the sidebar polls every 5s anyway.
+    } catch (err) {
+      console.warn("stop failed:", err);
+    }
+  }
+
   function renderTab(tab: TabId) {
     if (!selected || !summary) return <EmptyTab label="Loading run..." note="Fetching summary data." />;
     switch (tab) {
@@ -153,9 +174,9 @@ export function ShellPage(props: ShellPageProps) {
           />
         );
       case "documents":
-        return <EmptyTab label="Documents" note="Document browser arrives in Plan 4." />;
+        return <DocumentsTab token={token} projectId={selected.__projectId} runId={selected.id} />;
       case "events":
-        return <EmptyTab label="Events" note="Live event stream arrives in Plan 4." />;
+        return <EventsTab token={token} projectId={selected.__projectId} runId={selected.id} />;
     }
   }
 
@@ -182,8 +203,8 @@ export function ShellPage(props: ShellPageProps) {
           <RunPanel
             run={selected}
             runtimeLabel={runtimeLabel}
-            currentPhase={summary?.overview.current_phase}
-            onStop={undefined}
+            currentPhase={summary?.overview.current_phase ?? null}
+            onStop={() => void handleStop(selected.__projectId, selected.id)}
           >
             {summaryError && summary && (
               <div className="run-panel__alert" role="alert">

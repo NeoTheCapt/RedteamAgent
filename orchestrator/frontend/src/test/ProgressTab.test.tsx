@@ -43,10 +43,10 @@ describe("ProgressTab", () => {
   it("groups dispatches into their phase columns", async () => {
     mockDispatches.mockResolvedValue([
       { id: "d1", phase: "recon", round: 0, agent: "recon-specialist",
-        slot: "0", task: "nmap", state: "done",
+        slot: "s0", task: "nmap", state: "done",
         started_at: 1000, finished_at: 1100, error: null },
       { id: "d2", phase: "consume", round: 1, agent: "vuln-analyst",
-        slot: "0", task: "SQLi probes", state: "running",
+        slot: "s0", task: "SQLi probes", state: "running",
         started_at: 2000, finished_at: null, error: null },
     ]);
     mockCases.mockResolvedValue([]);
@@ -61,7 +61,7 @@ describe("ProgressTab", () => {
   it("shows case chips inside their dispatch card", async () => {
     mockDispatches.mockResolvedValue([
       { id: "d1", phase: "consume", round: 1, agent: "vuln-analyst",
-        slot: "0", task: null, state: "running",
+        slot: "s0", task: null, state: "running",
         started_at: 1000, finished_at: null, error: null },
     ]);
     mockCases.mockResolvedValue([
@@ -84,7 +84,7 @@ describe("ProgressTab", () => {
 
   it("expands a case chip on click", async () => {
     mockDispatches.mockResolvedValue([
-      { id: "d1", phase: "consume", round: 1, agent: "v", slot: "0",
+      { id: "d1", phase: "consume", round: 1, agent: "v", slot: "s0",
         task: null, state: "running", started_at: 1, finished_at: null, error: null },
     ]);
     mockCases.mockResolvedValue([
@@ -118,7 +118,7 @@ describe("ProgressTab", () => {
 
   it("renders orphaned (dispatch_id=null) cases as unassigned in the active phase", async () => {
     mockDispatches.mockResolvedValue([
-      { id: "d1", phase: "consume", round: 1, agent: "v", slot: "0",
+      { id: "d1", phase: "consume", round: 1, agent: "v", slot: "s0",
         task: null, state: "running", started_at: 1, finished_at: null, error: null },
     ]);
     mockCases.mockResolvedValue([
@@ -140,5 +140,27 @@ describe("ProgressTab", () => {
     expect(screen.getByText("unassigned")).toBeInTheDocument();
     // Normal case also rendered
     expect(screen.getByText("/api/normal")).toBeInTheDocument();
+  });
+
+  it("renders slot label as :s0 not :ss0 when parallel_dispatch emits s-prefixed slot ids", async () => {
+    // parallel_dispatch.sh emits slot="s0", "s1", etc.  DispatchCard must render
+    // ":s0" — not ":ss0" (the double-prefix bug fixed in this patch).
+    mockDispatches.mockResolvedValue([
+      { id: "d1", phase: "consume", round: 1, agent: "vuln-analyst",
+        slot: "s0", task: null, state: "running",
+        started_at: 1000, finished_at: null, error: null },
+      { id: "d2", phase: "consume", round: 1, agent: "vuln-analyst",
+        slot: "s1", task: null, state: "running",
+        started_at: 1000, finished_at: null, error: null },
+    ]);
+    mockCases.mockResolvedValue([]);
+
+    render(<ProgressTab token="t" projectId={1} runId={2} currentPhase="consume" />);
+    await waitFor(() => {
+      expect(screen.getByText(":s0")).toBeInTheDocument();
+      expect(screen.getByText(":s1")).toBeInTheDocument();
+      expect(screen.queryByText(":ss0")).not.toBeInTheDocument();
+      expect(screen.queryByText(":ss1")).not.toBeInTheDocument();
+    });
   });
 });

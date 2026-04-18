@@ -57,4 +57,27 @@ describe("useAutoRefresh", () => {
     expect(receivedSignal).not.toBeNull();
     expect(receivedSignal!.aborted).toBe(false);
   });
+
+  it("pauses while document.visibilityState is hidden", async () => {
+    const fetcher = vi.fn().mockResolvedValue(undefined);
+    const original = Object.getOwnPropertyDescriptor(Document.prototype, "visibilityState");
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true, get: () => "hidden",
+    });
+    try {
+      renderHook(() =>
+        useAutoRefresh(fetcher, [], { intervalMs: 1000 }),
+      );
+      // First call is blocked — visibility hidden at mount.
+      await Promise.resolve();
+      expect(fetcher).not.toHaveBeenCalled();
+
+      // Still hidden: interval ticks are skipped.
+      act(() => { vi.advanceTimersByTime(5000); });
+      await Promise.resolve();
+      expect(fetcher).not.toHaveBeenCalled();
+    } finally {
+      if (original) Object.defineProperty(Document.prototype, "visibilityState", original);
+    }
+  });
 });

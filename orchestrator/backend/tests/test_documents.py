@@ -14,8 +14,10 @@ def _build_engagement(run_root, eng_id="eng-001"):
 
     Mirrors the launcher layout: run_root/workspace/engagements/<eng_id>/ with
     flat artifact files (findings.md, report.md, intel.md, surfaces.jsonl,
-    scope.json, log.md) plus sensitive files that must be hidden and a nested
-    runtime/ subfolder.
+    scope.json, log.md) plus sensitive files that must be hidden.
+
+    runtime/process.log lives at run_root/runtime/process.log (NOT inside the
+    engagement dir) — this matches the real launcher layout.
 
     Returns the active engagement directory path.
     """
@@ -27,8 +29,9 @@ def _build_engagement(run_root, eng_id="eng-001"):
     (eng_dir / "report.md").write_text("# report body")
     (eng_dir / "intel.md").write_text("# intel body")
     (eng_dir / "surfaces.jsonl").write_text('{"route":"/x"}\n')
-    (eng_dir / "runtime").mkdir()
-    (eng_dir / "runtime" / "process.log").write_text("proc output")
+    # runtime/process.log lives at the run_root level, not inside the engagement dir
+    (run_root / "runtime").mkdir(exist_ok=True)
+    (run_root / "runtime" / "process.log").write_text("proc output")
     # Sensitive files MUST be omitted from listings
     (eng_dir / "intel-secrets.json").write_text('{"key":"secret"}')
     (eng_dir / "auth.json").write_text('{"token":"x"}')
@@ -271,3 +274,84 @@ def test_documents_missing_engagement_returns_empty(isolate_data_dir):
     tree = r.json()
     for bucket in ("findings", "reports", "intel", "surface", "other"):
         assert tree[bucket] == []
+
+
+def test_runtime_allowlist_exact_match_rejects_unlisted_runtime_files(isolate_data_dir):
+    """Bug 1: runtime/ prefix-dir match was allowing ANY file under runtime/.
+    The fix uses exact-path matching against _RUN_ROOT_PREFIXES.
+    process.json is NOT in ARTIFACT_SPECS so it must be excluded from listing
+    and return 404 on GET."""
+    client = TestClient(app)
+    token = _register(client, "d_exact")
+    user = db.get_user_by_username("d_exact")
+
+    run_root = isolate_data_dir / "run_exact"
+    run_root.mkdir()
+    _build_engagement(run_root)
+
+    # Also create runtime/process.json — NOT in ARTIFACT_SPECS
+    (run_root / "runtime").mkdir(exist_ok=True)
+    (run_root / "runtime" / "process.json").write_text('{"pid": 123}')
+
+    proj = db.create_project(user_id=user.id, name="d_exact", slug="d_exact",
+                             root_path=str(isolate_data_dir))
+    run = db.create_run(project_id=proj.id, target="http://x",
+                        status="running", engagement_root=str(run_root))
+
+    # Listing: process.log appears but process.json does NOT
+    r = client.get(f"/projects/{proj.id}/runs/{run.id}/documents",
+                   headers={"Authorization": f"Bearer {token}"})
+    assert r.status_code == 200
+    tree = r.json()
+    all_paths = {e["path"] for entries in tree.values() for e in entries}
+    assert "runtime/process.log" in all_paths
+    assert "runtime/process.json" not in all_paths
+
+    # GET process.log succeeds
+    r2 = client.get(f"/projects/{proj.id}/runs/{run.id}/documents/runtime/process.log",
+                    headers={"Authorization": f"Bearer {token}"})
+    assert r2.status_code == 200
+
+    # GET process.json returns 404 (not in allowlist)
+    r3 = client.get(f"/projects/{proj.id}/runs/{run.id}/documents/runtime/process.json",
+                    headers={"Authorization": f"Bearer {token}"})
+    assert r3.status_code == 404
+
+
+def test_list_and_get_runtime_process_log_at_run_root_level(isolate_data_dir):
+    """runtime/process.log must be listed and readable when it lives at run_root level
+    (sibling of workspace/, NOT nested inside the engagement dir)."""
+    client = TestClient(app)
+    token = _register(client, "d_runtime")
+    user = db.get_user_by_username("d_runtime")
+
+    run_root = isolate_data_dir / "run_runtime"
+    run_root.mkdir()
+
+    # Build engagement WITHOUT runtime/ inside it; place process.log at run_root level.
+    eng_dir = run_root / "workspace" / "engagements" / "eng-rt"
+    eng_dir.mkdir(parents=True)
+    (eng_dir / "scope.json").write_text('{"current_phase":"report"}')
+    (eng_dir / "findings.md").write_text("# findings")
+    (run_root / "workspace" / "engagements" / ".active").write_text("engagements/eng-rt")
+    (run_root / "runtime").mkdir()
+    (run_root / "runtime" / "process.log").write_text("runtime log content")
+
+    proj = db.create_project(user_id=user.id, name="d_runtime", slug="d_runtime",
+                             root_path=str(isolate_data_dir))
+    run = db.create_run(project_id=proj.id, target="http://x",
+                        status="running", engagement_root=str(run_root))
+
+    # Listing: runtime/process.log appears in the other bucket
+    r = client.get(f"/projects/{proj.id}/runs/{run.id}/documents",
+                   headers={"Authorization": f"Bearer {token}"})
+    assert r.status_code == 200
+    tree = r.json()
+    other_paths = {e["path"] for e in tree["other"]}
+    assert "runtime/process.log" in other_paths
+
+    # Get: content is readable
+    r2 = client.get(f"/projects/{proj.id}/runs/{run.id}/documents/runtime/process.log",
+                    headers={"Authorization": f"Bearer {token}"})
+    assert r2.status_code == 200
+    assert r2.json()["content"] == "runtime log content"

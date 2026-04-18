@@ -13,11 +13,11 @@ type ProgressTabProps = {
 };
 
 const CANONICAL_PHASES: { phase: string; label: string; match: (p: string) => boolean }[] = [
-  { phase: "recon",    label: "Recon",        match: (p) => /recon/i.test(p) },
-  { phase: "collect",  label: "Collect",      match: (p) => /collect/i.test(p) },
-  { phase: "consume",  label: "Consume-Test", match: (p) => /consume/i.test(p) },
-  { phase: "exploit",  label: "Exploit",      match: (p) => /exploit/i.test(p) },
-  { phase: "report",   label: "Report",       match: (p) => /report/i.test(p) },
+  { phase: "recon",    label: "Recon",        match: (p) => /^recon(?:$|[-_])/i.test(p) },
+  { phase: "collect",  label: "Collect",      match: (p) => /^collect(?:$|[-_])/i.test(p) },
+  { phase: "consume",  label: "Consume-Test", match: (p) => /^consume(?:$|[-_])/i.test(p) },
+  { phase: "exploit",  label: "Exploit",      match: (p) => /^exploit(?:$|[-_])/i.test(p) },
+  { phase: "report",   label: "Report",       match: (p) => /^report(?:$|[-_])/i.test(p) },
 ];
 
 function normalizePhase(raw: string): string {

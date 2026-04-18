@@ -127,6 +127,9 @@ export type EventRecord = {
   agent_name: string;
   summary: string;
   created_at: string;
+  kind?: string | null;
+  level?: string | null;
+  payload?: Record<string, unknown> | null;
 };
 
 export type Artifact = {
@@ -353,6 +356,14 @@ export function deleteRun(token: string, projectId: number, runId: number) {
   return request<void>(`/projects/${projectId}/runs/${runId}`, {
     method: "DELETE",
   }, token);
+}
+
+export function stopRun(token: string, projectId: number, runId: number): Promise<Run> {
+  return request<Run>(
+    `/projects/${projectId}/runs/${runId}/status`,
+    { method: "POST", body: JSON.stringify({ status: "stopped" }) },
+    token,
+  );
 }
 
 export function listEvents(token: string, projectId: number, runId: number) {

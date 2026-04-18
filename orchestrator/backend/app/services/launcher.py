@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import fnmatch
 import json
 import os
 import re
@@ -2560,7 +2561,34 @@ def _continuous_observation_target_matches(run: Run) -> bool:
         if scope_hostname:
             candidates.add(scope_hostname)
 
-    return any(rule.strip() in candidates for rule in re.split(r"[;,]", configured) if rule.strip())
+    patterns = [rule.strip() for rule in re.split(r"[;,]", configured) if rule.strip()]
+    return any(_matches_continuous_target(candidate, patterns) for candidate in candidates)
+
+
+def _matches_continuous_target(hostname: str, patterns: list[str]) -> bool:
+    """Return True if ``hostname`` matches any of the configured target patterns.
+
+    Supports three match modes, mirroring the shell logic in
+    ``agent/scripts/lib/scope.sh``:
+    - ``re:<regex>``  — Python ``re.search`` against hostname
+    - glob (``*``, ``?``, ``[…]``) — ``fnmatch.fnmatch``
+    - plain string   — exact equality
+    """
+    for pattern in patterns:
+        if not pattern:
+            continue
+        if pattern.startswith("re:"):
+            try:
+                if re.search(pattern[3:], hostname):
+                    return True
+            except re.error:
+                continue
+        elif any(c in pattern for c in ("*", "?", "[")):
+            if fnmatch.fnmatch(hostname, pattern):
+                return True
+        elif hostname == pattern:
+            return True
+    return False
 
 
 def _continuous_observation_report_hold_active(

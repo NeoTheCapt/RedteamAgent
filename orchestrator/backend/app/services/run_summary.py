@@ -1182,18 +1182,36 @@ def _summarize_existing_run(run: Run, project: Project, user: User) -> RunSummar
         "findings": sum(1 for c in case_rows if c.state == "finding"),
     }
 
-    # Legacy-run fallback: if structured cases table is empty but coverage
-    # has data (populated by the agent's own cases.db), backfill the KPI
-    # aggregate so historical runs don't show 0/0 in the dashboard.
-    if case_agg["total"] == 0 and int(cases.get("total_cases", 0)) > 0:
-        case_agg = {
-            "total":    int(cases.get("total_cases", 0)),
+    # Partial-structured fallback: if cases.db is present and has a larger
+    # total than the structured table, use cases.db as the authoritative
+    # queue size.  This prevents the dashboard from showing a count that is
+    # lower than the actual number of cases when only some dispatch_start
+    # events were received before the summary was requested.
+    #
+    # Also handles legacy runs where the structured table is empty entirely.
+    cases_db_total = int(cases.get("total_cases", 0))
+    if cases_db_total > case_agg["total"]:
+        # cases.db has more (or all) rows: use its totals as the base.
+        # Preserve structured counts for state buckets that are richer
+        # (done/running/findings) but fill the total from the agent DB.
+        cases_db_agg = {
+            "total":    cases_db_total,
             "done":     int(cases.get("completed_cases", 0)),
             "running":  int(cases.get("processing_cases", 0)),
             "queued":   int(cases.get("pending_cases", 0)),
             "error":    int(cases.get("error_cases", 0)),
-            "findings": 0,  # not derivable from coverage; legacy runs lose this
+            "findings": 0,  # not derivable from cases.db
         }
+        # For state buckets where the structured table has more detail
+        # (e.g. finding state, exact done counts), prefer structured when
+        # its per-bucket total fits within the cases_db total.
+        if case_agg["total"] > 0:
+            cases_db_agg["findings"] = case_agg["findings"]
+            # If structured done > cases_db done, trust structured (cases.db
+            # may lag behind on status updates).
+            if case_agg["done"] > cases_db_agg["done"]:
+                cases_db_agg["done"] = case_agg["done"]
+        case_agg = cases_db_agg
 
     return RunSummary(
         target=_build_target_card(run, scope, active_root),

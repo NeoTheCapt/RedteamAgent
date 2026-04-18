@@ -107,4 +107,56 @@ describe("NewRunForm", () => {
     await userEvent.click(screen.getByRole("button", { name: /\+ Create project/i }));
     expect(screen.getByPlaceholderText(/e.g. juice-shop-lab/i)).toBeInTheDocument();
   });
+
+  it("Enter in project-name input triggers createProject, not onCreateRun (launch)", async () => {
+    const onCreateProject = vi.fn().mockResolvedValue(undefined);
+    const onCreateRun = vi.fn().mockResolvedValue(undefined);
+    render(
+      <NewRunForm
+        projects={[]}
+        onCreateRun={onCreateRun}
+        onCreateProject={onCreateProject}
+      />,
+    );
+    // Create-project block is auto-expanded when projects=[].
+    const nameInput = screen.getByPlaceholderText(/e.g. juice-shop-lab/i);
+    await userEvent.type(nameInput, "my-project");
+    await userEvent.keyboard("{Enter}");
+    expect(onCreateProject).toHaveBeenCalledWith("my-project");
+    expect(onCreateRun).not.toHaveBeenCalled();
+  });
+
+  it("projectId syncs when projects arrive asynchronously after mount", async () => {
+    const onCreateRun = vi.fn().mockResolvedValue(undefined);
+    const { rerender } = render(
+      <NewRunForm
+        projects={[]}
+        onCreateRun={onCreateRun}
+        onCreateProject={vi.fn()}
+      />,
+    );
+    // Initially no projects — dropdown disabled, launch button disabled.
+    expect(screen.getByRole("combobox")).toBeDisabled();
+    expect(screen.getByRole("button", { name: /LAUNCH/i })).toBeDisabled();
+
+    // Projects arrive (async load).
+    rerender(
+      <NewRunForm
+        projects={[mkProject({ id: 42, name: "LateProject" })]}
+        onCreateRun={onCreateRun}
+        onCreateProject={vi.fn()}
+      />,
+    );
+
+    // Dropdown should now show the project and be enabled.
+    expect(screen.getByText("LateProject")).toBeInTheDocument();
+    expect(screen.getByRole("combobox")).not.toBeDisabled();
+
+    // Typing a target should enable Launch (use exact placeholder to avoid ambiguity
+    // with the project-name input that is also visible when projects was initially empty).
+    await userEvent.type(screen.getByPlaceholderText("http://juice-shop:8000"), "http://target");
+    expect(screen.getByRole("button", { name: /LAUNCH/i })).not.toBeDisabled();
+    await userEvent.click(screen.getByRole("button", { name: /LAUNCH/i }));
+    expect(onCreateRun).toHaveBeenCalledWith(42, "http://target");
+  });
 });

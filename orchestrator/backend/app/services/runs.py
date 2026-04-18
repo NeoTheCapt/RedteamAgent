@@ -45,7 +45,7 @@ from .launcher import (
     _auto_resume_stall_guard_active,
 )
 
-ALLOWED_STATUSES = {"queued", "running", "completed", "failed"}
+ALLOWED_STATUSES = {"queued", "running", "completed", "failed", "stopped"}
 RUN_STARTUP_GRACE_SECONDS = 90
 # The local fixed-target optimization loop only treats a live run as stale after
 # 15 minutes of confirmed buggy behavior. Keep the backend watchdog aligned with
@@ -382,6 +382,9 @@ def _reattach_live_runtime_supervisor(
 
 
 def _reconcile_run_status(run: Run, project: Project | None = None, user: User | None = None) -> Run:
+    # User-initiated stops must never be overwritten by reconciliation logic.
+    if run.status == "stopped":
+        return run
     normalize_active_scope(run)
     pid = locate_runtime_pid(run)
     completion_ok, completion_reason = engagement_completion_state(run)
@@ -774,6 +777,21 @@ def update_run_status(project_id: int, run_id: int, user: User, status_value: st
     run = db.get_run_by_id(run_id)
     if run is None or run.project_id != project.id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
+
+    if status_value == "stopped":
+        # Only a running run can transition to stopped.
+        # Already-terminal states (completed, failed, stopped) are no-ops.
+        # Queued runs never started, so there's nothing to stop — treat as no-op.
+        if run.status != "running":
+            return run
+        updated = db.update_run_status(run_id, "stopped")
+        _write_run_terminal_reason(
+            updated,
+            reason_code="user_stopped",
+            reason_text="Run stopped by operator.",
+        )
+        stop_run_runtime(updated)
+        return updated
 
     return db.update_run_status(run_id, status_value)
 

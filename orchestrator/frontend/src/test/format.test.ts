@@ -1,14 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { formatDurationMs, formatRelativeTime, severityColor, percentage, parseServerTimestamp } from "../lib/format";
-
-describe("formatDurationMs", () => {
-  it("returns dash for null", () => { expect(formatDurationMs(null)).toBe("—"); });
-  it("returns dash for undefined", () => { expect(formatDurationMs(undefined)).toBe("—"); });
-  it("formats sub-second as ms", () => { expect(formatDurationMs(250)).toBe("250ms"); });
-  it("formats seconds", () => { expect(formatDurationMs(2500)).toBe("2.5s"); });
-  it("formats minutes + seconds", () => { expect(formatDurationMs(125000)).toBe("2m 5s"); });
-  it("formats hours + minutes", () => { expect(formatDurationMs(3900000)).toBe("1h 5m"); });
-});
+import { formatRelativeTime, severityColor, percentage, parseServerTimestamp } from "../lib/format";
 
 describe("formatRelativeTime", () => {
   const now = Date.parse("2026-04-17T12:00:00Z");

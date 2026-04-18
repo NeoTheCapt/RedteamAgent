@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { Case } from "../../lib/api";
 import { getCase } from "../../lib/api";
+import { formatDuration } from "../../lib/formatDuration";
 
 type CaseSidePanelProps = {
   token: string;
@@ -73,7 +74,7 @@ export function CaseSidePanel({
           <dd>{data.finished_at !== null ? new Date(data.finished_at * 1000).toISOString() : "—"}</dd>
 
           <dt>Duration</dt>
-          <dd>{data.duration_ms !== null ? `${data.duration_ms}ms` : "—"}</dd>
+          <dd>{formatDuration(data.duration_ms)}</dd>
         </dl>
       )}
     </aside>

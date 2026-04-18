@@ -22,7 +22,7 @@ def apply(*, run_id: int, kind: str, phase: str, payload: dict[str, Any]) -> Non
     if kind == "dispatch_start":
         _apply_dispatch_start(run_id, phase, payload)
     elif kind == "dispatch_done":
-        _apply_dispatch_done(run_id, payload)
+        _apply_dispatch_done(run_id, phase, payload)
     elif kind == "case_done":
         _apply_case_done(run_id, payload)
     elif kind == "finding":
@@ -59,6 +59,7 @@ def _apply_dispatch_start(run_id: int, phase: str, payload: dict[str, Any]) -> N
         started_at=started_ts,
     )
     # Pre-seed case rows from the cases[] array (B2.1)
+    case_started_ts = started_ts  # use the dispatch's own started_at as case start time
     for case in payload.get("cases") or []:
         try:
             case_id = int(case["id"])
@@ -76,9 +77,24 @@ def _apply_dispatch_start(run_id: int, phase: str, payload: dict[str, Any]) -> N
                 category=case.get("type"),
                 dispatch_id=batch_id,
                 state="queued",
+                started_at=case_started_ts,
             )
         elif existing.dispatch_id is None:
             # Link orphan to this dispatch; preserve everything else.
+            # Compute started_at carefully:
+            # - If already set, preserve it (don't overwrite an existing timestamp).
+            # - If null and the case is already terminal (case_done arrived first),
+            #   only backfill if case_started_ts <= finished_at; otherwise the
+            #   backfill would produce a negative duration_ms, so leave it null.
+            # - If null and case is not yet terminal, backfill normally.
+            if existing.started_at is not None:
+                started_at = existing.started_at
+            elif existing.finished_at is not None and case_started_ts > existing.finished_at:
+                # Late dispatch_start stamped AFTER the case already finished —
+                # backfilling would yield negative duration. Leave as null.
+                started_at = None
+            else:
+                started_at = case_started_ts
             db.upsert_case(
                 case_id=case_id,
                 run_id=run_id,
@@ -89,13 +105,13 @@ def _apply_dispatch_start(run_id: int, phase: str, payload: dict[str, Any]) -> N
                 state=existing.state,
                 result=existing.result,
                 finding_id=existing.finding_id,
-                started_at=existing.started_at,
+                started_at=started_at,
                 finished_at=existing.finished_at,
             )
         # else: case exists and is already linked — leave it alone.
 
 
-def _apply_dispatch_done(run_id: int, payload: dict[str, Any]) -> None:
+def _apply_dispatch_done(run_id: int, phase: str, payload: dict[str, Any]) -> None:
     batch_id = str(payload.get("batch", ""))
     if not batch_id:
         return
@@ -106,10 +122,11 @@ def _apply_dispatch_done(run_id: int, payload: dict[str, Any]) -> None:
         # dispatch_done arrived before dispatch_start (async out-of-order delivery
         # or dropped emit). Create a minimal terminal row so the completion
         # survives; a later dispatch_start will fill metadata without resetting.
+        # Use the event's phase so the orphan row is not left with an empty phase.
         db.upsert_dispatch(
             dispatch_id=batch_id,
             run_id=run_id,
-            phase="",
+            phase=phase or "",
             round=0,
             agent="",
             slot="",

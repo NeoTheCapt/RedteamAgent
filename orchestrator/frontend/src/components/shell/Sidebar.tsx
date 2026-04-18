@@ -1,4 +1,5 @@
 import type { Run } from "../../lib/api";
+import { parseServerTimestamp } from "../../lib/format";
 
 type SidebarProps = {
   runs: Run[];
@@ -10,11 +11,12 @@ type SidebarProps = {
   projectIdForRun: (run: Run) => number;
 };
 
-function runStateClass(run: Run): "running" | "done" | "failed" | "queued" {
+function runStateClass(run: Run): "running" | "done" | "failed" | "queued" | "stopped" {
   const s = run.status.toLowerCase();
   if (s === "completed") return "done";
   if (s === "failed" || s === "error") return "failed";
   if (s === "queued" || s === "pending") return "queued";
+  if (s === "stopped") return "stopped";
   return "running";
 }
 
@@ -53,7 +55,7 @@ export function Sidebar({
                 </div>
                 <div className="sidebar__run-id">#r-{run.id}</div>
                 <time className="sidebar__run-meta" dateTime={run.updated_at}>
-                  updated {new Date(run.updated_at).toLocaleTimeString()}
+                  updated {parseServerTimestamp(run.updated_at)?.toLocaleTimeString() ?? "—"}
                 </time>
               </button>
             </li>
