@@ -510,7 +510,7 @@ start_katana() {
         "${scope_args[@]+"${scope_args[@]}"}" \
         "${auth_args[@]+"${auth_args[@]}"}" \
         -elog /engagement/scans/katana_error.log \
-        -o /engagement/scans/katana_output.jsonl
+        -o "$katana_output_path"
     echo "[katana] Started crawling $target"
 }
 
