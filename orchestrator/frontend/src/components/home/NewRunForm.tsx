@@ -1,4 +1,4 @@
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import type { Project } from "../../lib/api";
 import "./NewRunForm.css";
 
@@ -13,6 +13,15 @@ export function NewRunForm({ projects, onCreateRun, onCreateProject }: NewRunFor
   const [target, setTarget] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Sync projectId when projects arrive asynchronously (useState initializer
+  // only runs once, so if projects=[] on mount and populates later, projectId
+  // would stay "" without this effect).
+  useEffect(() => {
+    if (projectId === "" && projects.length > 0) {
+      setProjectId(projects[0].id);
+    }
+  }, [projects, projectId]);
 
   const [newProjectName, setNewProjectName] = useState("");
   const [creatingProject, setCreatingProject] = useState(false);
@@ -35,8 +44,7 @@ export function NewRunForm({ projects, onCreateRun, onCreateProject }: NewRunFor
     }
   }
 
-  async function onSubmitNewProject(e: FormEvent) {
-    e.preventDefault();
+  async function handleCreateProject() {
     const name = newProjectName.trim();
     if (!name) return;
     setCreatingProject(true);
@@ -85,6 +93,12 @@ export function NewRunForm({ projects, onCreateRun, onCreateProject }: NewRunFor
                 type="text"
                 value={newProjectName}
                 onChange={(e) => setNewProjectName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    void handleCreateProject();
+                  }
+                }}
                 placeholder="e.g. juice-shop-lab"
                 disabled={creatingProject}
               />
@@ -100,7 +114,7 @@ export function NewRunForm({ projects, onCreateRun, onCreateProject }: NewRunFor
               <button
                 type="button"
                 className="new-run__secondary"
-                onClick={onSubmitNewProject}
+                onClick={() => void handleCreateProject()}
                 disabled={creatingProject || !newProjectName.trim()}
               >
                 {creatingProject ? "Creating..." : "Create project"}

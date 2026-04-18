@@ -31,6 +31,7 @@ export function EventsTab({ token, projectId, runId }: EventsTabProps) {
   // the socket was reconnecting).
   useAutoRefresh(
     async (signal) => {
+      if (pausedRef.current) return;
       try {
         const seed = await listEvents(token, projectId, runId);
         if (signal.aborted) return;

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Sidebar } from "../components/shell/Sidebar";
 import { RunPanel } from "../components/shell/RunPanel";
 import { TabNav, type TabId } from "../components/shell/TabNav";
@@ -80,13 +80,23 @@ export function ShellPage(props: ShellPageProps) {
       : null;
 
   const runKey = selected ? `${selected.__projectId}:${selected.id}` : null;
+  const prevRunKeyRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (!selected) {
       setSummary(null);
       setSummaryError(null);
+      prevRunKeyRef.current = null;
       return;
     }
+    // If this is a DIFFERENT run than last time, clear summary immediately so
+    // the previous run's data doesn't persist until the new run's first fetch.
+    if (prevRunKeyRef.current !== runKey) {
+      setSummary(null);
+      setSummaryError(null);
+    }
+    prevRunKeyRef.current = runKey;
+
     let cancelled = false;
     const currentRun = selected;
 

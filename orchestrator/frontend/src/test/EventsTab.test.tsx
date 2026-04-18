@@ -94,6 +94,35 @@ describe("EventsTab", () => {
     expect(screen.queryByText("line-51")).toBeInTheDocument();
   });
 
+  it("pause freezes REST seed — new events from listEvents do not appear while paused", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+
+    // First call (initial seed) returns nothing; second call returns a new event.
+    mockListEvents.mockResolvedValueOnce([]);
+    const newEvent = mkEvent({ id: 99, summary: "seed-while-paused" });
+    mockListEvents.mockResolvedValue([newEvent]);
+
+    render(<EventsTab token="t" projectId={1} runId={2} />);
+
+    // Let initial seed settle.
+    await act(async () => { await Promise.resolve(); });
+
+    // Click Pause.
+    await userEvent.click(screen.getByRole("button", { name: /Pause/i }));
+
+    // Advance past the 15s REST poll interval.
+    await act(async () => {
+      vi.advanceTimersByTime(15_000);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // The event from the REST seed must NOT appear while paused.
+    expect(screen.queryByText("seed-while-paused")).not.toBeInTheDocument();
+
+    vi.useRealTimers();
+  });
+
   it("shows seed error banner when REST history fetch fails and clears it on recovery", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
 
