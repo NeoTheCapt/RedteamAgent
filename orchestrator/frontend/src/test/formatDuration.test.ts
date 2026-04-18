@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { formatDuration, formatDurationSince } from "../lib/formatDuration";
 
 describe("formatDuration", () => {
@@ -29,11 +29,10 @@ describe("formatDurationSince", () => {
     expect(formatDurationSince(null)).toBe("");
   });
   it("computes a live duration when endedSec is null", () => {
-    const now = Math.floor(Date.now() / 1000);
-    // Started 10 seconds ago
-    const result = formatDurationSince(now - 10);
-    // Will be "10.0s" or "9.0s" depending on rounding; allow either
-    expect(result).toMatch(/^(9|10|11)(\.\d)?s$/);
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(10_000_000));  // 10_000 sec
+    expect(formatDurationSince(9990)).toBe("10.0s");
+    vi.useRealTimers();
   });
   it("uses endedSec when provided", () => {
     expect(formatDurationSince(1000, 1065)).toBe("1m 5s");

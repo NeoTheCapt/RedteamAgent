@@ -1,15 +1,4 @@
-export function formatDurationMs(ms: number | null | undefined): string {
-  if (ms == null) return "—";
-  if (ms < 1000) return `${ms}ms`;
-  const s = ms / 1000;
-  if (s < 60) return `${s.toFixed(1)}s`;
-  const m = Math.floor(s / 60);
-  const sec = Math.round(s - m * 60);
-  if (m < 60) return `${m}m ${sec}s`;
-  const h = Math.floor(m / 60);
-  const min = m - h * 60;
-  return `${h}h ${min}m`;
-}
+export { formatDuration as formatDurationMs } from "./formatDuration";
 
 /**
  * Parse a timestamp that may be:

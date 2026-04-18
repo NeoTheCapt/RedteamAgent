@@ -29,7 +29,6 @@ export function formatDurationSince(
   endedSec: number | null | undefined = null,
 ): string {
   if (startedSec == null) return "";
-  const nowSec = Math.floor(Date.now() / 1000);
-  const end = endedSec ?? nowSec;
+  const end = endedSec ?? Math.floor(Date.now() / 1000);
   return formatDuration(Math.max(0, (end - startedSec) * 1000));
 }
