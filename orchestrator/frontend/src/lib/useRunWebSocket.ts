@@ -53,6 +53,18 @@ export function useRunWebSocket(
 
     async function connect() {
       if (cancelled) return;
+
+      // Guard so both onerror and onclose cannot both schedule a reconnect.
+      let reconnectScheduled = false;
+
+      function scheduleReconnect() {
+        if (cancelled || reconnectScheduled) return;
+        reconnectScheduled = true;
+        const delay = Math.min(8000, 2000 * Math.pow(2, Math.min(attempt, 2)));
+        attempt += 1;
+        reconnectTimer = window.setTimeout(() => void connect(), delay);
+      }
+
       try {
         const { ticket } = await createWebSocketTicket(token);
         if (cancelled) return;
@@ -68,21 +80,12 @@ export function useRunWebSocket(
           }
           onFrameRef.current(frame);
         };
-        ws.onclose = () => {
-          if (cancelled) return;
-          const delay = Math.min(8000, 2000 * Math.pow(2, Math.min(attempt, 2)));
-          attempt += 1;
-          reconnectTimer = window.setTimeout(() => void connect(), delay);
-        };
-        ws.onerror = () => {
-          // close handler will reconnect
-        };
+        ws.onclose = () => { scheduleReconnect(); };
+        ws.onerror = () => { scheduleReconnect(); };
       } catch (err) {
         if (cancelled) return;
         console.warn("[useRunWebSocket] ticket or open failed:", err);
-        const delay = Math.min(8000, 2000 * Math.pow(2, Math.min(attempt, 2)));
-        attempt += 1;
-        reconnectTimer = window.setTimeout(() => void connect(), delay);
+        scheduleReconnect();
       }
     }
 
