@@ -6,6 +6,8 @@ import { EmptyTab } from "../components/shell/EmptyTab";
 import { DashboardTab } from "../components/dashboard/DashboardTab";
 import { ProgressTab } from "../components/progress/ProgressTab";
 import { CasesTab } from "../components/cases/CasesTab";
+import { DocumentsTab } from "../components/documents/DocumentsTab";
+import { EventsTab } from "../components/events/EventsTab";
 import { NewRunForm } from "../components/home/NewRunForm";
 import type { Project, Run, RunSummary } from "../lib/api";
 import { getRunSummary, stopRun } from "../lib/api";
@@ -162,9 +164,9 @@ export function ShellPage(props: ShellPageProps) {
           />
         );
       case "documents":
-        return <EmptyTab label="Documents" note="Document browser arrives in Plan 4." />;
+        return <DocumentsTab token={token} projectId={selected.__projectId} runId={selected.id} />;
       case "events":
-        return <EmptyTab label="Events" note="Live event stream arrives in Plan 4." />;
+        return <EventsTab token={token} projectId={selected.__projectId} runId={selected.id} />;
     }
   }
 
