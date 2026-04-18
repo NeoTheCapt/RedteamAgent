@@ -1,0 +1,26 @@
+services:
+  kali-redteam:
+    build:
+      context: ./kali-redteam
+    image: kali-redteam:latest
+
+  mitmproxy:
+    build:
+      context: ..
+      dockerfile: docker/mitmproxy/Dockerfile
+    image: redteam-proxy:latest
+
+  katana:
+    image: projectdiscovery/katana:latest
+
+  metasploit:
+    build:
+      context: ./metasploit
+    image: redteam-metasploit:latest
+    environment:
+      MSF_USER: ${MSF_USER:-msf}
+      MSF_PASSWORD: ${MSF_PASSWORD:-msf}
+      MSF_PORT: ${MSF_PORT:-55553}
+      MSF_SSL: ${MSF_SSL:-false}
+    ports:
+      - "127.0.0.1:${MSF_PORT:-55553}:55553"
