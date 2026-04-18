@@ -1,4 +1,5 @@
 import type { Case } from "../../lib/api";
+import { formatDuration } from "../../lib/formatDuration";
 
 type CasesTableProps = {
   cases: Case[];
@@ -55,7 +56,7 @@ export function CasesTable({ cases, selectedId, onSelect }: CasesTableProps) {
                 <td className="cases-table__cell-cat">{c.category ?? "—"}</td>
                 <td className="cases-table__cell-result">{c.result ?? "—"}</td>
                 <td className="cases-table__cell-finding">{c.finding_id ?? "—"}</td>
-                <td className="cases-table__cell-dur">{c.duration_ms !== null ? `${c.duration_ms}ms` : "—"}</td>
+                <td className="cases-table__cell-dur">{formatDuration(c.duration_ms)}</td>
               </tr>
             );
           })}

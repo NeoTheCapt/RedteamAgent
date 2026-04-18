@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { Case, Dispatch } from "../../lib/api";
+import { formatDurationSince } from "../../lib/formatDuration";
 import { CaseChip } from "./CaseChip";
 
 type DispatchCardProps = {
@@ -7,20 +8,10 @@ type DispatchCardProps = {
   cases: Case[];
 };
 
-function durationLabel(d: Dispatch): string {
-  if (d.started_at === null) return "";
-  const end = d.finished_at ?? Math.floor(Date.now() / 1000);
-  const secs = Math.max(0, end - d.started_at);
-  if (secs < 60) return `${secs}s`;
-  const m = Math.floor(secs / 60);
-  const s = secs - m * 60;
-  return `${m}m ${s}s`;
-}
-
 export function DispatchCard({ dispatch, cases }: DispatchCardProps) {
   const [openCase, setOpenCase] = useState<number | null>(null);
   const stateClass = `dispatch-card--${dispatch.state}`;
-  const label = durationLabel(dispatch);
+  const label = formatDurationSince(dispatch.started_at, dispatch.finished_at);
 
   return (
     <article className={`dispatch-card ${stateClass}`}>

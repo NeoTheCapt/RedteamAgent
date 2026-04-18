@@ -1,4 +1,5 @@
 import type { Case } from "../../lib/api";
+import { formatDuration } from "../../lib/formatDuration";
 
 type CaseChipProps = {
   case_: Case;
@@ -66,7 +67,7 @@ export function CaseChip({ case_: c, expanded, onToggle }: CaseChipProps) {
           {c.duration_ms !== null && c.duration_ms !== undefined && (
             <div className="case-chip__row">
               <span className="case-chip__label">duration</span>
-              <span className="case-chip__value">{c.duration_ms}ms</span>
+              <span className="case-chip__value">{formatDuration(c.duration_ms)}</span>
             </div>
           )}
         </div>

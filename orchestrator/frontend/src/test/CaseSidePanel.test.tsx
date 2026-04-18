@@ -24,7 +24,7 @@ describe("CaseSidePanel", () => {
     await waitFor(() => expect(screen.getByText("/api/search")).toBeInTheDocument());
     expect(screen.getByText("F-3")).toBeInTheDocument();
     expect(screen.getByText("GET")).toBeInTheDocument();
-    expect(screen.getByText(/12000ms/)).toBeInTheDocument();
+    expect(screen.getByText("12.0s")).toBeInTheDocument();
   });
 
   it("shows an error message if fetch fails", async () => {
