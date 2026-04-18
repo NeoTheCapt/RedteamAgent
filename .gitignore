@@ -8,10 +8,13 @@
 /AGENTS.md
 /LOCAL_REVIEW_WORKFLOW.md
 /opencode.json
+/.hermes/
 /tools/
 /local-openclaw/
 /tests/orchestrator/
 /orchestrator/backend/data/
+/orchestrator/backend/*.egg-info/
+/.superpowers/brainstorm/
 docs/**
 !docs/
 !docs/redteam-agent-demo-fast.gif
