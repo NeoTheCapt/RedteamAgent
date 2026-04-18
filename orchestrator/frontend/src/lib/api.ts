@@ -127,6 +127,9 @@ export type EventRecord = {
   agent_name: string;
   summary: string;
   created_at: string;
+  kind?: string | null;
+  level?: string | null;
+  payload?: Record<string, unknown> | null;
 };
 
 export type Artifact = {
