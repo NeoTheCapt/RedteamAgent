@@ -3571,3 +3571,97 @@ def test_delete_run_removes_runtime_files_and_db_records():
     assert not run_root.exists()
     assert db.get_run_by_id(run["id"]) is None
     assert db.list_events_for_run(run["id"]) == []
+
+
+# ---------------------------------------------------------------------------
+# Tests for the "stopped" run status (user-initiated stop)
+# ---------------------------------------------------------------------------
+
+def test_stop_run_status_accepted_for_running_run(monkeypatch):
+    """POST /projects/:p/runs/:id/status with {status: "stopped"} succeeds on a running run,
+    writes the terminal reason, and calls stop_run_runtime."""
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+
+    create_run = client.post(
+        f"/projects/{project['id']}/runs",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"target": "https://example.com"},
+    )
+    assert create_run.status_code == 201
+    run = create_run.json()
+    db.update_run_status(run["id"], "running")
+
+    stopped_calls: list[int] = []
+    monkeypatch.setattr("app.services.runs.stop_run_runtime", lambda r: stopped_calls.append(r.id))
+
+    response = client.post(
+        f"/projects/{project['id']}/runs/{run['id']}/status",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"status": "stopped"},
+    )
+    assert response.status_code == 200
+    assert response.json()["status"] == "stopped"
+    assert stopped_calls == [run["id"]]
+
+    # Terminal reason is written into run.json by _write_run_terminal_reason.
+    run_root = Path(run["engagement_root"])
+    metadata = json.loads((run_root / "run.json").read_text(encoding="utf-8"))
+    assert metadata["stop_reason_code"] == "user_stopped"
+    assert metadata["stop_reason_text"] == "Run stopped by operator."
+
+
+def test_stop_run_status_not_valid_400(monkeypatch):
+    """POST /projects/:p/runs/:id/status with an unknown status returns 400."""
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+
+    create_run = client.post(
+        f"/projects/{project['id']}/runs",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"target": "https://example.com"},
+    )
+    assert create_run.status_code == 201
+    run = create_run.json()
+
+    response = client.post(
+        f"/projects/{project['id']}/runs/{run['id']}/status",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"status": "cancelled"},
+    )
+    assert response.status_code == 400
+
+
+def test_reconcile_does_not_flip_stopped_run_back_to_running(monkeypatch):
+    """_reconcile_run_status called on a stopped run must return it unchanged,
+    regardless of what locate_runtime_pid or engagement_completion_state report."""
+    from app.services.runs import _reconcile_run_status
+
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+
+    create_run = client.post(
+        f"/projects/{project['id']}/runs",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"target": "https://example.com"},
+    )
+    assert create_run.status_code == 201
+    run_dict = create_run.json()
+    db.update_run_status(run_dict["id"], "running")
+    db.update_run_status(run_dict["id"], "stopped")
+
+    # Simulate a live PID so without the guard reconcile would flip back to running.
+    monkeypatch.setattr("app.services.runs.locate_runtime_pid", lambda _run: 12345)
+    monkeypatch.setattr("app.services.runs.engagement_completion_state", lambda _run: (False, ""))
+    monkeypatch.setattr("app.services.runs.normalize_active_scope", lambda _run: None)
+    stopped_calls: list[int] = []
+    monkeypatch.setattr("app.services.runs.stop_run_runtime", lambda r: stopped_calls.append(r.id))
+
+    run_obj = db.get_run_by_id(run_dict["id"])
+    reconciled = _reconcile_run_status(run_obj)
+    assert reconciled.status == "stopped"
+    # stop_run_runtime must not have been called again by reconcile.
+    assert stopped_calls == []
