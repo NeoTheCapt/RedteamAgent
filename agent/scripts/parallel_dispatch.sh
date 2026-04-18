@@ -84,7 +84,7 @@ case "$SUBCMD" in
     for spec in "$@"; do
       IFS=':' read -r batch_type batch_limit agent <<< "$spec"
 
-      BATCH_ID="batch-${ROUND_TS}-${SLOT_INDEX}"
+      BATCH_ID="batch-${ROUND_TS}-$$-${SLOT_INDEX}-${RANDOM}"
       BATCH_FILE="$BATCH_DIR/${BATCH_ID}.json"
       LOG_FILE="$BATCH_DIR/${BATCH_ID}.log"
       OUTCOMES_FILE="$BATCH_DIR/${BATCH_ID}.outcomes.md"
@@ -418,6 +418,14 @@ case "$SUBCMD" in
       # Emit structured dispatch_done event for this slot (best-effort; async).
       if [ -f "$EMIT_RUNTIME_EVENT" ]; then
         slot_total=$(( SLOT_DONE + SLOT_REQUEUE + SLOT_ERROR ))
+        # When orphan cases were detected (outcomes file exists but is missing
+        # some case IDs), emit state="missing_outcomes" so the backend counts
+        # this slot as a failed dispatch rather than a clean completion.
+        if (( SLOT_ORPHAN > 0 )); then
+          dispatch_done_state="missing_outcomes"
+        else
+          dispatch_done_state="done"
+        fi
         dispatch_done_payload="$(jq -cn \
             --arg batch "$BATCH_ID" \
             --arg agent "${SLOT_AGENT:-unknown}" \
@@ -428,7 +436,7 @@ case "$SUBCMD" in
             --argjson requeue "$SLOT_REQUEUE" \
             --argjson errored "$SLOT_ERROR" \
             --argjson orphan "$SLOT_ORPHAN" \
-            --arg state "done" \
+            --arg state "$dispatch_done_state" \
             --argjson round "${ORCHESTRATOR_ROUND:-0}" \
             '{batch:$batch, agent:$agent, agent_tag:$agent_tag, type:$type,
               case_count:$case_count, done:$done, requeue:$requeue,
