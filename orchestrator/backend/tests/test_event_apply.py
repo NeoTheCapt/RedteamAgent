@@ -263,6 +263,77 @@ def test_dispatch_start_after_done_does_not_resurrect_running(tmp_path):
     assert d.agent == "v"
 
 
+def test_dispatch_start_seeds_started_at_on_cases(tmp_path):
+    """dispatch_start must set started_at on new case rows so duration_ms is computable."""
+    run = _mk_run(tmp_path, name="ea_started_at")
+    event_apply.apply(
+        run_id=run.id, kind="dispatch_start", phase="consume",
+        payload={
+            "batch": "B-sa", "round": 1, "slot": "0", "case_count": 1,
+            "agent": "v",
+            "cases": [{"id": 200, "method": "GET", "path": "/sa", "type": "api"}],
+        },
+    )
+    c = db.get_case(run.id, 200)
+    assert c is not None
+    assert c.started_at is not None, "started_at must be populated by dispatch_start"
+
+
+def test_dispatch_start_case_done_duration_ms_positive(tmp_path):
+    """dispatch_start → case_done round trip must yield positive duration_ms."""
+    import time
+    run = _mk_run(tmp_path, name="ea_duration")
+    event_apply.apply(
+        run_id=run.id, kind="dispatch_start", phase="consume",
+        payload={
+            "batch": "B-dur", "round": 1, "slot": "0", "case_count": 1,
+            "agent": "v",
+            "cases": [{"id": 201, "method": "POST", "path": "/dur", "type": "api"}],
+        },
+    )
+    # Small sleep to ensure finished_at > started_at
+    time.sleep(0.01)
+    event_apply.apply(
+        run_id=run.id, kind="case_done", phase="consume",
+        payload={"case_id": 201, "outcome": "DONE", "dispatch": "B-dur",
+                 "agent": "v", "type": "api", "detail": "ok"},
+    )
+    c = db.get_case(run.id, 201)
+    assert c.started_at is not None
+    assert c.finished_at is not None
+    duration_ms = (c.finished_at - c.started_at) * 1000
+    assert duration_ms >= 0, f"duration_ms should be non-negative, got {duration_ms}"
+
+
+def test_dispatch_start_does_not_overwrite_existing_started_at(tmp_path):
+    """If case_done arrived first (out-of-order), dispatch_start must not overwrite started_at."""
+    run = _mk_run(tmp_path, name="ea_no_overwrite_sat")
+    # case_done arrives first (sets finished_at, no started_at)
+    event_apply.apply(
+        run_id=run.id, kind="case_done", phase="consume",
+        payload={"case_id": 202, "outcome": "DONE", "dispatch": "B-oo-sat",
+                 "agent": "v", "type": "api", "detail": "ok"},
+    )
+    c_before = db.get_case(run.id, 202)
+    assert c_before is not None
+    assert c_before.state == "done"
+    # started_at is None because case_done doesn't set it
+    assert c_before.started_at is None
+
+    # dispatch_start arrives late — should fill started_at since it was None
+    event_apply.apply(
+        run_id=run.id, kind="dispatch_start", phase="consume",
+        payload={"batch": "B-oo-sat", "round": 1, "slot": "0", "case_count": 1,
+                 "agent": "v",
+                 "cases": [{"id": 202, "method": "GET", "path": "/oo", "type": "api"}]},
+    )
+    c_after = db.get_case(run.id, 202)
+    # State remains terminal (done), not reset to queued
+    assert c_after.state == "done"
+    # started_at is now populated (filled in by late dispatch_start)
+    assert c_after.started_at is not None
+
+
 def test_missing_outcomes_state_persists(tmp_path):
     """dispatch_done with state='missing_outcomes' survives a late dispatch_start."""
     run = _mk_run(tmp_path, name="ea_missing")

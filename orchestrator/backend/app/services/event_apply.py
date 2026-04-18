@@ -59,6 +59,7 @@ def _apply_dispatch_start(run_id: int, phase: str, payload: dict[str, Any]) -> N
         started_at=started_ts,
     )
     # Pre-seed case rows from the cases[] array (B2.1)
+    case_started_ts = started_ts  # use the dispatch's own started_at as case start time
     for case in payload.get("cases") or []:
         try:
             case_id = int(case["id"])
@@ -76,9 +77,11 @@ def _apply_dispatch_start(run_id: int, phase: str, payload: dict[str, Any]) -> N
                 category=case.get("type"),
                 dispatch_id=batch_id,
                 state="queued",
+                started_at=case_started_ts,
             )
         elif existing.dispatch_id is None:
             # Link orphan to this dispatch; preserve everything else.
+            # Preserve existing started_at if already set (e.g. case_done arrived first).
             db.upsert_case(
                 case_id=case_id,
                 run_id=run_id,
@@ -89,7 +92,7 @@ def _apply_dispatch_start(run_id: int, phase: str, payload: dict[str, Any]) -> N
                 state=existing.state,
                 result=existing.result,
                 finding_id=existing.finding_id,
-                started_at=existing.started_at,
+                started_at=existing.started_at if existing.started_at is not None else case_started_ts,
                 finished_at=existing.finished_at,
             )
         # else: case exists and is already linked — leave it alone.

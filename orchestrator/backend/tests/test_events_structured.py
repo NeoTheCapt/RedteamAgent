@@ -136,3 +136,64 @@ def test_post_event_handles_empty_payload(isolate_data_dir):
         ).fetchone()
     assert row["kind"] == "phase_enter"
     assert row["payload_json"] == "{}"
+
+
+def test_get_events_returns_kind_level_payload(isolate_data_dir):
+    """REST GET /events must return kind/level/payload so the EventsTab filter works."""
+    client = TestClient(app)
+    token = _register(client, "eve_c1")
+    p, run = _create_project_and_run(client, token, isolate_data_dir, "eve")
+    h = {"Authorization": f"Bearer {token}"}
+
+    # POST a structured event with all three fields
+    client.post(
+        f"/projects/{p['id']}/runs/{run.id}/events",
+        headers=h,
+        json={
+            "event_type": "dispatch.started", "phase": "consume",
+            "task_name": "B-99", "agent_name": "vuln:s0",
+            "summary": "batch 99", "kind": "dispatch_start", "level": "info",
+            "payload": {"batch": "B-99", "round": 3, "slot": "0",
+                        "agent": "vuln-analyst", "case_count": 1},
+        },
+    )
+
+    # GET events via REST
+    r = client.get(f"/projects/{p['id']}/runs/{run.id}/events", headers=h)
+    assert r.status_code == 200
+    events = r.json()
+    assert len(events) >= 1
+    ev = events[-1]
+    # kind must be present and correct (level "info" is the default, returned as None)
+    assert ev["kind"] == "dispatch_start"
+    # level "info" is the default; REST normalizes it to None (frontend uses ?? "info")
+    assert ev["level"] is None
+    # payload must be present and include the batch key
+    assert ev["payload"] is not None
+    assert ev["payload"]["batch"] == "B-99"
+
+
+def test_get_events_legacy_kind_returns_null_kind(isolate_data_dir):
+    """Legacy events (no kind/level) return null for those optional fields."""
+    client = TestClient(app)
+    token = _register(client, "frank_c1")
+    p, run = _create_project_and_run(client, token, isolate_data_dir, "frank")
+    h = {"Authorization": f"Bearer {token}"}
+
+    client.post(
+        f"/projects/{p['id']}/runs/{run.id}/events",
+        headers=h,
+        json={
+            "event_type": "task.status", "phase": "consume",
+            "task_name": "x", "agent_name": "a", "summary": "s",
+        },
+    )
+
+    r = client.get(f"/projects/{p['id']}/runs/{run.id}/events", headers=h)
+    assert r.status_code == 200
+    events = r.json()
+    assert len(events) == 1
+    ev = events[0]
+    # legacy kind maps to None in REST response (frontend uses ?? "legacy")
+    assert ev["kind"] is None
+    assert ev["payload"] is None

@@ -696,7 +696,8 @@ def list_events_for_run(run_id: int) -> list[Event]:
     with get_connection() as connection:
         rows = connection.execute(
             """
-            SELECT id, run_id, event_type, phase, task_name, agent_name, summary, created_at
+            SELECT id, run_id, event_type, phase, task_name, agent_name, summary, created_at,
+                   kind, level, payload_json
             FROM events
             WHERE run_id = ?
             ORDER BY id ASC
