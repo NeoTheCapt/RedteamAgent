@@ -18,7 +18,7 @@ export function DispatchCard({ dispatch, cases }: DispatchCardProps) {
       <header className="dispatch-card__head">
         <span className="dispatch-card__dot" aria-hidden />
         <span className="dispatch-card__agent">{dispatch.agent}</span>
-        <span className="dispatch-card__slot">:s{dispatch.slot}</span>
+        <span className="dispatch-card__slot">:{dispatch.slot}</span>
         <span className="dispatch-card__state">{dispatch.state.toUpperCase()}</span>
         {label && <span className="dispatch-card__duration">{label}</span>}
       </header>
