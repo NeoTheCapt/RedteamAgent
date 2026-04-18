@@ -305,9 +305,10 @@ def test_dispatch_start_case_done_duration_ms_positive(tmp_path):
     assert duration_ms >= 0, f"duration_ms should be non-negative, got {duration_ms}"
 
 
-def test_dispatch_start_does_not_overwrite_existing_started_at(tmp_path):
-    """If case_done arrived first (out-of-order), dispatch_start must not overwrite started_at."""
-    run = _mk_run(tmp_path, name="ea_no_overwrite_sat")
+def test_dispatch_start_fills_started_at_on_orphan_case_with_null_timestamp(tmp_path):
+    """If case_done arrived first (out-of-order), dispatch_start must fill started_at when it's None.
+    This tests the orphan recovery path, not the preserve-guard."""
+    run = _mk_run(tmp_path, name="ea_fill_sat_orphan")
     # case_done arrives first (sets finished_at, no started_at)
     event_apply.apply(
         run_id=run.id, kind="case_done", phase="consume",
@@ -332,6 +333,62 @@ def test_dispatch_start_does_not_overwrite_existing_started_at(tmp_path):
     assert c_after.state == "done"
     # started_at is now populated (filled in by late dispatch_start)
     assert c_after.started_at is not None
+
+
+def test_dispatch_start_preserves_existing_non_null_started_at(tmp_path):
+    """Guard: if an orphan case already has started_at set (e.g. from manual insert
+    or a previous dispatch_start with different timestamp), a late dispatch_start
+    for the same case_id should NOT overwrite it.
+
+    This tests the preserve-guard at event_apply.py:95 directly."""
+    import time
+    run = _mk_run(tmp_path, name="ea_preserve_sat")
+
+    # Seed the case with a specific started_at via dispatch_start
+    initial_ts = int(time.time())
+    event_apply.apply(
+        run_id=run.id, kind="dispatch_start", phase="consume",
+        payload={"batch": "B-preserve", "round": 1, "slot": "0", "case_count": 1,
+                 "agent": "v",
+                 "cases": [{"id": 303, "method": "GET", "path": "/preserve", "type": "api"}]},
+    )
+    c_seeded = db.get_case(run.id, 303)
+    assert c_seeded is not None
+    initial_started_at = c_seeded.started_at
+    assert initial_started_at is not None
+
+    # Small delay to ensure a different timestamp
+    time.sleep(0.02)
+
+    # Now case becomes an orphan (unlink dispatch), then later dispatch_start arrives
+    # with a different timestamp. This simulates a retry or reordering scenario.
+    # We'll directly simulate this by applying case_done first to terminal it,
+    # then dispatch_start will try to link it back.
+    event_apply.apply(
+        run_id=run.id, kind="case_done", phase="consume",
+        payload={"case_id": 303, "outcome": "DONE", "dispatch": "B-preserve",
+                 "agent": "v", "type": "api", "detail": "ok"},
+    )
+    c_done = db.get_case(run.id, 303)
+    assert c_done.state == "done"
+    # started_at should still be the original value
+    assert c_done.started_at == initial_started_at
+
+    # Small delay again to ensure new timestamp is different
+    time.sleep(0.02)
+
+    # Late dispatch_start with a different case_started_ts
+    event_apply.apply(
+        run_id=run.id, kind="dispatch_start", phase="consume",
+        payload={"batch": "B-preserve", "round": 1, "slot": "0", "case_count": 1,
+                 "agent": "v",
+                 "cases": [{"id": 303, "method": "GET", "path": "/preserve", "type": "api"}]},
+    )
+    c_final = db.get_case(run.id, 303)
+    assert c_final.state == "done"  # terminal state preserved
+    # CRITICAL: started_at must NOT be overwritten by dispatch_start
+    assert c_final.started_at == initial_started_at, \
+        f"Guard failed: started_at was overwritten from {initial_started_at} to {c_final.started_at}"
 
 
 def test_missing_outcomes_state_persists(tmp_path):
