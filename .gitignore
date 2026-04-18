@@ -11,7 +11,8 @@
 /.hermes/
 /tools/
 /local-openclaw/
-/tests/orchestrator/
+/tests/
+/orchestrator/tests/
 /orchestrator/backend/data/
 /orchestrator/backend/*.egg-info/
 /.superpowers/brainstorm/
