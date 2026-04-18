@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type { ReactNode } from "react";
 import type { Run } from "../../lib/api";
 
@@ -5,7 +6,7 @@ type RunPanelProps = {
   run: Run;
   runtimeLabel?: string;
   currentPhase?: string | null;
-  onStop?: () => void;
+  onStop?: () => void | Promise<void>;
   children: ReactNode;
 };
 
@@ -19,6 +20,13 @@ function ribbonState(run: Run): "done" | "failed" | "active" {
 export function RunPanel({ run, runtimeLabel, currentPhase, onStop, children }: RunPanelProps) {
   const state = ribbonState(run);
   const isRunning = state === "active";
+  const [stopping, setStopping] = useState(false);
+
+  async function handleStopClick() {
+    if (stopping || !onStop) return;
+    setStopping(true);
+    try { await onStop(); } finally { setStopping(false); }
+  }
 
   return (
     <section
@@ -37,8 +45,8 @@ export function RunPanel({ run, runtimeLabel, currentPhase, onStop, children }: 
         <div className="run-panel__ctx-right">
           {runtimeLabel && <span className="run-panel__time">{runtimeLabel}</span>}
           {isRunning && onStop && (
-            <button type="button" className="run-panel__stop" onClick={onStop}>
-              ◼ STOP
+            <button type="button" className="run-panel__stop" onClick={() => void handleStopClick()} disabled={stopping}>
+              {stopping ? "Stopping…" : "◼ STOP"}
             </button>
           )}
         </div>

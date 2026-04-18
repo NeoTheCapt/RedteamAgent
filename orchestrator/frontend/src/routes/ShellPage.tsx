@@ -8,7 +8,7 @@ import { ProgressTab } from "../components/progress/ProgressTab";
 import { CasesTab } from "../components/cases/CasesTab";
 import { NewRunForm } from "../components/home/NewRunForm";
 import type { Project, Run, RunSummary } from "../lib/api";
-import { getRunSummary } from "../lib/api";
+import { getRunSummary, stopRun } from "../lib/api";
 import { parseServerTimestamp } from "../lib/format";
 
 type ShellPageProps = {
@@ -130,6 +130,15 @@ export function ShellPage(props: ShellPageProps) {
       }
     : undefined;
 
+  async function handleStop(projectId: number, runId: number) {
+    try {
+      await stopRun(token, projectId, runId);
+      // Optimistic refetch — the sidebar polls every 5s anyway.
+    } catch (err) {
+      console.warn("stop failed:", err);
+    }
+  }
+
   function renderTab(tab: TabId) {
     if (!selected || !summary) return <EmptyTab label="Loading run..." note="Fetching summary data." />;
     switch (tab) {
@@ -182,8 +191,8 @@ export function ShellPage(props: ShellPageProps) {
           <RunPanel
             run={selected}
             runtimeLabel={runtimeLabel}
-            currentPhase={summary?.overview.current_phase}
-            onStop={undefined}
+            currentPhase={summary?.overview.current_phase ?? null}
+            onStop={() => void handleStop(selected.__projectId, selected.id)}
           >
             {summaryError && summary && (
               <div className="run-panel__alert" role="alert">

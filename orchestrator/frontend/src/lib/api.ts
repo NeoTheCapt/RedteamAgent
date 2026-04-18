@@ -355,6 +355,14 @@ export function deleteRun(token: string, projectId: number, runId: number) {
   }, token);
 }
 
+export function stopRun(token: string, projectId: number, runId: number): Promise<Run> {
+  return request<Run>(
+    `/projects/${projectId}/runs/${runId}/status`,
+    { method: "POST", body: JSON.stringify({ status: "failed" }) },
+    token,
+  );
+}
+
 export function listEvents(token: string, projectId: number, runId: number) {
   return request<EventRecord[]>(`/projects/${projectId}/runs/${runId}/events`, {}, token);
 }
