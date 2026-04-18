@@ -65,4 +65,20 @@ describe("Sidebar", () => {
     await userEvent.click(screen.getByText("+ NEW RUN"));
     expect(onNew).toHaveBeenCalled();
   });
+
+  it("renders SQLite-format updated_at without Invalid Date (Bug 5)", () => {
+    // SQLite timestamps are "YYYY-MM-DD HH:MM:SS" (no T, no TZ).
+    // Safari's new Date() returns Invalid Date for that format.
+    // parseServerTimestamp coerces it to a valid UTC Date.
+    const runs = [mkRun({ updated_at: "2026-04-17 12:34:56" })];
+    render(
+      <Sidebar runs={runs} selectedRunId={null} onSelectRun={vi.fn()} onNewRun={vi.fn()}
+        username="u" onLogout={vi.fn()} projectIdForRun={() => 1}
+      />
+    );
+    const timeEl = document.querySelector("time");
+    expect(timeEl?.textContent).not.toContain("Invalid Date");
+    // The timestamp is valid, so it should render a real time (not the fallback "—").
+    expect(timeEl?.textContent).toMatch(/^updated \d/);
+  });
 });

@@ -1,4 +1,5 @@
 import type { Run } from "../../lib/api";
+import { parseServerTimestamp } from "../../lib/format";
 
 type SidebarProps = {
   runs: Run[];
@@ -54,7 +55,7 @@ export function Sidebar({
                 </div>
                 <div className="sidebar__run-id">#r-{run.id}</div>
                 <time className="sidebar__run-meta" dateTime={run.updated_at}>
-                  updated {new Date(run.updated_at).toLocaleTimeString()}
+                  updated {parseServerTimestamp(run.updated_at)?.toLocaleTimeString() ?? "—"}
                 </time>
               </button>
             </li>
