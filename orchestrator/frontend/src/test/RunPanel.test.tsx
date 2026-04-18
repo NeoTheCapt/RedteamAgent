@@ -49,4 +49,21 @@ describe("RunPanel", () => {
     );
     expect(container.querySelector(".run-panel--done")).toBeTruthy();
   });
+
+  it("applies the stopped ribbon class (not failed) on stopped runs", () => {
+    const { container } = render(
+      <RunPanel run={mkRun({ status: "stopped" })}><div /></RunPanel>
+    );
+    expect(container.querySelector(".run-panel--stopped")).toBeTruthy();
+    expect(container.querySelector(".run-panel--failed")).toBeNull();
+  });
+
+  it("hides STOP button for stopped runs", () => {
+    render(
+      <RunPanel run={mkRun({ status: "stopped" })} onStop={vi.fn()}>
+        <div />
+      </RunPanel>
+    );
+    expect(screen.queryByText("◼ STOP")).toBeNull();
+  });
 });

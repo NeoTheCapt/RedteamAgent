@@ -358,7 +358,7 @@ export function deleteRun(token: string, projectId: number, runId: number) {
 export function stopRun(token: string, projectId: number, runId: number): Promise<Run> {
   return request<Run>(
     `/projects/${projectId}/runs/${runId}/status`,
-    { method: "POST", body: JSON.stringify({ status: "failed" }) },
+    { method: "POST", body: JSON.stringify({ status: "stopped" }) },
     token,
   );
 }

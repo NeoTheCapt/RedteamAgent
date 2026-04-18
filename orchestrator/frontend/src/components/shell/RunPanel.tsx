@@ -10,10 +10,11 @@ type RunPanelProps = {
   children: ReactNode;
 };
 
-function ribbonState(run: Run): "done" | "failed" | "active" {
+function ribbonState(run: Run): "done" | "failed" | "stopped" | "active" {
   const s = run.status.toLowerCase();
   if (s === "completed") return "done";
   if (s === "failed" || s === "error") return "failed";
+  if (s === "stopped") return "stopped";
   return "active";
 }
 
@@ -30,7 +31,7 @@ export function RunPanel({ run, runtimeLabel, currentPhase, onStop, children }: 
 
   return (
     <section
-      className={`run-panel ${state === "done" ? "run-panel--done" : ""} ${state === "failed" ? "run-panel--failed" : ""}`}
+      className={`run-panel ${state === "done" ? "run-panel--done" : ""} ${state === "failed" ? "run-panel--failed" : ""} ${state === "stopped" ? "run-panel--stopped" : ""}`}
       aria-label={`Run ${run.target}`}
     >
       <header className="run-panel__ctx">

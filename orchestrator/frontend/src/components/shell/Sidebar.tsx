@@ -10,11 +10,12 @@ type SidebarProps = {
   projectIdForRun: (run: Run) => number;
 };
 
-function runStateClass(run: Run): "running" | "done" | "failed" | "queued" {
+function runStateClass(run: Run): "running" | "done" | "failed" | "queued" | "stopped" {
   const s = run.status.toLowerCase();
   if (s === "completed") return "done";
   if (s === "failed" || s === "error") return "failed";
   if (s === "queued" || s === "pending") return "queued";
+  if (s === "stopped") return "stopped";
   return "running";
 }
 

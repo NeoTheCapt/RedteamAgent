@@ -51,6 +51,12 @@
   box-shadow: 0 0 12px rgba(255, 106, 133, 0.4);
 }
 
+.run-panel--stopped::before {
+  background: var(--c-amber);
+  box-shadow: none;
+  opacity: 0.45;
+}
+
 .run-panel__ctx {
   display: flex;
   align-items: center;
@@ -274,6 +280,7 @@
 
 .sidebar__run--done { border-left-color: rgba(69, 212, 139, 0.5); }
 .sidebar__run--failed { border-left-color: rgba(255, 106, 133, 0.5); }
+.sidebar__run--stopped { border-left-color: rgba(255, 184, 77, 0.3); }
 
 .sidebar__run-top {
   display: flex;
@@ -297,6 +304,7 @@
 .sidebar__run--done .sidebar__run-dot { background: var(--c-green); }
 .sidebar__run--failed .sidebar__run-dot { background: var(--c-red); }
 .sidebar__run--queued .sidebar__run-dot { background: var(--c-pending); }
+.sidebar__run--stopped .sidebar__run-dot { background: var(--c-amber); opacity: 0.45; }
 
 .sidebar__run-target {
   flex: 1;
@@ -330,6 +338,10 @@
 .sidebar__run--failed .sidebar__run-state {
   background: rgba(255, 106, 133, 0.16);
   color: var(--c-red);
+}
+.sidebar__run--stopped .sidebar__run-state {
+  background: rgba(255, 184, 77, 0.10);
+  color: var(--c-text-dim);
 }
 
 .sidebar__run-id {
