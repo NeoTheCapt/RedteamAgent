@@ -5019,3 +5019,86 @@ def test_running_container_stall_reason_keeps_operator_only_pending_queue_alive_
     from app.services.launcher import _running_container_stall_reason
 
     assert _running_container_stall_reason(run_row) is None
+
+
+def test_matches_continuous_target_exact():
+    from app.services.launcher import _matches_continuous_target
+
+    assert _matches_continuous_target("example.com", ["example.com"])
+    assert not _matches_continuous_target("other.com", ["example.com"])
+
+
+def test_matches_continuous_target_glob():
+    from app.services.launcher import _matches_continuous_target
+
+    patterns = ["*.example.com"]
+    assert _matches_continuous_target("api.example.com", patterns)
+    assert _matches_continuous_target("sub.api.example.com", patterns)
+    assert not _matches_continuous_target("other.org", patterns)
+
+
+def test_matches_continuous_target_regex():
+    from app.services.launcher import _matches_continuous_target
+
+    patterns = ["re:^probe-"]
+    assert _matches_continuous_target("probe-alpha", patterns)
+    assert _matches_continuous_target("probe-123.example.com", patterns)
+    assert not _matches_continuous_target("noprobe.example.com", patterns)
+
+
+def test_matches_continuous_target_invalid_regex_is_skipped():
+    from app.services.launcher import _matches_continuous_target
+
+    assert not _matches_continuous_target("example.com", ["re:[invalid"])
+
+
+def test_continuous_observation_target_matches_glob(tmp_path):
+    """Bug 4: _continuous_observation_target_matches must support glob patterns."""
+    from app.services.launcher import _continuous_observation_target_matches
+    import app.services.launcher as launcher_mod
+    from unittest.mock import patch
+
+    env_path = tmp_path / "env.json"
+    env_path.write_text(
+        '{"REDTEAM_CONTINUOUS_TARGETS": "*.example.com,re:^probe-"}',
+        encoding="utf-8",
+    )
+
+    from types import SimpleNamespace
+    run = SimpleNamespace(
+        id=1,
+        target="https://api.example.com",
+        engagement_root=str(tmp_path),
+    )
+
+    with patch.object(launcher_mod, "seed_root_for", return_value=tmp_path):
+        with patch.object(launcher_mod, "_active_engagement_dir", return_value=None):
+            result = _continuous_observation_target_matches(run)
+
+    assert result, "glob *.example.com should match api.example.com"
+
+
+def test_continuous_observation_target_matches_regex(tmp_path):
+    """Bug 4: regex pattern triggers hold for matching hostname."""
+    from app.services.launcher import _continuous_observation_target_matches
+    import app.services.launcher as launcher_mod
+    from unittest.mock import patch
+
+    env_path = tmp_path / "env.json"
+    env_path.write_text(
+        '{"REDTEAM_CONTINUOUS_TARGETS": "re:^probe-"}',
+        encoding="utf-8",
+    )
+
+    from types import SimpleNamespace
+    run = SimpleNamespace(
+        id=1,
+        target="https://probe-alpha.internal",
+        engagement_root=str(tmp_path),
+    )
+
+    with patch.object(launcher_mod, "seed_root_for", return_value=tmp_path):
+        with patch.object(launcher_mod, "_active_engagement_dir", return_value=None):
+            result = _continuous_observation_target_matches(run)
+
+    assert result, "regex re:^probe- should match probe-alpha.internal hostname"

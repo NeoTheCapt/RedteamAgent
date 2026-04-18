@@ -196,6 +196,120 @@ def test_get_case_detail_falls_back_to_agent_cases_db(isolate_data_dir):
     assert r_missing.status_code == 404
 
 
+def test_list_cases_merges_structured_and_agent_db(isolate_data_dir):
+    """Bug 1: partial structured rows must be merged with authoritative cases.db.
+
+    Scenario:
+    - Structured table has 2 rows (case_id=1, case_id=2) with rich metadata.
+    - Agent cases.db has 3 rows (id=1, id=2, id=3).
+    - GET /cases must return 3 rows; rows 1 and 2 must carry structured metadata
+      (started_at, finished_at, duration_ms); row 3 comes from cases.db only.
+    """
+    import sqlite3
+
+    client = TestClient(app)
+    token, proj, run = _setup(client, "mg_c4", isolate_data_dir)
+
+    # Insert 2 structured rows with full metadata.
+    db.upsert_case(case_id=1, run_id=run.id, method="GET", path="/api/a",
+                   state="done", started_at=1000, finished_at=2000)
+    db.upsert_case(case_id=2, run_id=run.id, method="POST", path="/api/b",
+                   state="running", started_at=3000, finished_at=None)
+
+    # Create agent cases.db with 3 rows (id=1 and 2 overlap; id=3 is db-only).
+    eng_dir = isolate_data_dir / "workspace" / "engagements" / "eng-mg"
+    eng_dir.mkdir(parents=True)
+    (eng_dir / "scope.json").write_text('{"current_phase":"collect"}')
+    (isolate_data_dir / "workspace" / "engagements" / ".active").write_text("engagements/eng-mg")
+
+    cases_db_path = eng_dir / "cases.db"
+    with sqlite3.connect(cases_db_path) as conn:
+        conn.execute("""
+            CREATE TABLE cases (
+                id INTEGER PRIMARY KEY, method TEXT, url TEXT, type TEXT, status TEXT
+            )
+        """)
+        conn.executemany(
+            "INSERT INTO cases (id, method, url, type, status) VALUES (?, ?, ?, ?, ?)",
+            [
+                (1, "GET",  "/api/a",  "api",  "done"),
+                (2, "POST", "/api/b",  "api",  "processing"),
+                (3, "GET",  "/api/c",  "api",  "pending"),
+            ],
+        )
+        conn.commit()
+
+    r = client.get(f"/projects/{proj.id}/runs/{run.id}/cases",
+                   headers={"Authorization": f"Bearer {token}"})
+    assert r.status_code == 200
+    cases = r.json()
+
+    # All 3 cases must appear.
+    assert len(cases) == 3
+    by_id = {c["case_id"]: c for c in cases}
+    assert set(by_id.keys()) == {1, 2, 3}
+
+    # Structured wins for case_id=1: has duration_ms from started_at/finished_at.
+    assert by_id[1]["duration_ms"] == (2000 - 1000) * 1000
+    assert by_id[1]["path"] == "/api/a"
+
+    # Structured wins for case_id=2: started_at present, finished_at None → no duration.
+    assert by_id[2]["started_at"] == 3000
+    assert by_id[2]["duration_ms"] is None
+
+    # case_id=3 comes from cases.db only.
+    assert by_id[3]["path"] == "/api/c"
+    assert by_id[3]["state"] == "queued"  # mapped from "pending"
+    assert by_id[3]["duration_ms"] is None
+
+
+def test_list_cases_wal_fallback_used(isolate_data_dir, monkeypatch):
+    """Bug 2: cases.py must use _read_sqlite_with_fallback, not bare sqlite3.connect.
+
+    Verify that _read_sqlite_with_fallback is called (rather than a bare
+    sqlite3.connect) by confirming the helper is used in the code path.
+    """
+    import sqlite3 as _sqlite3
+    from unittest.mock import patch, MagicMock
+
+    client = TestClient(app)
+    token, proj, run = _setup(client, "wal_c4", isolate_data_dir)
+
+    # Create a cases.db file so the path resolves.
+    eng_dir = isolate_data_dir / "workspace" / "engagements" / "eng-wal"
+    eng_dir.mkdir(parents=True)
+    (eng_dir / "scope.json").write_text('{"current_phase":"collect"}')
+    (isolate_data_dir / "workspace" / "engagements" / ".active").write_text("engagements/eng-wal")
+
+    cases_db_path = eng_dir / "cases.db"
+    with _sqlite3.connect(cases_db_path) as conn:
+        conn.execute("""
+            CREATE TABLE cases (
+                id INTEGER PRIMARY KEY, method TEXT, url TEXT, type TEXT, status TEXT
+            )
+        """)
+        conn.execute("INSERT INTO cases VALUES (1,'GET','/x','api','done')")
+        conn.commit()
+
+    call_count = []
+
+    import app.api.cases as cases_module
+    original = cases_module._read_sqlite_with_fallback
+
+    def tracking_fallback(path, reader, default):
+        call_count.append(path)
+        return original(path, reader, default)
+
+    with patch.object(cases_module, "_read_sqlite_with_fallback", side_effect=tracking_fallback):
+        r = client.get(f"/projects/{proj.id}/runs/{run.id}/cases",
+                       headers={"Authorization": f"Bearer {token}"})
+
+    assert r.status_code == 200
+    # _read_sqlite_with_fallback must have been called at least once (for the
+    # cases.db read path in _read_cases_from_agent_db).
+    assert len(call_count) >= 1
+
+
 def test_cases_rejects_other_users_run(isolate_data_dir):
     client = TestClient(app)
     _register(client, "alice_c4")
