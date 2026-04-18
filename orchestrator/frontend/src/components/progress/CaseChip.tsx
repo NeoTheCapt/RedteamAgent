@@ -22,6 +22,7 @@ export function CaseChip({ case_: c, expanded, onToggle }: CaseChipProps) {
   const stateClass = `case-chip--${c.state}`;
   const short = shortenPath(c.path);
   const findingSuffix = c.finding_id ? " ⚠" : "";
+  const detailId = `case-chip-detail-${c.case_id}`;
 
   return (
     <div className={`case-chip ${stateClass} ${expanded ? "case-chip--open" : ""}`}>
@@ -30,6 +31,7 @@ export function CaseChip({ case_: c, expanded, onToggle }: CaseChipProps) {
         className="case-chip__button"
         onClick={onToggle}
         aria-expanded={expanded}
+        aria-controls={detailId}
       >
         <span className="case-chip__glyph" aria-hidden>{stateGlyph(c.state)}</span>
         <span className="case-chip__method">{c.method}</span>
@@ -37,7 +39,7 @@ export function CaseChip({ case_: c, expanded, onToggle }: CaseChipProps) {
         <span className="case-chip__suffix">{findingSuffix}</span>
       </button>
       {expanded && (
-        <div className="case-chip__detail">
+        <div id={detailId} className="case-chip__detail">
           <div className="case-chip__row">
             <span className="case-chip__label">case</span>
             <span className="case-chip__value">#{c.case_id}</span>
