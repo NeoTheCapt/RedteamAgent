@@ -122,11 +122,10 @@ def get_document(
     # Determine which root to resolve from.
     # Paths that match a run_root-relative ARTIFACT_SPECS entry are served from
     # run_root; everything else is served from the engagement dir.
+    # Use exact-path matching against the allowlist — prefix-dir matching would
+    # allow arbitrary files under e.g. "runtime/" that are NOT in ARTIFACT_SPECS.
     norm_path = path.lstrip("/")
-    is_run_root_path = any(
-        norm_path == rel or norm_path.startswith(rel.split("/")[0] + "/")
-        for rel in _RUN_ROOT_PREFIXES
-    )
+    is_run_root_path = norm_path in _RUN_ROOT_PREFIXES
 
     if is_run_root_path:
         base = run_root

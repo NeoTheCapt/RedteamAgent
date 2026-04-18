@@ -391,6 +391,108 @@ def test_dispatch_start_preserves_existing_non_null_started_at(tmp_path):
         f"Guard failed: started_at was overwritten from {initial_started_at} to {c_final.started_at}"
 
 
+def test_dispatch_done_before_start_uses_event_phase(tmp_path):
+    """Bug 2: out-of-order dispatch_done created an orphan row with phase=''.
+    The fix uses event.phase so the orphan row carries the correct phase."""
+    run = _mk_run(tmp_path, name="ea_phase_orphan")
+
+    event_apply.apply(
+        run_id=run.id, kind="dispatch_done", phase="consume-test",
+        payload={"batch": "B-phase-orphan", "state": "done"},
+    )
+    d = db.get_dispatch(run.id, "B-phase-orphan")
+    assert d is not None
+    assert d.state == "done"
+    # Phase must come from the event envelope, NOT be blank
+    assert d.phase == "consume-test"
+
+
+def test_late_dispatch_start_does_not_produce_negative_duration(tmp_path):
+    """Bug 3: when dispatch_start arrives AFTER case_done and its timestamp is
+    strictly later than finished_at, started_at must NOT be backfilled (would
+    yield negative duration_ms). It must remain None.
+
+    We simulate the out-of-order scenario by:
+    1. Creating the case with finished_at=T via case_done
+    2. Manually setting the existing case's finished_at to T-2 (in the past)
+       so that the dispatch_start's int(time.time()) is definitely > finished_at
+    """
+    run = _mk_run(tmp_path, name="ea_neg_dur")
+
+    # Step 1: case_done arrives first (sets finished_at = now)
+    event_apply.apply(
+        run_id=run.id, kind="case_done", phase="consume",
+        payload={"case_id": 500, "outcome": "DONE", "dispatch": "B-neg",
+                 "agent": "v", "type": "api", "detail": "ok"},
+    )
+    c_after_done = db.get_case(run.id, 500)
+    assert c_after_done is not None
+    assert c_after_done.finished_at is not None
+    assert c_after_done.started_at is None  # case_done doesn't set started_at
+
+    # Step 2: Rewind finished_at to 2 seconds in the past so that
+    # the dispatch_start's case_started_ts (= int(time.time())) > finished_at.
+    past_finished_at = c_after_done.finished_at - 2
+    db.upsert_case(
+        case_id=500, run_id=run.id,
+        method=c_after_done.method, path=c_after_done.path,
+        category=c_after_done.category, dispatch_id=c_after_done.dispatch_id,
+        state=c_after_done.state, result=c_after_done.result,
+        finished_at=past_finished_at,
+    )
+    # Confirm rewind
+    c_rewound = db.get_case(run.id, 500)
+    assert c_rewound.finished_at == past_finished_at
+    assert c_rewound.started_at is None
+
+    # Step 3: dispatch_start arrives LATE — its case_started_ts > finished_at
+    event_apply.apply(
+        run_id=run.id, kind="dispatch_start", phase="consume",
+        payload={"batch": "B-neg", "round": 1, "slot": "0", "case_count": 1,
+                 "agent": "v",
+                 "cases": [{"id": 500, "method": "GET", "path": "/neg", "type": "api"}]},
+    )
+    c_final = db.get_case(run.id, 500)
+    # State must remain terminal (not reset to queued)
+    assert c_final.state == "done"
+    # started_at must remain None — backfilling would yield negative duration
+    assert c_final.started_at is None, (
+        f"started_at was backfilled to {c_final.started_at} "
+        f"(> finished_at={c_final.finished_at}); duration would be negative"
+    )
+    # Sanity: if both were set, duration must be non-negative
+    if c_final.started_at is not None and c_final.finished_at is not None:
+        assert c_final.finished_at - c_final.started_at >= 0, "duration must not be negative"
+
+
+def test_normal_dispatch_start_then_case_done_produces_non_negative_duration(tmp_path):
+    """Bug 3 regression check: the new guard must NOT break the normal happy path
+    where dispatch_start arrives before case_done (started_at < finished_at)."""
+    import time as _time
+    run = _mk_run(tmp_path, name="ea_pos_dur")
+
+    # Normal order: dispatch_start first, then case_done
+    event_apply.apply(
+        run_id=run.id, kind="dispatch_start", phase="consume",
+        payload={"batch": "B-pos", "round": 1, "slot": "0", "case_count": 1,
+                 "agent": "v",
+                 "cases": [{"id": 501, "method": "GET", "path": "/pos", "type": "api"}]},
+    )
+    _time.sleep(0.01)
+    event_apply.apply(
+        run_id=run.id, kind="case_done", phase="consume",
+        payload={"case_id": 501, "outcome": "DONE", "dispatch": "B-pos",
+                 "agent": "v", "type": "api", "detail": "ok"},
+    )
+    c = db.get_case(run.id, 501)
+    assert c.started_at is not None
+    assert c.finished_at is not None
+    assert c.finished_at >= c.started_at, (
+        f"Normal flow produced negative duration: "
+        f"started_at={c.started_at} finished_at={c.finished_at}"
+    )
+
+
 def test_missing_outcomes_state_persists(tmp_path):
     """dispatch_done with state='missing_outcomes' survives a late dispatch_start."""
     run = _mk_run(tmp_path, name="ea_missing")

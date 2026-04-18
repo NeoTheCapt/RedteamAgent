@@ -96,6 +96,51 @@ def test_get_case_404(isolate_data_dir):
     assert r.status_code == 404
 
 
+def test_list_cases_falls_back_to_agent_cases_db(isolate_data_dir):
+    """Bug 4: when the structured cases table is empty, /cases must fall back to
+    reading from the agent's cases.db so historical runs are not blank."""
+    import sqlite3
+
+    client = TestClient(app)
+    token, proj, run = _setup(client, "fb_c4", isolate_data_dir)
+
+    # Structured cases table is empty (no upsert_case calls).
+    # Create a realistic agent cases.db with two rows.
+    eng_dir = isolate_data_dir / "workspace" / "engagements" / "eng-fb"
+    eng_dir.mkdir(parents=True)
+    (eng_dir / "scope.json").write_text('{"current_phase":"collect"}')
+    (isolate_data_dir / "workspace" / "engagements" / ".active").write_text("engagements/eng-fb")
+
+    cases_db_path = eng_dir / "cases.db"
+    with sqlite3.connect(cases_db_path) as conn:
+        conn.execute("""
+            CREATE TABLE cases (
+                id INTEGER PRIMARY KEY, method TEXT, url TEXT, type TEXT, status TEXT
+            )
+        """)
+        conn.executemany(
+            "INSERT INTO cases (id, method, url, type, status) VALUES (?, ?, ?, ?, ?)",
+            [
+                (1, "GET",  "/api/users",    "api",  "done"),
+                (2, "POST", "/api/login",    "auth", "pending"),
+            ],
+        )
+        conn.commit()
+
+    r = client.get(f"/projects/{proj.id}/runs/{run.id}/cases",
+                   headers={"Authorization": f"Bearer {token}"})
+    assert r.status_code == 200
+    cases = r.json()
+    assert len(cases) == 2
+    paths = {c["path"] for c in cases}
+    assert "/api/users" in paths
+    assert "/api/login" in paths
+    # State mapping: "done" → "done", "pending" → "queued"
+    states = {c["path"]: c["state"] for c in cases}
+    assert states["/api/users"] == "done"
+    assert states["/api/login"] == "queued"
+
+
 def test_cases_rejects_other_users_run(isolate_data_dir):
     client = TestClient(app)
     _register(client, "alice_c4")

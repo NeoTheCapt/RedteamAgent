@@ -276,6 +276,48 @@ def test_documents_missing_engagement_returns_empty(isolate_data_dir):
         assert tree[bucket] == []
 
 
+def test_runtime_allowlist_exact_match_rejects_unlisted_runtime_files(isolate_data_dir):
+    """Bug 1: runtime/ prefix-dir match was allowing ANY file under runtime/.
+    The fix uses exact-path matching against _RUN_ROOT_PREFIXES.
+    process.json is NOT in ARTIFACT_SPECS so it must be excluded from listing
+    and return 404 on GET."""
+    client = TestClient(app)
+    token = _register(client, "d_exact")
+    user = db.get_user_by_username("d_exact")
+
+    run_root = isolate_data_dir / "run_exact"
+    run_root.mkdir()
+    _build_engagement(run_root)
+
+    # Also create runtime/process.json — NOT in ARTIFACT_SPECS
+    (run_root / "runtime").mkdir(exist_ok=True)
+    (run_root / "runtime" / "process.json").write_text('{"pid": 123}')
+
+    proj = db.create_project(user_id=user.id, name="d_exact", slug="d_exact",
+                             root_path=str(isolate_data_dir))
+    run = db.create_run(project_id=proj.id, target="http://x",
+                        status="running", engagement_root=str(run_root))
+
+    # Listing: process.log appears but process.json does NOT
+    r = client.get(f"/projects/{proj.id}/runs/{run.id}/documents",
+                   headers={"Authorization": f"Bearer {token}"})
+    assert r.status_code == 200
+    tree = r.json()
+    all_paths = {e["path"] for entries in tree.values() for e in entries}
+    assert "runtime/process.log" in all_paths
+    assert "runtime/process.json" not in all_paths
+
+    # GET process.log succeeds
+    r2 = client.get(f"/projects/{proj.id}/runs/{run.id}/documents/runtime/process.log",
+                    headers={"Authorization": f"Bearer {token}"})
+    assert r2.status_code == 200
+
+    # GET process.json returns 404 (not in allowlist)
+    r3 = client.get(f"/projects/{proj.id}/runs/{run.id}/documents/runtime/process.json",
+                    headers={"Authorization": f"Bearer {token}"})
+    assert r3.status_code == 404
+
+
 def test_list_and_get_runtime_process_log_at_run_root_level(isolate_data_dir):
     """runtime/process.log must be listed and readable when it lives at run_root level
     (sibling of workspace/, NOT nested inside the engagement dir)."""
