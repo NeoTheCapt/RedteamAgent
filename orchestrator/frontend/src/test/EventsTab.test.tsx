@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { EventsTab } from "../components/events/EventsTab";
@@ -12,6 +12,8 @@ vi.mock("../lib/api", async () => {
     runWebSocketUrl: vi.fn().mockReturnValue("ws://test/1"),
   };
 });
+import { listEvents } from "../lib/api";
+const mockListEvents = listEvents as unknown as ReturnType<typeof vi.fn>;
 
 // Same MockWebSocket trick as useRunWebSocket.test.ts
 class MockWebSocket {
@@ -90,5 +92,37 @@ describe("EventsTab", () => {
     await waitFor(() => screen.getByText("line-550"));
     expect(screen.queryByText("line-1")).not.toBeInTheDocument();
     expect(screen.queryByText("line-51")).toBeInTheDocument();
+  });
+
+  it("shows seed error banner when REST history fetch fails and clears it on recovery", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+
+    // First call rejects.
+    mockListEvents.mockRejectedValueOnce(new Error("denied"));
+
+    render(<EventsTab token="t" projectId={1} runId={2} />);
+
+    // Let the initial fetch settle.
+    await act(async () => { await Promise.resolve(); });
+
+    // Banner should appear with the error message.
+    await waitFor(() =>
+      expect(screen.getByRole("status")).toHaveTextContent("denied"),
+    );
+
+    // Second poll succeeds — banner should clear.
+    mockListEvents.mockResolvedValueOnce([]);
+    await act(async () => {
+      vi.advanceTimersByTime(15_000);
+      // Drain microtasks so the resolved promise settles.
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    await waitFor(() =>
+      expect(screen.queryByRole("status")).not.toBeInTheDocument(),
+    );
+
+    vi.useRealTimers();
   });
 });

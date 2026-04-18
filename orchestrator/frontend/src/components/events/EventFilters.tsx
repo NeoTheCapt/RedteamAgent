@@ -14,7 +14,7 @@ type EventFiltersProps = {
   onTogglePause: () => void;
 };
 
-const LEVELS = ["", "info", "warn", "error", "ok", "debug", "find"] as const;
+const LEVELS = ["", "info", "warn", "error", "ok", "debug"] as const;
 const KINDS = ["", "dispatch_start", "dispatch_done", "case_done", "finding", "phase_enter", "legacy"] as const;
 
 export function EventFilters({

@@ -109,3 +109,12 @@
 .event-row--ok    { border-left-color: var(--c-green); }
 .event-row--debug { border-left-color: var(--c-text-dimmer); color: var(--c-text-muted); }
 .event-row--find  { border-left-color: var(--c-red); background: rgba(255, 106, 133, 0.08); }
+
+.events__seed-warning {
+  padding: var(--sp-2) var(--sp-4);
+  background: rgba(255, 184, 77, 0.10);
+  color: var(--c-text-muted);
+  font-size: var(--fs-xs);
+  border-bottom: 1px solid var(--c-border);
+  flex-shrink: 0;
+}

@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { DocumentsTab } from "../components/documents/DocumentsTab";
@@ -60,5 +60,51 @@ describe("DocumentsTab", () => {
     await waitFor(() =>
       expect(screen.getByRole("alert")).toHaveTextContent("denied"),
     );
+  });
+
+  it("clears selectedPath when the file disappears from a subsequent poll", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+
+    const treeWith = {
+      findings: [{ name: "a.md", path: "findings/a.md", size: 100, mtime: 0 }],
+      reports: [], intel: [], surface: [], other: [],
+    };
+    const treeWithout = {
+      findings: [],
+      reports: [], intel: [], surface: [], other: [],
+    };
+
+    mockList.mockResolvedValueOnce(treeWith);
+    mockGet.mockResolvedValue({ path: "findings/a.md", content: "# Hello" });
+
+    render(<DocumentsTab token="t" projectId={1} runId={2} />);
+
+    // Let the initial fetch resolve.
+    await act(async () => { await Promise.resolve(); });
+    await waitFor(() => screen.getByText("a.md"));
+
+    // Click the file — preview loads.
+    await act(async () => {
+      await userEvent.click(screen.getByText("a.md"));
+    });
+    await waitFor(() =>
+      expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("Hello"),
+    );
+
+    // Second poll returns tree without findings/a.md.
+    mockList.mockResolvedValueOnce(treeWithout);
+    await act(async () => {
+      vi.advanceTimersByTime(10_000);
+      // Drain microtasks so the resolved promise settles.
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // selectedPath should be cleared → placeholder text appears.
+    await waitFor(() =>
+      expect(screen.getByText(/Select a document from the left/)).toBeInTheDocument(),
+    );
+
+    vi.useRealTimers();
   });
 });

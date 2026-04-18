@@ -12,6 +12,14 @@ type DocumentsTabProps = {
   runId: number;
 };
 
+function treeContains(tree: Tree, path: string): boolean {
+  for (const bucket of ["findings", "reports", "intel", "surface", "other"] as const) {
+    const entries = tree[bucket] ?? [];
+    if (entries.some((e) => e.path === path)) return true;
+  }
+  return false;
+}
+
 export function DocumentsTab({ token, projectId, runId }: DocumentsTabProps) {
   const [tree, setTree] = useState<Tree | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -24,6 +32,7 @@ export function DocumentsTab({ token, projectId, runId }: DocumentsTabProps) {
         if (signal.aborted) return;
         setTree(t);
         setError(null);
+        setSelectedPath((prev) => (prev !== null && !treeContains(t, prev) ? null : prev));
       } catch (err) {
         if (signal.aborted) return;
         setError(err instanceof Error ? err.message : String(err));

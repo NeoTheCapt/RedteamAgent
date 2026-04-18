@@ -23,6 +23,7 @@ export function EventsTab({ token, projectId, runId }: EventsTabProps) {
   const [filters, setFilters] = useState<EventFilterValues>(emptyFilters());
   const [paused, setPaused] = useState(false);
   const [autoScroll, setAutoScroll] = useState(true);
+  const [seedError, setSeedError] = useState<string | null>(null);
   const pausedRef = useRef(paused);
   pausedRef.current = paused;
 
@@ -34,8 +35,10 @@ export function EventsTab({ token, projectId, runId }: EventsTabProps) {
         const seed = await listEvents(token, projectId, runId);
         if (signal.aborted) return;
         setEvents((prev) => mergeEvents(prev, seed as DisplayEvent[]));
-      } catch {
-        // ignore — socket is the primary channel.
+        setSeedError(null);
+      } catch (err) {
+        if (signal.aborted) return;
+        setSeedError(err instanceof Error ? err.message : String(err));
       }
     },
     [token, projectId, runId],
@@ -66,6 +69,11 @@ export function EventsTab({ token, projectId, runId }: EventsTabProps) {
         paused={paused}
         onTogglePause={() => setPaused((p) => !p)}
       />
+      {seedError && (
+        <div className="events__seed-warning" role="status" aria-live="polite">
+          Event history refresh failed: {seedError}. Live events continue.
+        </div>
+      )}
       <EventStream
         events={filtered}
         autoScroll={autoScroll}
