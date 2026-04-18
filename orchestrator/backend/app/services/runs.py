@@ -778,15 +778,22 @@ def update_run_status(project_id: int, run_id: int, user: User, status_value: st
     if run is None or run.project_id != project.id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
 
-    updated = db.update_run_status(run_id, status_value)
-    if status_value == "stopped" and run.status == "running":
+    if status_value == "stopped":
+        # Only a running run can transition to stopped.
+        # Already-terminal states (completed, failed, stopped) are no-ops.
+        # Queued runs never started, so there's nothing to stop — treat as no-op.
+        if run.status != "running":
+            return run
+        updated = db.update_run_status(run_id, "stopped")
         _write_run_terminal_reason(
             updated,
             reason_code="user_stopped",
             reason_text="Run stopped by operator.",
         )
         stop_run_runtime(updated)
-    return updated
+        return updated
+
+    return db.update_run_status(run_id, status_value)
 
 
 def delete_run_for_project(project_id: int, run_id: int, user: User) -> None:

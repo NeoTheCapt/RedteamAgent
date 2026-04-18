@@ -3665,3 +3665,110 @@ def test_reconcile_does_not_flip_stopped_run_back_to_running(monkeypatch):
     assert reconciled.status == "stopped"
     # stop_run_runtime must not have been called again by reconcile.
     assert stopped_calls == []
+
+
+def test_stop_request_on_completed_run_is_no_op(monkeypatch):
+    """POST /projects/:p/runs/:id/status with {status: "stopped"} on a completed run
+    returns the run unchanged (status="completed"), and does not call stop_run_runtime
+    or write terminal reason."""
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+
+    create_run = client.post(
+        f"/projects/{project['id']}/runs",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"target": "https://example.com"},
+    )
+    assert create_run.status_code == 201
+    run = create_run.json()
+    db.update_run_status(run["id"], "running")
+    db.update_run_status(run["id"], "completed")
+
+    stopped_calls: list[int] = []
+    monkeypatch.setattr("app.services.runs.stop_run_runtime", lambda r: stopped_calls.append(r.id))
+    write_reason_calls: list[tuple] = []
+    def mock_write_reason(run, reason_code, reason_text):
+        write_reason_calls.append((run.id, reason_code, reason_text))
+    monkeypatch.setattr("app.services.runs._write_run_terminal_reason", mock_write_reason)
+
+    response = client.post(
+        f"/projects/{project['id']}/runs/{run['id']}/status",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"status": "stopped"},
+    )
+    assert response.status_code == 200
+    assert response.json()["status"] == "completed"
+    assert stopped_calls == []
+    assert write_reason_calls == []
+
+
+def test_stop_request_on_queued_run_is_no_op(monkeypatch):
+    """POST /projects/:p/runs/:id/status with {status: "stopped"} on a queued run
+    returns the run unchanged (status="queued"), and does not call stop_run_runtime
+    or write terminal reason."""
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+
+    create_run = client.post(
+        f"/projects/{project['id']}/runs",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"target": "https://example.com"},
+    )
+    assert create_run.status_code == 201
+    run = create_run.json()
+    assert run["status"] == "queued"
+
+    stopped_calls: list[int] = []
+    monkeypatch.setattr("app.services.runs.stop_run_runtime", lambda r: stopped_calls.append(r.id))
+    write_reason_calls: list[tuple] = []
+    def mock_write_reason(run, reason_code, reason_text):
+        write_reason_calls.append((run.id, reason_code, reason_text))
+    monkeypatch.setattr("app.services.runs._write_run_terminal_reason", mock_write_reason)
+
+    response = client.post(
+        f"/projects/{project['id']}/runs/{run['id']}/status",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"status": "stopped"},
+    )
+    assert response.status_code == 200
+    assert response.json()["status"] == "queued"
+    assert stopped_calls == []
+    assert write_reason_calls == []
+
+
+def test_stop_request_on_already_stopped_run_is_idempotent(monkeypatch):
+    """POST /projects/:p/runs/:id/status with {status: "stopped"} on an already-stopped run
+    returns the run unchanged (status="stopped"), and does not call stop_run_runtime
+    or write terminal reason again."""
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+
+    create_run = client.post(
+        f"/projects/{project['id']}/runs",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"target": "https://example.com"},
+    )
+    assert create_run.status_code == 201
+    run = create_run.json()
+    db.update_run_status(run["id"], "running")
+    db.update_run_status(run["id"], "stopped")
+
+    stopped_calls: list[int] = []
+    monkeypatch.setattr("app.services.runs.stop_run_runtime", lambda r: stopped_calls.append(r.id))
+    write_reason_calls: list[tuple] = []
+    def mock_write_reason(run, reason_code, reason_text):
+        write_reason_calls.append((run.id, reason_code, reason_text))
+    monkeypatch.setattr("app.services.runs._write_run_terminal_reason", mock_write_reason)
+
+    response = client.post(
+        f"/projects/{project['id']}/runs/{run['id']}/status",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"status": "stopped"},
+    )
+    assert response.status_code == 200
+    assert response.json()["status"] == "stopped"
+    assert stopped_calls == []
+    assert write_reason_calls == []
