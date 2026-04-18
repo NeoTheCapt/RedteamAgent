@@ -141,6 +141,61 @@ def test_list_cases_falls_back_to_agent_cases_db(isolate_data_dir):
     assert states["/api/login"] == "queued"
 
 
+def test_get_case_detail_falls_back_to_agent_cases_db(isolate_data_dir):
+    """Bug fix: GET /cases/:id must fall back to cases.db when the structured
+    cases table is empty, so clicking a row shown by list_cases doesn't 404."""
+    import sqlite3
+
+    client = TestClient(app)
+    token, proj, run = _setup(client, "gc_fb_c4", isolate_data_dir)
+
+    # Structured cases table is empty.
+    # Create a realistic agent cases.db with two rows.
+    eng_dir = isolate_data_dir / "workspace" / "engagements" / "eng-gc-fb"
+    eng_dir.mkdir(parents=True)
+    (eng_dir / "scope.json").write_text('{"current_phase":"collect"}')
+    (isolate_data_dir / "workspace" / "engagements" / ".active").write_text("engagements/eng-gc-fb")
+
+    cases_db_path = eng_dir / "cases.db"
+    with sqlite3.connect(cases_db_path) as conn:
+        conn.execute("""
+            CREATE TABLE cases (
+                id INTEGER PRIMARY KEY, method TEXT, url TEXT, type TEXT, status TEXT
+            )
+        """)
+        conn.executemany(
+            "INSERT INTO cases (id, method, url, type, status) VALUES (?, ?, ?, ?, ?)",
+            [
+                (1, "GET",  "/api/users",  "api",  "done"),
+                (2, "POST", "/api/login",  "auth", "pending"),
+            ],
+        )
+        conn.commit()
+
+    # GET /cases/1 must return the row from cases.db.
+    r1 = client.get(f"/projects/{proj.id}/runs/{run.id}/cases/1",
+                    headers={"Authorization": f"Bearer {token}"})
+    assert r1.status_code == 200
+    body1 = r1.json()
+    assert body1["case_id"] == 1
+    assert body1["path"] == "/api/users"
+    assert body1["state"] == "done"
+
+    # GET /cases/2 must return the row from cases.db (state mapped from "pending").
+    r2 = client.get(f"/projects/{proj.id}/runs/{run.id}/cases/2",
+                    headers={"Authorization": f"Bearer {token}"})
+    assert r2.status_code == 200
+    body2 = r2.json()
+    assert body2["case_id"] == 2
+    assert body2["path"] == "/api/login"
+    assert body2["state"] == "queued"
+
+    # A case id not in cases.db must still 404.
+    r_missing = client.get(f"/projects/{proj.id}/runs/{run.id}/cases/99",
+                           headers={"Authorization": f"Bearer {token}"})
+    assert r_missing.status_code == 404
+
+
 def test_cases_rejects_other_users_run(isolate_data_dir):
     client = TestClient(app)
     _register(client, "alice_c4")

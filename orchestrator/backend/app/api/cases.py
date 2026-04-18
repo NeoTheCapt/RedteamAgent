@@ -44,6 +44,50 @@ _AGENT_STATUS_TO_STATE: dict[str, str] = {
 }
 
 
+def _read_case_from_agent_db(cases_db_path: Path, case_id: int) -> dict | None:
+    """Read a single case row by id from the agent's cases.db.
+
+    Mirrors ``_read_cases_from_agent_db`` but adds a WHERE id=? filter and
+    returns one dict (in the API shape) or None when the row is absent.
+    """
+    if not cases_db_path.exists():
+        return None
+    try:
+        with sqlite3.connect(cases_db_path, timeout=1.0) as conn:
+            col_rows = conn.execute("PRAGMA table_info(cases)").fetchall()
+            col_names = {str(r[1]) for r in col_rows}
+            if not col_names:
+                return None
+            select = [c for c in ("id", "method", "url", "type", "status") if c in col_names]
+            if not select:
+                return None
+            row = conn.execute(
+                f"SELECT {', '.join(select)} FROM cases WHERE id = ?",
+                (case_id,),
+            ).fetchone()
+    except sqlite3.Error:
+        return None
+
+    if row is None:
+        return None
+    payload = dict(zip(select, row, strict=False))
+    raw_status = str(payload.get("status") or "").strip().lower()
+    state = _AGENT_STATUS_TO_STATE.get(raw_status, raw_status or "queued")
+    return {
+        "case_id": int(payload.get("id") or case_id),
+        "method": str(payload.get("method") or "GET").strip() or "GET",
+        "path": str(payload.get("url") or "").strip(),
+        "category": str(payload.get("type") or "").strip() or None,
+        "dispatch_id": None,
+        "state": state,
+        "result": None,
+        "finding_id": None,
+        "started_at": None,
+        "finished_at": None,
+        "duration_ms": None,
+    }
+
+
 def _read_cases_from_agent_db(cases_db_path: Path) -> list[dict]:
     """Read case rows from the agent's cases.db and convert to the API shape.
 
@@ -131,6 +175,18 @@ def get_case(
     if run is None or run.project_id != project.id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
     c = db.get_case(run.id, case_id)
+    if c is None:
+        # Fall back to agent cases.db (same pattern as list_cases).
+        run_root = Path(run.engagement_root)
+        try:
+            active_root = _active_engagement_root(run_root)
+            cases_db_path = _resolve_cases_db(run_root, active_root)
+        except Exception:
+            cases_db_path = None
+        if cases_db_path is not None:
+            fallback = _read_case_from_agent_db(cases_db_path, case_id)
+            if fallback is not None:
+                return fallback
     if c is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Case not found")
     return _serialize(c)

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { getDocument } from "../../lib/api";
+import { useAutoRefresh } from "../../lib/useAutoRefresh";
 
 type DocumentPreviewProps = {
   token: string;
@@ -74,6 +75,28 @@ export function DocumentPreview({
       cancelled = true;
     };
   }, [token, projectId, runId, path]);
+
+  // Auto-refresh: silently re-fetch every 10 s for text files so live content
+  // (report.md, process.log, …) stays current without the user needing to
+  // re-select the file. No loading spinner is shown during polling — only the
+  // initial path-change effect sets setLoading(true).
+  useAutoRefresh(
+    async (signal) => {
+      if (path === null || !isTextPath(path)) return;
+      try {
+        const doc = await getDocument(token, projectId, runId, path);
+        if (signal.aborted) return;
+        setContent(doc.content);
+        setError(null);
+      } catch {
+        // Swallow transient poll errors: keep the last good content visible.
+        // If the initial load already showed an error, it stays until the next
+        // successful refresh clears it.
+      }
+    },
+    [token, projectId, runId, path],
+    { intervalMs: 10_000 },
+  );
 
   if (path === null) {
     return (

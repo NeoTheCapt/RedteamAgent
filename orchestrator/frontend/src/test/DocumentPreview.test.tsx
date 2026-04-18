@@ -1,5 +1,5 @@
-import { render, screen, waitFor } from "@testing-library/react";
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { render, screen, waitFor, act } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { DocumentPreview } from "../components/documents/DocumentPreview";
 
 vi.mock("../lib/api", async () => {
@@ -14,6 +14,10 @@ const mockGet = getDocument as unknown as ReturnType<typeof vi.fn>;
 describe("DocumentPreview", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("shows placeholder when path is null", () => {
@@ -83,5 +87,37 @@ describe("DocumentPreview", () => {
     await waitFor(() => {
       expect(screen.getByRole("alert")).toHaveTextContent("404");
     });
+  });
+
+  it("auto-refreshes content every 10 s without flashing the loading spinner", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+
+    // First fetch returns "A".
+    mockGet.mockResolvedValueOnce({ path: "report.md", content: "A" });
+
+    render(
+      <DocumentPreview token="t" projectId={1} runId={2} path="report.md" />
+    );
+
+    // Initial load: wait for "A" to appear.
+    await waitFor(() => expect(screen.queryByText("A")).toBeInTheDocument());
+
+    // Loading spinner must not be visible after initial load.
+    expect(screen.queryByText(/Loading/)).not.toBeInTheDocument();
+
+    // Second fetch (auto-refresh tick after 10 s) returns "B".
+    mockGet.mockResolvedValueOnce({ path: "report.md", content: "B" });
+
+    await act(async () => {
+      vi.advanceTimersByTime(10_000);
+      // Flush the microtask queue so the async fetcher resolves.
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    await waitFor(() => expect(screen.queryByText("B")).toBeInTheDocument());
+
+    // Loading spinner still must not be visible (no spinner during auto-refresh).
+    expect(screen.queryByText(/Loading/)).not.toBeInTheDocument();
   });
 });
