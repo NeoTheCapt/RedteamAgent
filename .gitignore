@@ -15,6 +15,7 @@
 /orchestrator/backend/data/
 /orchestrator/backend/*.egg-info/
 /.superpowers/brainstorm/
+/.opencode/vendor/
 docs/**
 !docs/
 !docs/redteam-agent-demo-fast.gif
