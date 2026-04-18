@@ -61,12 +61,12 @@ LOCAL_CMD_DEFAULT="msfrpcd -P ${MSF_PASSWORD:-msf} -U ${MSF_USER:-msf} -a ${MSF_
 LOCAL_CMD="${METASPLOIT_LOCAL_CMD:-$LOCAL_CMD_DEFAULT}"
 
 local_runtime_is_running() {
-  pid_is_running "$(pid_file_path "$PID_DIR" "$SERVICE_NAME")"
+  pid_is_running "$(pid_file_path "$PID_DIR" "$SERVICE_NAME")" msfrpcd
 }
 
 local_start_service_once() {
   echo "[metasploit] Runtime unavailable, starting local $SERVICE_NAME..." >&2
-  start_managed_process "$PID_DIR" "$SERVICE_NAME" bash -lc "$LOCAL_CMD" >/dev/null
+  start_managed_process "$PID_DIR" "$SERVICE_NAME" msfrpcd bash -lc "$LOCAL_CMD" >/dev/null
 }
 
 local_probe_ready() {
