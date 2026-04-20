@@ -322,25 +322,29 @@ RedteamOpencode/                ← 开发工作区（git 根目录）
 ├── README.md                   ← 英文说明
 ├── README.zh.md                ← 中文说明
 │
-└── agent/                      ← 所有运行时文件（实际被安装的内容）
-    ├── CLAUDE.md               ← Claude Code operator prompt
-    ├── AGENTS.md               ← Codex operator prompt
-    ├── .opencode/              ← OpenCode 配置与唯一事实源
-    │   ├── opencode.json       ← agent 元数据、skills、commands、plugins
-    │   ├── prompts/agents/     ← 8 个 agent prompt（.txt）— 唯一事实源
-    │   ├── commands/           ← 19 个 slash command（.md）— 唯一事实源
-    │   └── plugins/            ← engagement hooks（TypeScript）
-    ├── .claude/                ← Claude Code 配置（agents + commands 为生成产物）
-    │   └── settings.json       ← hooks（scope check + auto-logging）
-    ├── .codex/                 ← Codex 配置（agents 为生成产物）
-    ├── scripts/
-    │   ├── install-time generators ← install.sh 生成 .claude/agents + .codex/agents + .claude/commands
-    │   ├── dispatcher.sh       ← case 队列管理
-    │   └── ...                 ← ingest、hooks、共享库
-    ├── skills/                 ← 32 个攻击方法技能
-    ├── references/             ← 78 份参考资料（OWASP、工具、战术、AD）
-    ├── docker/                 ← Dockerfile + docker-compose.yml
-    └── engagements/            ← 每次 engagement 的运行输出目录
+├── agent/                      ← 所有 agent 运行时文件（实际被安装的内容）
+│   ├── CLAUDE.md               ← Claude Code operator prompt
+│   ├── AGENTS.md               ← Codex operator prompt
+│   ├── .opencode/              ← OpenCode 配置与唯一事实源
+│   │   ├── opencode.json       ← agent 元数据、skills、commands、plugins
+│   │   ├── prompts/agents/     ← 8 个 agent prompt（.txt）— 唯一事实源
+│   │   ├── commands/           ← 19 个 slash command（.md）— 唯一事实源
+│   │   └── plugins/            ← engagement hooks（TypeScript）
+│   ├── .claude/                ← Claude Code 配置（agents + commands 为生成产物）
+│   │   └── settings.json       ← hooks（scope check + auto-logging）
+│   ├── .codex/                 ← Codex 配置（agents 为生成产物）
+│   ├── scripts/
+│   │   ├── install-time generators ← install.sh 生成 .claude/agents + .codex/agents + .claude/commands
+│   │   ├── dispatcher.sh       ← case 队列管理
+│   │   └── ...                 ← ingest、hooks、共享库
+│   ├── skills/                 ← 32 个攻击方法技能
+│   ├── references/             ← 78 份参考资料（OWASP、工具、战术、AD）
+│   ├── docker/                 ← Dockerfile + docker-compose.yml
+│   └── engagements/            ← 每次 engagement 的运行输出目录
+│
+└── orchestrator/               ← 可选的 Web UI（FastAPI 后端 + React 前端）
+    ├── backend/                ← Python API；通过 agent_source_dir 读取 agent/
+    └── frontend/               ← React shell（Documents / Events / Progress / Cases 页签）
 ```
 
 ## CLI 兼容性
@@ -380,10 +384,34 @@ mkdir agent/skills/my-skill
 
 ## 开发
 
-这个仓库分两层：
+### 目录约定（贡献前必读）
 
-- **根目录**（`RedteamOpencode/`）：开发工作区，包含安装脚本和 README。开发任务在这里运行。
-- **Agent 层**（`agent/`）：所有真正会被安装到 `~/redteam-agent` 的运行时文件。做 engagement 时，应在 `agent/` 或安装后的 `~/redteam-agent/` 里运行 CLI。
+仓库有**严格的三层划分**，不要跨层：
+
+| 层 | 职责 | 示例内容 |
+|----|------|---------|
+| **根目录** | 仅 meta —— 安装脚本、文档、CI | `install.sh`、`README*.md`、`.gitignore`、`docs/` |
+| **`agent/`** | 所有 agent 运行时（**事实源**） | `.opencode/`、`scripts/`、`skills/`、`references/`、`docker/`、prompts、operator 核心 |
+| **`orchestrator/`** | 可选 Web UI（只读 `agent/`，不依赖根目录副本） | `backend/`（FastAPI）、`frontend/`（React） |
+
+**规则**：`agent/` 是 agent 运行时的唯一事实源。orchestrator 后端把 `agent_source_dir = REPO_ROOT / "agent"` 写死在 `orchestrator/backend/app/config.py:17`，并由此同步到每次 engagement 的 workspace。`install.sh` 也从 `agent/` 复制到目标目录。
+
+**禁止**在仓库根目录新建 `/.opencode/`、`/scripts/`、`/skills/`、`/references/` 或 `/docker/`。请改动 `agent/` 下的对应副本。
+
+已有两层防护：
+
+1. **`.gitignore`** 在 `git add` 阶段就拦住这些路径。
+2. **pre-commit hook**：`agent/scripts/hooks/block-root-dup-dirs.sh` 会拒绝含这些路径的提交。每次 clone 后需手动安装一次：
+
+   ```bash
+   cp agent/scripts/hooks/block-root-dup-dirs.sh .git/hooks/pre-commit
+   chmod +x .git/hooks/pre-commit
+   ```
+
+### 在哪里运行 CLI
+
+- **根目录**（`RedteamOpencode/`）：开发工作区。需要做仓库级工具（测试、文档、orchestrator 开发）时在这里运行 CLI。
+- **`agent/`**：运行时主场。做 engagement 时，在 `agent/`（或安装后的 `~/redteam-agent/`）里运行 CLI。
 
 ### 单一事实源架构
 

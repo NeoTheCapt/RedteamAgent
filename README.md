@@ -321,25 +321,29 @@ RedteamOpencode/                ← dev workspace (git root)
 ├── install.sh                  ← installs agent/ to ~/redteam-agent
 ├── README.md                   ← project docs
 │
-└── agent/                      ← ALL runtime files (what gets installed)
-    ├── CLAUDE.md               ← operator prompt (Claude Code)
-    ├── AGENTS.md               ← operator prompt (Codex)
-    ├── .opencode/              ← OpenCode config + single source of truth
-    │   ├── opencode.json       ← agent metadata, skills, commands, plugins
-    │   ├── prompts/agents/     ← 8 agent prompts (.txt) — SINGLE SOURCE
-    │   ├── commands/           ← 19 slash commands (.md) — SINGLE SOURCE
-    │   └── plugins/            ← engagement hooks (TypeScript)
-    ├── .claude/                ← Claude Code config (agents + commands generated)
-    │   └── settings.json       ← hooks (scope check + auto-logging)
-    ├── .codex/                 ← Codex config (agents generated)
-    ├── scripts/
-    │   ├── install-time generators ← install.sh builds .claude/agents + .codex/agents + .claude/commands
-    │   ├── dispatcher.sh       ← case queue management
-    │   └── ...                 ← ingest, hooks, shared libraries
-    ├── skills/                 ← 32 attack methodology skills
-    ├── references/             ← 78 reference files (OWASP, tools, tactics, AD)
-    ├── docker/                 ← Dockerfiles + docker-compose.yml
-    └── engagements/            ← per-engagement output (created at runtime)
+├── agent/                      ← ALL agent runtime files (what gets installed)
+│   ├── CLAUDE.md               ← operator prompt (Claude Code)
+│   ├── AGENTS.md               ← operator prompt (Codex)
+│   ├── .opencode/              ← OpenCode config + single source of truth
+│   │   ├── opencode.json       ← agent metadata, skills, commands, plugins
+│   │   ├── prompts/agents/     ← 8 agent prompts (.txt) — SINGLE SOURCE
+│   │   ├── commands/           ← 19 slash commands (.md) — SINGLE SOURCE
+│   │   └── plugins/            ← engagement hooks (TypeScript)
+│   ├── .claude/                ← Claude Code config (agents + commands generated)
+│   │   └── settings.json       ← hooks (scope check + auto-logging)
+│   ├── .codex/                 ← Codex config (agents generated)
+│   ├── scripts/
+│   │   ├── install-time generators ← install.sh builds .claude/agents + .codex/agents + .claude/commands
+│   │   ├── dispatcher.sh       ← case queue management
+│   │   └── ...                 ← ingest, hooks, shared libraries
+│   ├── skills/                 ← 32 attack methodology skills
+│   ├── references/             ← 78 reference files (OWASP, tools, tactics, AD)
+│   ├── docker/                 ← Dockerfiles + docker-compose.yml
+│   └── engagements/            ← per-engagement output (created at runtime)
+│
+└── orchestrator/               ← optional web UI (FastAPI backend + React frontend)
+    ├── backend/                ← Python API; reads from agent/ via agent_source_dir
+    └── frontend/               ← React shell (Documents / Events / Progress / Cases tabs)
 ```
 
 ## CLI Compatibility
@@ -379,10 +383,34 @@ Edit `model` in `agent/.opencode/opencode.json`. Supports Anthropic, OpenAI, Goo
 
 ## Development
 
-This repo has two layers:
+### Directory Convention (READ BEFORE CONTRIBUTING)
 
-- **Root** (`RedteamOpencode/`): dev workspace with install script and README. Run your CLI here for development tasks.
-- **Agent** (`agent/`): all runtime files that get installed to `~/redteam-agent`. Run your CLI inside `agent/` (or `~/redteam-agent/`) for engagements.
+This repo has a **strict three-layer split** — do not cross the lines:
+
+| Layer | Purpose | Examples |
+|-------|---------|----------|
+| **Repo root** | Meta only — install script, docs, CI | `install.sh`, `README*.md`, `.gitignore`, `docs/` |
+| **`agent/`** | ALL agent runtime (**canonical**) | `.opencode/`, `scripts/`, `skills/`, `references/`, `docker/`, prompts, operator core |
+| **`orchestrator/`** | Optional web UI (reads `agent/`, never copies from root) | `backend/` (FastAPI), `frontend/` (React) |
+
+**Rule**: `agent/` is the single source of truth for the agent runtime. The orchestrator backend hardcodes `agent_source_dir = REPO_ROOT / "agent"` (`orchestrator/backend/app/config.py:17`) and syncs from there into each engagement's workspace. `install.sh` also installs from `agent/` into the target dir.
+
+**DO NOT** create root-level `/.opencode/`, `/scripts/`, `/skills/`, `/references/`, or `/docker/`. Edit the `agent/`-scoped copy instead.
+
+Two guards are in place:
+
+1. **`.gitignore`** blocks those paths at `git add` time.
+2. **Pre-commit hook** at `agent/scripts/hooks/block-root-dup-dirs.sh` refuses the commit if the paths slip through. Install once per clone:
+
+   ```bash
+   cp agent/scripts/hooks/block-root-dup-dirs.sh .git/hooks/pre-commit
+   chmod +x .git/hooks/pre-commit
+   ```
+
+### Where to run your CLI
+
+- **Root** (`RedteamOpencode/`): dev workspace. Run CLI here for repo-level tooling (tests, docs work, orchestrator dev).
+- **`agent/`**: runtime home. Run CLI inside `agent/` (or the installed target `~/redteam-agent/`) to drive engagements.
 
 ### Single-Source Architecture
 
