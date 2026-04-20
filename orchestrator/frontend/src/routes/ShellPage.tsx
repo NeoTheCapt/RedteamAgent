@@ -9,7 +9,8 @@ import { CasesTab } from "../components/cases/CasesTab";
 import { DocumentsTab } from "../components/documents/DocumentsTab";
 import { EventsTab } from "../components/events/EventsTab";
 import { NewRunForm } from "../components/home/NewRunForm";
-import type { Project, Run, RunSummary } from "../lib/api";
+import { ProjectEditModal } from "../components/projects/ProjectEditModal";
+import type { Project, ProjectInput, Run, RunSummary } from "../lib/api";
 import { getRunSummary, stopRun } from "../lib/api";
 import { parseServerTimestamp } from "../lib/format";
 
@@ -20,7 +21,8 @@ type ShellPageProps = {
   runsByProject: Record<number, Run[]>;
   onLogout: () => void;
   onCreateRun: (projectId: number, target: string) => Promise<void>;
-  onCreateProject: (name: string) => Promise<void>;
+  onCreateProject: (input: ProjectInput) => Promise<void>;
+  onRefreshProjects?: () => Promise<void>;
 };
 
 type Route =
@@ -51,10 +53,11 @@ function navigate(route: string) {
 }
 
 export function ShellPage(props: ShellPageProps) {
-  const { token, username, projects, runsByProject, onLogout, onCreateRun, onCreateProject } = props;
+  const { token, username, projects, runsByProject, onLogout, onCreateRun, onCreateProject, onRefreshProjects } = props;
   const [route, setRoute] = useState<Route>(parseRoute(window.location.hash));
   const [summary, setSummary] = useState<RunSummary | null>(null);
   const [summaryError, setSummaryError] = useState<string | null>(null);
+  const [editingProject, setEditingProject] = useState<Project | null>(null);
 
   useEffect(() => {
     const handler = () => setRoute(parseRoute(window.location.hash));
@@ -196,7 +199,12 @@ export function ShellPage(props: ShellPageProps) {
       <main className="shell__main">
         {route.kind === "home" && (
           <div style={{ padding: "var(--sp-6)", overflowY: "auto" }}>
-            <NewRunForm projects={projects} onCreateRun={onCreateRun} onCreateProject={onCreateProject} />
+            <NewRunForm
+              projects={projects}
+              onCreateRun={onCreateRun}
+              onCreateProject={onCreateProject}
+              onEditProject={(p) => setEditingProject(p)}
+            />
           </div>
         )}
         {route.kind === "run" && selected && (
@@ -235,6 +243,18 @@ export function ShellPage(props: ShellPageProps) {
           />
         )}
       </main>
+      {editingProject && (
+        <ProjectEditModal
+          open={true}
+          token={token}
+          project={editingProject}
+          onClose={() => setEditingProject(null)}
+          onSaved={() => {
+            setEditingProject(null);
+            if (onRefreshProjects) void onRefreshProjects();
+          }}
+        />
+      )}
     </div>
   );
 }

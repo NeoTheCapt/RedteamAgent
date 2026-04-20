@@ -9,7 +9,7 @@ import {
   login,
   register,
 } from "./lib/api";
-import type { Project, Run } from "./lib/api";
+import type { Project, ProjectInput, Run } from "./lib/api";
 import { LoginPage } from "./routes/LoginPage";
 import { ShellPage } from "./routes/ShellPage";
 
@@ -121,11 +121,9 @@ export default function App() {
     navigate(`/projects/${projectId}/runs/${run.id}/dashboard`);
   }
 
-  const handleCreateProject = useCallback(async (name: string) => {
+  const refreshProjects = useCallback(async () => {
     if (!session) return;
     try {
-      await createProject(session.token, name);
-      // Refresh projects so the new one appears in the sidebar + dropdown.
       const nextProjects = await listProjects(session.token);
       setProjects(nextProjects);
       const entries = await Promise.all(
@@ -137,11 +135,25 @@ export default function App() {
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
         expireSession();
+      }
+      // Non-auth errors: swallow silently; the next poll will recover.
+    }
+  }, [session, expireSession]);
+
+  const handleCreateProject = useCallback(async (input: ProjectInput) => {
+    if (!session) return;
+    try {
+      await createProject(session.token, input);
+      // Refresh projects so the new one appears in the sidebar + dropdown.
+      await refreshProjects();
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) {
+        expireSession();
         return;
       }
       throw err;
     }
-  }, [session, expireSession]);
+  }, [session, expireSession, refreshProjects]);
 
   if (!session) {
     return <LoginPage onLogin={handleLogin} onRegister={handleRegister} />;
@@ -156,6 +168,7 @@ export default function App() {
       onLogout={expireSession}
       onCreateRun={handleCreateRun}
       onCreateProject={handleCreateProject}
+      onRefreshProjects={refreshProjects}
     />
   );
 }

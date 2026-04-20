@@ -30,9 +30,8 @@
   padding: var(--sp-5) var(--sp-5);
 }
 
-.new-run__section--placeholder {
-  background: transparent;
-  border-style: dashed;
+.new-run__section--inherited {
+  /* reuse the existing section pattern; no special bg needed */
 }
 
 .new-run__sec-title {
@@ -42,11 +41,60 @@
   color: var(--c-text);
 }
 
-.new-run__placeholder {
-  color: var(--c-text-dim);
+.new-run__inherited {
+  display: grid;
+  grid-template-columns: 100px 1fr;
+  gap: 6px var(--sp-3);
+  margin: 0 0 var(--sp-3);
   font-size: var(--fs-sm);
-  font-style: italic;
+}
+
+.new-run__inherited-row {
+  display: contents;
+}
+
+.new-run__inherited dt {
+  color: var(--c-text-dim);
+  font-family: var(--font-mono);
+}
+
+.new-run__inherited dd {
+  color: var(--c-text);
   margin: 0;
+}
+
+.new-run__edit-project {
+  background: transparent;
+  color: var(--c-accent);
+  border: 1px solid var(--c-accent);
+  padding: 4px 10px;
+  border-radius: var(--r-sm);
+  font-size: var(--fs-xs);
+  cursor: pointer;
+}
+.new-run__edit-project:hover { background: rgba(92, 200, 255, 0.08); }
+
+.new-run__advanced {
+  background: var(--c-panel-soft);
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-sm);
+  padding: var(--sp-2) var(--sp-3);
+  margin-top: var(--sp-2);
+}
+
+.new-run__advanced-toggle {
+  cursor: pointer;
+  color: var(--c-text-dim);
+  font-size: var(--fs-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  font-weight: var(--fw-semibold);
+}
+
+.new-run__advanced-hint {
+  margin: var(--sp-2) 0;
+  color: var(--c-text-dim);
+  font-size: var(--fs-xs);
 }
 
 .new-run__grid {

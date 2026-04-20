@@ -1,14 +1,49 @@
-import { FormEvent, useEffect, useState } from "react";
-import type { Project } from "../../lib/api";
+import { FormEvent, useEffect, useMemo, useState } from "react";
+import type { Project, ProjectInput } from "../../lib/api";
+import { ModelFields } from "../projects/ProjectForms";
 import "./NewRunForm.css";
 
 type NewRunFormProps = {
   projects: Project[];
   onCreateRun: (projectId: number, target: string) => Promise<void>;
-  onCreateProject: (name: string) => Promise<void>;
+  onCreateProject: (input: ProjectInput) => Promise<void>;
+  onEditProject: (project: Project) => void;
 };
 
-export function NewRunForm({ projects, onCreateRun, onCreateProject }: NewRunFormProps) {
+// ===== Summarizer helpers =====
+
+function summarizeCrawler(json: string): string {
+  try {
+    const obj = JSON.parse(json || "{}");
+    const keys = Object.keys(obj);
+    return keys.length === 0 ? "(defaults)" : `${keys.length} override${keys.length > 1 ? "s" : ""}`;
+  } catch {
+    return "(invalid)";
+  }
+}
+
+function summarizeParallel(json: string): string {
+  try {
+    const obj = JSON.parse(json || "{}");
+    const n = (obj as Record<string, unknown>).REDTEAM_MAX_PARALLEL_BATCHES;
+    return n != null ? `max ${n} batches` : "(defaults)";
+  } catch {
+    return "(invalid)";
+  }
+}
+
+function summarizeAgents(json: string): string {
+  try {
+    const obj = JSON.parse(json || "{}") as Record<string, unknown>;
+    const disabled = Object.entries(obj).filter(([, v]) => v === false).map(([k]) => k);
+    if (disabled.length === 0) return "all enabled";
+    return `${disabled.length} disabled: ${disabled.slice(0, 2).join(", ")}${disabled.length > 2 ? "\u2026" : ""}`;
+  } catch {
+    return "(invalid)";
+  }
+}
+
+export function NewRunForm({ projects, onCreateRun, onCreateProject, onEditProject }: NewRunFormProps) {
   const [projectId, setProjectId] = useState<number | "">(projects[0]?.id ?? "");
   const [target, setTarget] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -28,6 +63,19 @@ export function NewRunForm({ projects, onCreateRun, onCreateProject }: NewRunFor
   const [projectError, setProjectError] = useState<string | null>(null);
   // Expand the create-project block automatically when no projects exist.
   const [createOpen, setCreateOpen] = useState(projects.length === 0);
+
+  // Advanced model fields for new project creation.
+  const [newProjectProvider, setNewProjectProvider] = useState("");
+  const [newProjectModelId, setNewProjectModelId] = useState("");
+  const [newProjectSmallModelId, setNewProjectSmallModelId] = useState("");
+  const [newProjectApiKey, setNewProjectApiKey] = useState("");
+  const [newProjectBaseUrl, setNewProjectBaseUrl] = useState("");
+
+  // The currently selected project object (for inherited summary).
+  const selectedProject = useMemo(
+    () => (typeof projectId === "number" ? projects.find(p => p.id === projectId) ?? null : null),
+    [projectId, projects],
+  );
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
@@ -50,8 +98,19 @@ export function NewRunForm({ projects, onCreateRun, onCreateProject }: NewRunFor
     setCreatingProject(true);
     setProjectError(null);
     try {
-      await onCreateProject(name);
+      const input: ProjectInput = { name };
+      if (newProjectProvider) input.provider_id = newProjectProvider;
+      if (newProjectModelId) input.model_id = newProjectModelId.trim();
+      if (newProjectSmallModelId) input.small_model_id = newProjectSmallModelId.trim();
+      if (newProjectApiKey) input.api_key = newProjectApiKey;
+      if (newProjectBaseUrl) input.base_url = newProjectBaseUrl.trim();
+      await onCreateProject(input);
       setNewProjectName("");
+      setNewProjectProvider("");
+      setNewProjectModelId("");
+      setNewProjectSmallModelId("");
+      setNewProjectApiKey("");
+      setNewProjectBaseUrl("");
       // Do NOT close the block automatically — let the user see the new project
       // appear in the dropdown below before they decide whether to create another.
     } catch (err) {
@@ -66,8 +125,8 @@ export function NewRunForm({ projects, onCreateRun, onCreateProject }: NewRunFor
       <header className="new-run__head">
         <h1 className="new-run__title">New Engagement</h1>
         <p className="new-run__sub">
-          Select a project and a target URL. Agent + crawler config is inherited
-          from the project; advanced overrides arrive in a later plan.
+          Select a project and a target URL. Agent and crawler config is inherited
+          from the project.
         </p>
       </header>
 
@@ -102,11 +161,29 @@ export function NewRunForm({ projects, onCreateRun, onCreateProject }: NewRunFor
                 placeholder="e.g. juice-shop-lab"
                 disabled={creatingProject}
               />
-              <span className="new-run__hint">
-                Advanced configuration (provider, model, API key, scope, env) can
-                be edited from the project settings — coming in a later plan.
-              </span>
             </label>
+
+            <details className="new-run__advanced">
+              <summary className="new-run__advanced-toggle">Advanced (optional)</summary>
+              <p className="new-run__advanced-hint">
+                Configure model now, or leave empty and edit the project later.
+              </p>
+              <ModelFields
+                providerId={newProjectProvider}
+                modelId={newProjectModelId}
+                smallModelId={newProjectSmallModelId}
+                apiKey={newProjectApiKey}
+                baseUrl={newProjectBaseUrl}
+                onChange={(patch) => {
+                  if (patch.provider_id !== undefined) setNewProjectProvider(patch.provider_id);
+                  if (patch.model_id !== undefined) setNewProjectModelId(patch.model_id);
+                  if (patch.small_model_id !== undefined) setNewProjectSmallModelId(patch.small_model_id);
+                  if (patch.api_key !== undefined) setNewProjectApiKey(patch.api_key);
+                  if (patch.base_url !== undefined) setNewProjectBaseUrl(patch.base_url);
+                }}
+              />
+            </details>
+
             {projectError && (
               <div className="new-run__error" role="alert">{projectError}</div>
             )}
@@ -155,12 +232,36 @@ export function NewRunForm({ projects, onCreateRun, onCreateProject }: NewRunFor
         </div>
       </section>
 
-      <section className="new-run__section new-run__section--placeholder">
-        <h2 className="new-run__sec-title">Model · Crawler · Parallel · Agents</h2>
-        <p className="new-run__placeholder">
-          Inherited from project config. UI for per-run overrides arrives in Plan 4.
-        </p>
-      </section>
+      {selectedProject && (
+        <section className="new-run__section new-run__section--inherited">
+          <h2 className="new-run__sec-title">Inherited from project</h2>
+          <dl className="new-run__inherited">
+            <div className="new-run__inherited-row">
+              <dt>Model</dt>
+              <dd>{selectedProject.model_id || "(using .env default)"}</dd>
+            </div>
+            <div className="new-run__inherited-row">
+              <dt>Crawler</dt>
+              <dd>{summarizeCrawler(selectedProject.crawler_json)}</dd>
+            </div>
+            <div className="new-run__inherited-row">
+              <dt>Parallel</dt>
+              <dd>{summarizeParallel(selectedProject.parallel_json)}</dd>
+            </div>
+            <div className="new-run__inherited-row">
+              <dt>Agents</dt>
+              <dd>{summarizeAgents(selectedProject.agents_json)}</dd>
+            </div>
+          </dl>
+          <button
+            type="button"
+            className="new-run__edit-project"
+            onClick={() => onEditProject(selectedProject)}
+          >
+            Edit project configuration
+          </button>
+        </section>
+      )}
 
       {error && (
         <div className="new-run__error" role="alert">{error}</div>
