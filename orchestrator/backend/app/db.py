@@ -144,6 +144,13 @@ def init_db() -> None:
             connection.execute("ALTER TABLE projects ADD COLUMN auth_json TEXT NOT NULL DEFAULT ''")
         if "env_json" not in project_columns:
             connection.execute("ALTER TABLE projects ADD COLUMN env_json TEXT NOT NULL DEFAULT ''")
+        for col in ("crawler_json", "parallel_json", "agents_json"):
+            try:
+                connection.execute(
+                    f"ALTER TABLE projects ADD COLUMN {col} TEXT NOT NULL DEFAULT '{{}}'"
+                )
+            except sqlite3.OperationalError:
+                pass  # already exists
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS runs (
@@ -359,18 +366,21 @@ def create_project(
     base_url: str = "",
     auth_json: str = "",
     env_json: str = "",
+    crawler_json: str = "{}",
+    parallel_json: str = "{}",
+    agents_json: str = "{}",
 ) -> Project:
     with get_connection() as connection:
         cursor = connection.execute(
             """
-            INSERT INTO projects (user_id, name, slug, root_path, provider_id, model_id, small_model_id, api_key, base_url, auth_json, env_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO projects (user_id, name, slug, root_path, provider_id, model_id, small_model_id, api_key, base_url, auth_json, env_json, crawler_json, parallel_json, agents_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (user_id, name, slug, root_path, provider_id, model_id, small_model_id, api_key, base_url, auth_json, env_json),
+            (user_id, name, slug, root_path, provider_id, model_id, small_model_id, api_key, base_url, auth_json, env_json, crawler_json, parallel_json, agents_json),
         )
         row = connection.execute(
             """
-            SELECT id, user_id, name, slug, root_path, provider_id, model_id, small_model_id, api_key, base_url, auth_json, env_json, created_at
+            SELECT id, user_id, name, slug, root_path, provider_id, model_id, small_model_id, api_key, base_url, auth_json, env_json, crawler_json, parallel_json, agents_json, created_at
             FROM projects
             WHERE id = ?
             """,
@@ -384,7 +394,7 @@ def get_project_by_user_and_slug(user_id: int, slug: str) -> Project | None:
     with get_connection() as connection:
         row = connection.execute(
             """
-            SELECT id, user_id, name, slug, root_path, provider_id, model_id, small_model_id, api_key, base_url, auth_json, env_json, created_at
+            SELECT id, user_id, name, slug, root_path, provider_id, model_id, small_model_id, api_key, base_url, auth_json, env_json, crawler_json, parallel_json, agents_json, created_at
             FROM projects
             WHERE user_id = ? AND slug = ?
             """,
@@ -397,7 +407,7 @@ def list_projects_for_user(user_id: int) -> list[Project]:
     with get_connection() as connection:
         rows = connection.execute(
             """
-            SELECT id, user_id, name, slug, root_path, provider_id, model_id, small_model_id, api_key, base_url, auth_json, env_json, created_at
+            SELECT id, user_id, name, slug, root_path, provider_id, model_id, small_model_id, api_key, base_url, auth_json, env_json, crawler_json, parallel_json, agents_json, created_at
             FROM projects
             WHERE user_id = ?
             ORDER BY id ASC
@@ -411,7 +421,7 @@ def get_project_by_id(project_id: int) -> Project | None:
     with get_connection() as connection:
         row = connection.execute(
             """
-            SELECT id, user_id, name, slug, root_path, provider_id, model_id, small_model_id, api_key, base_url, auth_json, env_json, created_at
+            SELECT id, user_id, name, slug, root_path, provider_id, model_id, small_model_id, api_key, base_url, auth_json, env_json, crawler_json, parallel_json, agents_json, created_at
             FROM projects
             WHERE id = ?
             """,
@@ -442,7 +452,44 @@ def update_project_config(
         )
         row = connection.execute(
             """
-            SELECT id, user_id, name, slug, root_path, provider_id, model_id, small_model_id, api_key, base_url, auth_json, env_json, created_at
+            SELECT id, user_id, name, slug, root_path, provider_id, model_id, small_model_id, api_key, base_url, auth_json, env_json, crawler_json, parallel_json, agents_json, created_at
+            FROM projects
+            WHERE id = ?
+            """,
+            (project_id,),
+        ).fetchone()
+    assert row is not None
+    return Project.from_row(row)
+
+
+_UPDATABLE_PROJECT_FIELDS = frozenset({
+    "name", "provider_id", "model_id", "small_model_id",
+    "api_key", "base_url", "auth_json", "env_json",
+    "crawler_json", "parallel_json", "agents_json",
+})
+
+
+def update_project(project_id: int, **fields: str) -> Project:
+    """Update any subset of allowed project fields and return the refreshed Project.
+
+    Only columns listed in _UPDATABLE_PROJECT_FIELDS are accepted; unknown keys
+    raise ValueError to prevent SQL injection via dynamic column names.
+    """
+    if not fields:
+        raise ValueError("update_project requires at least one field")
+    unknown = set(fields) - _UPDATABLE_PROJECT_FIELDS
+    if unknown:
+        raise ValueError(f"Unknown project fields: {unknown}")
+    set_clause = ", ".join(f"{col} = ?" for col in fields)
+    values = list(fields.values()) + [project_id]
+    with get_connection() as connection:
+        connection.execute(
+            f"UPDATE projects SET {set_clause} WHERE id = ?",
+            values,
+        )
+        row = connection.execute(
+            """
+            SELECT id, user_id, name, slug, root_path, provider_id, model_id, small_model_id, api_key, base_url, auth_json, env_json, crawler_json, parallel_json, agents_json, created_at
             FROM projects
             WHERE id = ?
             """,

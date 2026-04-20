@@ -19,9 +19,13 @@ class Project:
     auth_json: str
     env_json: str
     created_at: str
+    crawler_json: str = "{}"
+    parallel_json: str = "{}"
+    agents_json: str = "{}"
 
     @classmethod
     def from_row(cls, row: Row) -> "Project":
+        keys = row.keys() if hasattr(row, "keys") else []
         return cls(
             id=row["id"],
             user_id=row["user_id"],
@@ -36,4 +40,7 @@ class Project:
             auth_json=row["auth_json"],
             env_json=row["env_json"],
             created_at=row["created_at"],
+            crawler_json=row["crawler_json"] if "crawler_json" in keys else "{}",
+            parallel_json=row["parallel_json"] if "parallel_json" in keys else "{}",
+            agents_json=row["agents_json"] if "agents_json" in keys else "{}",
         )
