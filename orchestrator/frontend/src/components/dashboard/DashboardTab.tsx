@@ -3,7 +3,6 @@ import { KpiRow } from "./KpiRow";
 import { PhaseStrip } from "./PhaseStrip";
 import { SeverityDonut } from "./SeverityDonut";
 import { CategoryBars } from "./CategoryBars";
-import { BenchmarkCard } from "./BenchmarkCard";
 import "./dashboard.css";
 
 type DashboardTabProps = {
@@ -19,7 +18,6 @@ export function DashboardTab({ summary }: DashboardTabProps) {
         <CategoryBars summary={summary} />
         <div className="dashboard__col">
           <SeverityDonut summary={summary} />
-          <BenchmarkCard summary={summary} />
         </div>
       </div>
     </div>

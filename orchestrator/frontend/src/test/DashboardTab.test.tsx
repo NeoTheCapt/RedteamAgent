@@ -91,9 +91,8 @@ describe("DashboardTab", () => {
     expect(screen.getByText("No cases processed yet.")).toBeInTheDocument();
   });
 
-  it("renders SeverityDonut + BenchmarkCard placeholders", () => {
+  it("renders SeverityDonut", () => {
     render(<DashboardTab summary={mkSummary()} />);
     expect(screen.getByText(/Per-severity breakdown/)).toBeInTheDocument();
-    expect(screen.getByText(/No benchmark configured/)).toBeInTheDocument();
   });
 });
