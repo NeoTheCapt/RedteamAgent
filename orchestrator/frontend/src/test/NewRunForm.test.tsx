@@ -9,6 +9,7 @@ function mkProject(o: Partial<Project> = {}): Project {
     id: 1, name: "P1", slug: "p1", root_path: "/x",
     provider_id: "", model_id: "", small_model_id: "", base_url: "",
     api_key_configured: false, auth_configured: false, env_configured: false,
+    crawler_json: "{}", parallel_json: "{}", agents_json: "{}",
     ...o,
   } as Project;
 }

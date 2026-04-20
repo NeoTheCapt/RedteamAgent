@@ -19,6 +19,9 @@ export type Project = {
   api_key_configured: boolean;
   auth_configured: boolean;
   env_configured: boolean;
+  crawler_json: string;
+  parallel_json: string;
+  agents_json: string;
 };
 
 export type Run = {
@@ -319,16 +322,42 @@ export type ProjectConfigInput = {
   clear_auth_json?: boolean;
   env_json?: string;
   clear_env_json?: boolean;
+  crawler_json?: string;
+  parallel_json?: string;
+  agents_json?: string;
 };
 
-export function createProject(token: string, name: string, config: ProjectConfigInput = {}) {
+// Input shape when creating a project (name required, all else optional).
+export type ProjectInput = {
+  name: string;
+  provider_id?: string;
+  model_id?: string;
+  small_model_id?: string;
+  api_key?: string;
+  base_url?: string;
+  auth_json?: string;
+  env_json?: string;
+  crawler_json?: string;
+  parallel_json?: string;
+  agents_json?: string;
+};
+
+// All optional; undefined means "don't change".
+export type ProjectUpdate = Partial<Omit<ProjectInput, "name">> & { name?: string };
+
+export function createProject(token: string, input: ProjectInput | string, config: ProjectConfigInput = {}) {
+  // Support both new-style createProject(token, { name, ...fields }) and
+  // legacy createProject(token, name, config) so existing callers keep working.
+  const body = typeof input === "string"
+    ? JSON.stringify({ name: input, ...config })
+    : JSON.stringify(input);
   return request<Project>("/projects", {
     method: "POST",
-    body: JSON.stringify({ name, ...config }),
+    body,
   }, token);
 }
 
-export function updateProject(token: string, projectId: number, config: ProjectConfigInput) {
+export function updateProject(token: string, projectId: number, config: ProjectConfigInput | ProjectUpdate) {
   return request<Project>(`/projects/${projectId}`, {
     method: "PATCH",
     body: JSON.stringify(config),
