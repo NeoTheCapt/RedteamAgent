@@ -110,6 +110,7 @@ def test_update_project_model_settings_preserves_or_clears_api_key():
     project = project_response.json()
     assert project["api_key_configured"] is True
 
+    # Partial update: only change model-related fields; api_key is not sent so it is preserved
     update_response = client.patch(
         f"/projects/{project['id']}",
         headers={"Authorization": f"Bearer {token}"},
@@ -125,10 +126,11 @@ def test_update_project_model_settings_preserves_or_clears_api_key():
     assert updated["auth_configured"] is False
     assert updated["env_configured"] is False
 
+    # Clear api_key by sending empty string
     clear_response = client.patch(
         f"/projects/{project['id']}",
         headers={"Authorization": f"Bearer {token}"},
-        json={"provider_id": "anthropic", "model_id": "claude-sonnet-4-5", "small_model_id": "", "clear_api_key": True, "base_url": ""},
+        json={"api_key": ""},
     )
     assert clear_response.status_code == 200
     cleared = clear_response.json()

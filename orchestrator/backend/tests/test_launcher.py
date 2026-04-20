@@ -5102,3 +5102,81 @@ def test_continuous_observation_target_matches_regex(tmp_path):
             result = _continuous_observation_target_matches(run)
 
     assert result, "regex re:^probe- should match probe-alpha.internal hostname"
+
+
+# --- Plan 5 A3: Project config env injection ---
+
+from app.models.project import Project
+from app.services.launcher import _inject_project_config_env
+
+
+def _mk_project(**overrides) -> Project:
+    defaults = dict(
+        id=1, user_id=1, name="demo", slug="demo", root_path="/tmp/demo",
+        provider_id="", model_id="", small_model_id="",
+        api_key="", base_url="",
+        auth_json="", env_json="",
+        crawler_json="{}", parallel_json="{}", agents_json="{}",
+        created_at="",
+    )
+    defaults.update(overrides)
+    return Project(**defaults)
+
+
+def test_inject_crawler_config_sets_katana_env_vars():
+    env = {}
+    p = _mk_project(crawler_json='{"KATANA_CRAWL_DEPTH": 16, "KATANA_ENABLE_HYBRID": 0}')
+    _inject_project_config_env(env, p)
+    assert env["KATANA_CRAWL_DEPTH"] == "16"
+    assert env["KATANA_ENABLE_HYBRID"] == "0"
+
+
+def test_inject_crawler_config_ignores_unknown_keys():
+    env = {}
+    p = _mk_project(crawler_json='{"KATANA_FAKE_KEY": "x", "KATANA_CRAWL_DEPTH": 4}')
+    _inject_project_config_env(env, p)
+    assert env["KATANA_CRAWL_DEPTH"] == "4"
+    assert "KATANA_FAKE_KEY" not in env
+
+
+def test_inject_parallel_config_sets_max_batches():
+    env = {}
+    p = _mk_project(parallel_json='{"REDTEAM_MAX_PARALLEL_BATCHES": 5}')
+    _inject_project_config_env(env, p)
+    assert env["REDTEAM_MAX_PARALLEL_BATCHES"] == "5"
+
+
+def test_inject_agents_config_emits_disabled_comma_list_sorted():
+    env = {}
+    p = _mk_project(agents_json='{"fuzzer": false, "osint-analyst": false, "vulnerability-analyst": true}')
+    _inject_project_config_env(env, p)
+    assert env["REDTEAM_DISABLED_AGENTS"] == "fuzzer,osint-analyst"
+
+
+def test_inject_agents_all_enabled_does_not_emit_disabled_env():
+    env = {}
+    p = _mk_project(agents_json='{"fuzzer": true, "osint-analyst": true}')
+    _inject_project_config_env(env, p)
+    assert "REDTEAM_DISABLED_AGENTS" not in env
+
+
+def test_inject_empty_config_leaves_env_untouched():
+    env = {"EXISTING": "unchanged"}
+    p = _mk_project()
+    _inject_project_config_env(env, p)
+    assert env == {"EXISTING": "unchanged"}
+
+
+def test_inject_invalid_json_silently_skips():
+    env = {}
+    p = _mk_project(crawler_json='{"bad":', parallel_json='not json', agents_json='[]')
+    _inject_project_config_env(env, p)
+    assert env == {}
+
+
+def test_inject_crawler_value_coerced_to_string():
+    env = {}
+    p = _mk_project(crawler_json='{"KATANA_CONCURRENCY": 42}')  # int, should become "42"
+    _inject_project_config_env(env, p)
+    assert env["KATANA_CONCURRENCY"] == "42"
+    assert isinstance(env["KATANA_CONCURRENCY"], str)

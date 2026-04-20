@@ -2753,6 +2753,61 @@ def prepare_run_runtime(project: Project, run: Run) -> None:
     )
 
 
+_CRAWLER_ALLOWED_KEYS = (
+    "KATANA_CRAWL_DEPTH", "KATANA_CRAWL_DURATION",
+    "KATANA_TIMEOUT_SECONDS", "KATANA_CONCURRENCY",
+    "KATANA_PARALLELISM", "KATANA_RATE_LIMIT",
+    "KATANA_STRATEGY",
+    "KATANA_ENABLE_HYBRID", "KATANA_ENABLE_XHR",
+    "KATANA_ENABLE_HEADLESS", "KATANA_ENABLE_JSLUICE",
+    "KATANA_ENABLE_PATH_CLIMB",
+)
+
+
+def _inject_project_config_env(env: dict, project) -> None:
+    """Parse project.crawler_json / parallel_json / agents_json and fold
+    relevant values into `env` in-place. Malformed JSON is silently ignored
+    (the API validates on write)."""
+    crawler_raw = (project.crawler_json or "").strip()
+    if crawler_raw:
+        try:
+            crawler = json.loads(crawler_raw)
+        except json.JSONDecodeError:
+            crawler = {}
+        if isinstance(crawler, dict):
+            for key in _CRAWLER_ALLOWED_KEYS:
+                if key in crawler:
+                    value = crawler[key]
+                    if value in (None, ""):
+                        continue
+                    env[key] = str(value)
+
+    parallel_raw = (project.parallel_json or "").strip()
+    if parallel_raw:
+        try:
+            parallel = json.loads(parallel_raw)
+        except json.JSONDecodeError:
+            parallel = {}
+        if isinstance(parallel, dict):
+            max_batches = parallel.get("REDTEAM_MAX_PARALLEL_BATCHES")
+            if max_batches not in (None, ""):
+                env["REDTEAM_MAX_PARALLEL_BATCHES"] = str(max_batches)
+
+    agents_raw = (project.agents_json or "").strip()
+    if agents_raw:
+        try:
+            agents = json.loads(agents_raw)
+        except json.JSONDecodeError:
+            agents = {}
+        if isinstance(agents, dict):
+            disabled = sorted(
+                name for name, enabled in agents.items()
+                if enabled is False
+            )
+            if disabled:
+                env["REDTEAM_DISABLED_AGENTS"] = ",".join(disabled)
+
+
 def _runtime_env(project: Project, run: Run, user: User) -> dict[str, str]:
     token = create_session_token()
     db.create_session(user.id, token, session_expiry_timestamp())
@@ -2816,6 +2871,7 @@ def _runtime_env(project: Project, run: Run, user: User) -> dict[str, str]:
                 if value is None:
                     continue
                 env[key] = str(value)
+    _inject_project_config_env(env, project)
     return env
 
 
