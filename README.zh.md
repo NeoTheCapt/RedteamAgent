@@ -382,6 +382,23 @@ mkdir agent/skills/my-skill
 
 编辑 `agent/.opencode/opencode.json` 里的 `model`。支持 Anthropic、OpenAI、Google、Ollama。
 
+### 按项目配置
+
+每个项目保存独立的配置，项目下所有 run 都继承。通过 Sidebar 或 NewRunForm 中的 **Edit project** 按钮打开 Project Edit 弹窗，包含 6 个 tab：
+
+| Tab | 字段 | 注入到运行时容器的环境变量 |
+|-----|------|---------------------------|
+| **Model** | provider_id, model_id, small_model_id, api_key, base_url | `REDTEAM_OPENCODE_MODEL`, `REDTEAM_OPENCODE_SMALL_MODEL`, `OPENAI_API_KEY`, `OPENAI_BASE_URL`（Anthropic 同理）|
+| **Auth** | cookies / headers / tokens 的 JSON | 写入 seed 目录的 `auth.json` |
+| **Env** | 自由 JSON `{"VAR": "value"}` | 合入容器 env |
+| **Crawler** | Katana 爬虫参数 | `KATANA_CRAWL_DEPTH`, `KATANA_CRAWL_DURATION`, `KATANA_TIMEOUT_SECONDS`, `KATANA_CONCURRENCY`, `KATANA_PARALLELISM`, `KATANA_RATE_LIMIT`, `KATANA_STRATEGY`, `KATANA_ENABLE_HYBRID`, `KATANA_ENABLE_XHR`, `KATANA_ENABLE_HEADLESS`, `KATANA_ENABLE_JSLUICE`, `KATANA_ENABLE_PATH_CLIMB` |
+| **Parallel** | 并发上限 | `REDTEAM_MAX_PARALLEL_BATCHES` |
+| **Agents** | 启用/禁用各 subagent | `REDTEAM_DISABLED_AGENTS`（任何 agent 被禁用时输出逗号分隔列表）|
+
+**默认值**：每类配置默认为 JSON `{}`。key 不存在时运行时回退到 `.env` 或 agent 内建默认。只在显式设置时才覆盖。
+
+**优先级**：`crawler_json` / `parallel_json` / `agents_json` 优先于自由形式的 `env_json`。清空字段用 `""`（空字符串），不是 `null`。
+
 ## 开发
 
 ### 目录约定（贡献前必读）

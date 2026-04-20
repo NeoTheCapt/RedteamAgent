@@ -381,6 +381,23 @@ Add files to `agent/references/<category>/` and update `agent/references/INDEX.m
 
 Edit `model` in `agent/.opencode/opencode.json`. Supports Anthropic, OpenAI, Google, Ollama.
 
+### Per-Project Configuration
+
+Each project stores its own config, inherited by every run launched under it. Configure via the **Edit project** button in the Sidebar or NewRunForm, which opens the Project Edit modal with 6 tabs:
+
+| Tab | Fields | Env vars injected into run container |
+|-----|--------|--------------------------------------|
+| **Model** | provider_id, model_id, small_model_id, api_key, base_url | `REDTEAM_OPENCODE_MODEL`, `REDTEAM_OPENCODE_SMALL_MODEL`, `OPENAI_API_KEY`, `OPENAI_BASE_URL` (or `ANTHROPIC_*`) |
+| **Auth** | JSON blob for cookies / headers / tokens | Written to `auth.json` in seed dir |
+| **Env** | Free-form JSON `{"VAR": "value"}` | Merged into container env |
+| **Crawler** | Katana crawl parameters | `KATANA_CRAWL_DEPTH`, `KATANA_CRAWL_DURATION`, `KATANA_TIMEOUT_SECONDS`, `KATANA_CONCURRENCY`, `KATANA_PARALLELISM`, `KATANA_RATE_LIMIT`, `KATANA_STRATEGY`, `KATANA_ENABLE_HYBRID`, `KATANA_ENABLE_XHR`, `KATANA_ENABLE_HEADLESS`, `KATANA_ENABLE_JSLUICE`, `KATANA_ENABLE_PATH_CLIMB` |
+| **Parallel** | Concurrency ceiling | `REDTEAM_MAX_PARALLEL_BATCHES` |
+| **Agents** | Enable/disable per subagent | `REDTEAM_DISABLED_AGENTS` (comma-separated list of disabled agent IDs when any are off) |
+
+**Defaults**: Empty JSON `{}` for every config category. When a key is absent, the runtime falls back to the value baked into `.env` or the agent defaults. Fields only override when explicitly set.
+
+**Precedence**: `crawler_json` / `parallel_json` / `agents_json` win over free-form `env_json`. To clear a field, set it to `""` (empty string), not `null`.
+
 ## Development
 
 ### Directory Convention (READ BEFORE CONTRIBUTING)
