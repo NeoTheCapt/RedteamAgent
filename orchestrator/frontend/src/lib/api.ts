@@ -11,17 +11,24 @@ export type Project = {
   id: number;
   name: string;
   slug: string;
-  root_path: string;
+  root_path?: string;
   provider_id: string;
   model_id: string;
   small_model_id: string;
   base_url: string;
-  api_key_configured: boolean;
-  auth_configured: boolean;
-  env_configured: boolean;
+  // Sensitive fields returned only in certain contexts (e.g. edit modal).
+  api_key?: string;
+  // Legacy boolean indicators — kept for backward-compat, new code uses the
+  // string fields above when available.
+  api_key_configured?: boolean;
+  auth_configured?: boolean;
+  env_configured?: boolean;
+  auth_json?: string;
+  env_json?: string;
   crawler_json: string;
   parallel_json: string;
   agents_json: string;
+  created_at?: string;
 };
 
 export type Run = {
