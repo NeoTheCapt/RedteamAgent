@@ -463,7 +463,7 @@ def update_project_config(
 
 
 _UPDATABLE_PROJECT_FIELDS = frozenset({
-    "name", "provider_id", "model_id", "small_model_id",
+    "name", "slug", "provider_id", "model_id", "small_model_id",
     "api_key", "base_url", "auth_json", "env_json",
     "crawler_json", "parallel_json", "agents_json",
 })
