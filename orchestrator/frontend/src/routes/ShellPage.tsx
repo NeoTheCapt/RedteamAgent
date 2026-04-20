@@ -3,6 +3,7 @@ import { Sidebar } from "../components/shell/Sidebar";
 import { RunPanel } from "../components/shell/RunPanel";
 import { TabNav, type TabId } from "../components/shell/TabNav";
 import { EmptyTab } from "../components/shell/EmptyTab";
+import { ConfirmDialog } from "../components/shell/ConfirmDialog";
 import { DashboardTab } from "../components/dashboard/DashboardTab";
 import { ProgressTab } from "../components/progress/ProgressTab";
 import { CasesTab } from "../components/cases/CasesTab";
@@ -23,7 +24,13 @@ type ShellPageProps = {
   onCreateRun: (projectId: number, target: string) => Promise<void>;
   onCreateProject: (input: ProjectInput) => Promise<void>;
   onRefreshProjects?: () => Promise<void>;
+  onDeleteProject?: (projectId: number) => Promise<void>;
+  onDeleteRun?: (projectId: number, runId: number) => Promise<void>;
 };
+
+type DeleteTarget =
+  | { kind: "project"; id: number; name: string }
+  | { kind: "run"; projectId: number; runId: number; target: string };
 
 type Route =
   | { kind: "home" }
@@ -53,11 +60,18 @@ function navigate(route: string) {
 }
 
 export function ShellPage(props: ShellPageProps) {
-  const { token, username, projects, runsByProject, onLogout, onCreateRun, onCreateProject, onRefreshProjects } = props;
+  const {
+    token, username, projects, runsByProject, onLogout,
+    onCreateRun, onCreateProject, onRefreshProjects,
+    onDeleteProject, onDeleteRun,
+  } = props;
   const [route, setRoute] = useState<Route>(parseRoute(window.location.hash));
   const [summary, setSummary] = useState<RunSummary | null>(null);
   const [summaryError, setSummaryError] = useState<string | null>(null);
   const [editingProject, setEditingProject] = useState<Project | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   useEffect(() => {
     const handler = () => setRoute(parseRoute(window.location.hash));
@@ -145,6 +159,32 @@ export function ShellPage(props: ShellPageProps) {
       }
     : undefined;
 
+  async function handleConfirmDelete() {
+    if (!deleteTarget) return;
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      if (deleteTarget.kind === "project" && onDeleteProject) {
+        await onDeleteProject(deleteTarget.id);
+      } else if (deleteTarget.kind === "run" && onDeleteRun) {
+        await onDeleteRun(deleteTarget.projectId, deleteTarget.runId);
+        // If user was viewing the deleted run, navigate home
+        if (
+          route.kind === "run" &&
+          route.runId === deleteTarget.runId &&
+          route.projectId === deleteTarget.projectId
+        ) {
+          navigate("/");
+        }
+      }
+      setDeleteTarget(null);
+    } catch (err) {
+      setDeleteError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setDeleting(false);
+    }
+  }
+
   async function handleStop(projectId: number, runId: number) {
     try {
       await stopRun(token, projectId, runId);
@@ -194,6 +234,16 @@ export function ShellPage(props: ShellPageProps) {
           username={username}
           onLogout={onLogout}
           projectIdForRun={(r) => (r as Run & { __projectId: number }).__projectId}
+          projects={projects}
+          onEditProject={(p) => setEditingProject(p)}
+          onDeleteProject={onDeleteProject ? (id) => {
+            const p = projects.find((proj) => proj.id === id);
+            if (p) setDeleteTarget({ kind: "project", id, name: p.name });
+          } : undefined}
+          onDeleteRun={onDeleteRun ? (pid, rid) => {
+            const run = allRuns.find((r) => r.id === rid);
+            if (run) setDeleteTarget({ kind: "run", projectId: pid, runId: rid, target: run.target ?? `#${rid}` });
+          } : undefined}
         />
       </aside>
       <main className="shell__main">
@@ -255,6 +305,21 @@ export function ShellPage(props: ShellPageProps) {
           }}
         />
       )}
+      <ConfirmDialog
+        open={deleteTarget !== null}
+        destructive
+        title={deleteTarget?.kind === "project" ? "Delete project?" : "Delete run?"}
+        message={
+          deleteTarget?.kind === "project"
+            ? `Deleting project "${deleteTarget.name}" removes its engagement data and stops any active runs. This cannot be undone.${deleteError ? `\n\nError: ${deleteError}` : ""}`
+            : deleteTarget?.kind === "run"
+            ? `Deleting run #${deleteTarget.runId} (target: ${deleteTarget.target}) removes its engagement files. This cannot be undone.${deleteError ? `\n\nError: ${deleteError}` : ""}`
+            : ""
+        }
+        confirmLabel={deleting ? "Deleting…" : "Delete"}
+        onConfirm={() => void handleConfirmDelete()}
+        onCancel={() => { setDeleteTarget(null); setDeleteError(null); }}
+      />
     </div>
   );
 }

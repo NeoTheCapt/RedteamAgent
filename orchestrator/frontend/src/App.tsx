@@ -4,6 +4,8 @@ import {
   ApiError,
   createProject,
   createRun,
+  deleteProject,
+  deleteRun,
   listProjects,
   listRuns,
   login,
@@ -155,6 +157,34 @@ export default function App() {
     }
   }, [session, expireSession, refreshProjects]);
 
+  const handleDeleteProject = useCallback(async (projectId: number) => {
+    if (!session) return;
+    try {
+      await deleteProject(session.token, projectId);
+      await refreshProjects();
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) {
+        expireSession();
+        return;
+      }
+      throw err;
+    }
+  }, [session, expireSession, refreshProjects]);
+
+  const handleDeleteRun = useCallback(async (projectId: number, runId: number) => {
+    if (!session) return;
+    try {
+      await deleteRun(session.token, projectId, runId);
+      await refreshProjects();
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) {
+        expireSession();
+        return;
+      }
+      throw err;
+    }
+  }, [session, expireSession, refreshProjects]);
+
   if (!session) {
     return <LoginPage onLogin={handleLogin} onRegister={handleRegister} />;
   }
@@ -169,6 +199,8 @@ export default function App() {
       onCreateRun={handleCreateRun}
       onCreateProject={handleCreateProject}
       onRefreshProjects={refreshProjects}
+      onDeleteProject={handleDeleteProject}
+      onDeleteRun={handleDeleteRun}
     />
   );
 }
