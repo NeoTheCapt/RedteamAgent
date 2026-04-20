@@ -375,14 +375,14 @@ else
         info "Installing Docker all-in-one runtime files..."
         (
           cd "$REPO_ROOT"
-          git ls-files install.sh agent docker/redteam-allinone | while IFS= read -r path; do
+          git ls-files install.sh agent | while IFS= read -r path; do
             mkdir -p "$INSTALL_DIR/$(dirname "$path")"
             cp "$REPO_ROOT/$path" "$INSTALL_DIR/$path"
           done
         )
-        cp "$REPO_ROOT/docker/redteam-allinone/run.sh.tpl" "$INSTALL_DIR/run.sh"
+        cp "$REPO_ROOT/agent/docker/redteam-allinone/run.sh.tpl" "$INSTALL_DIR/run.sh"
         chmod +x "$INSTALL_DIR/run.sh"
-        cp "$INSTALL_DIR/docker/redteam-allinone/.env.example" "$INSTALL_DIR/.env.example"
+        cp "$INSTALL_DIR/agent/docker/redteam-allinone/.env.example" "$INSTALL_DIR/.env.example"
         if [ -f "$INSTALL_DIR/.env" ]; then
             ok ".env preserved"
         else
@@ -390,7 +390,7 @@ else
             warn "Created $INSTALL_DIR/.env from Docker template — update API keys before running ./run.sh"
         fi
         mkdir -p "$INSTALL_DIR/workspace" "$INSTALL_DIR/opencode-home"
-        ok "Docker runtime files (agent/, docker/redteam-allinone/, run.sh, .env)"
+        ok "Docker runtime files (agent/, run.sh, .env)"
         ;;
     esac
 
@@ -418,7 +418,7 @@ else
     if [ "$PRODUCT" = "docker" ]; then
         if $FORCE_REBUILD; then
             info "Force rebuilding redteam-allinone..."
-            if run_build docker build --pull --no-cache -t redteam-allinone:latest -f docker/redteam-allinone/Dockerfile .; then
+            if run_build docker build --pull --no-cache -t redteam-allinone:latest -f agent/docker/redteam-allinone/Dockerfile .; then
                 ok "redteam-allinone"
             else
                 fail "Failed to build redteam-allinone"; ERRORS=$((ERRORS + 1))
@@ -427,7 +427,7 @@ else
             ok "redteam-allinone (already exists)"
         else
             info "Building redteam-allinone (this may take several minutes)..."
-            if run_build docker build -t redteam-allinone:latest -f docker/redteam-allinone/Dockerfile .; then
+            if run_build docker build -t redteam-allinone:latest -f agent/docker/redteam-allinone/Dockerfile .; then
                 ok "redteam-allinone"
             else
                 fail "Failed to build redteam-allinone"; ERRORS=$((ERRORS + 1))
@@ -610,6 +610,6 @@ case "$PRODUCT" in
   opencode) echo "    .opencode/  skills/  references/  scripts/  docker/" ;;
   claude)   echo "    .claude/    skills/  references/  scripts/  docker/  CLAUDE.md" ;;
   codex)    echo "    .codex/     skills/  references/  scripts/  docker/  AGENTS.md" ;;
-  docker)   echo "    agent/  docker/redteam-allinone/  run.sh  .env  workspace/  opencode-home/" ;;
+  docker)   echo "    agent/  run.sh  .env  workspace/  opencode-home/" ;;
 esac
 echo ""

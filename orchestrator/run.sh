@@ -92,7 +92,7 @@ if [[ "$REBUILD_IMAGE" -eq 1 ]]; then
   echo "Rebuilding redteam-allinone:latest and redteam-allinone:dev ..."
   (
     cd "$ROOT_DIR/.."
-    docker build -t redteam-allinone:latest -t redteam-allinone:dev -f docker/redteam-allinone/Dockerfile .
+    docker build -t redteam-allinone:latest -t redteam-allinone:dev -f agent/docker/redteam-allinone/Dockerfile .
   )
 fi
 

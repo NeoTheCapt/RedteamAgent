@@ -40,7 +40,7 @@ RUN ./install.sh opencode /opt/redteam-agent
 RUN ln -sf /usr/share/wordlists /wordlists && \
     ln -sf /usr/share/seclists /seclists
 
-COPY docker/redteam-allinone/entrypoint.sh /usr/local/bin/redteam-entrypoint
+COPY agent/docker/redteam-allinone/entrypoint.sh /usr/local/bin/redteam-entrypoint
 RUN chmod +x /usr/local/bin/redteam-entrypoint
 
 WORKDIR /workspace
