@@ -190,6 +190,53 @@ def test_patch_project_404_for_nonexistent():
     assert r.status_code == 404, r.text
 
 
+def test_get_project_404_for_nonexistent():
+    client = TestClient(app)
+    token = _register_and_login(client, "alice_get_404")
+
+    r = client.get("/projects/99999", headers=_auth(token))
+    assert r.status_code == 404, r.text
+
+
+def test_get_project_404_after_delete():
+    client = TestClient(app)
+    token = _register_and_login(client, "alice_get_after_del")
+    pid = _create_demo_project(client, token, name="delete-me")
+
+    r = client.delete(f"/projects/{pid}", headers=_auth(token))
+    assert r.status_code == 204, r.text
+
+    r = client.get(f"/projects/{pid}", headers=_auth(token))
+    assert r.status_code == 404, r.text
+
+
+def test_get_project_200_for_owned_project():
+    client = TestClient(app)
+    token = _register_and_login(client, "alice_get_200")
+    pid = _create_demo_project(
+        client, token, name="visible-one",
+        extra={"crawler_json": '{"KATANA_CRAWL_DEPTH": 9}'},
+    )
+
+    r = client.get(f"/projects/{pid}", headers=_auth(token))
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["id"] == pid
+    assert body["name"] == "visible-one"
+    assert body["crawler_json"] == '{"KATANA_CRAWL_DEPTH": 9}'
+
+
+def test_get_project_404_for_other_users_project():
+    client = TestClient(app)
+    alice_token = _register_and_login(client, "alice_get_cross")
+    bob_token = _register_and_login(client, "bob_get_cross")
+
+    pid = _create_demo_project(client, alice_token, name="alice-hidden")
+
+    r = client.get(f"/projects/{pid}", headers=_auth(bob_token))
+    assert r.status_code == 404, r.text
+
+
 def test_patch_project_404_for_other_users_project():
     """User B cannot patch User A's project (returns 404, not 403 — ownership check)."""
     client = TestClient(app)

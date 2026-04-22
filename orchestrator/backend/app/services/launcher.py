@@ -2730,6 +2730,10 @@ def prepare_run_runtime(project: Project, run: Run) -> None:
     elif (seed_root_for(run) / "env.json").exists():
         (seed_root_for(run) / "env.json").unlink()
 
+    workspace_env_path = workspace_root_for(run) / ".env"
+    workspace_env_path.parent.mkdir(parents=True, exist_ok=True)
+    workspace_env_path.write_text(_render_workspace_env_file(project), encoding="utf-8")
+
     metadata = {
         "id": run.id,
         "project_id": project.id,
@@ -2762,6 +2766,38 @@ _CRAWLER_ALLOWED_KEYS = (
     "KATANA_ENABLE_HEADLESS", "KATANA_ENABLE_JSLUICE",
     "KATANA_ENABLE_PATH_CLIMB",
 )
+
+
+def _render_workspace_env_file(project) -> str:
+    """Render `<engagement_root>/workspace/.env` from project config.
+
+    In-container agent scripts and `docker run --env-file` expect plain
+    KEY=VALUE lines. Only project-scoped keys land here; per-run secrets
+    (session tokens, runtime paths) stay in the process env built by
+    `_runtime_env` and are passed via explicit `-e` flags instead.
+    """
+    lines: list[str] = []
+    payload: dict[str, str] = {}
+
+    if project.env_json and project.env_json.strip():
+        try:
+            env_payload = json.loads(project.env_json)
+        except json.JSONDecodeError:
+            env_payload = {}
+        if isinstance(env_payload, dict):
+            for key, value in env_payload.items():
+                if not isinstance(key, str) or value is None:
+                    continue
+                payload[key] = str(value)
+
+    _inject_project_config_env(payload, project)
+
+    for key in sorted(payload):
+        value = payload[key]
+        if "\n" in value or "\r" in value:
+            value = value.replace("\n", " ").replace("\r", " ")
+        lines.append(f"{key}={value}")
+    return "\n".join(lines) + ("\n" if lines else "")
 
 
 def _inject_project_config_env(env: dict, project) -> None:

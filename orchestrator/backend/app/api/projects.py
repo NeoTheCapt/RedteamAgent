@@ -8,6 +8,7 @@ from ..security import CurrentUser
 from ..services.projects import (
     create_project_for_user,
     delete_project_for_user,
+    get_project_for_user,
     list_projects_for_user,
     update_project_for_user,
 )
@@ -103,6 +104,11 @@ def create_project(request: CreateProjectRequest, current_user: CurrentUser) -> 
 @router.get("", response_model=list[ProjectResponse])
 def list_projects(current_user: CurrentUser) -> list[ProjectResponse]:
     return [_project_response(project) for project in list_projects_for_user(current_user)]
+
+
+@router.get("/{project_id}", response_model=ProjectResponse)
+def get_project(project_id: int, current_user: CurrentUser) -> ProjectResponse:
+    return _project_response(get_project_for_user(current_user, project_id))
 
 
 @router.patch("/{project_id}", response_model=ProjectResponse)

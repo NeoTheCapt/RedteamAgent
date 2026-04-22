@@ -4136,6 +4136,51 @@ def test_prepare_run_runtime_writes_auth_seed_and_env_seed():
     assert json.loads((run_root / "seed" / "env.json").read_text(encoding="utf-8"))["HTTP_PROXY"] == "http://proxy:8080"
 
 
+def test_prepare_run_runtime_writes_workspace_env_with_crawler_and_agents_config():
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project_response = client.post(
+        "/projects",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "name": "ConfigInject",
+            "env_json": '{"HTTP_PROXY":"http://proxy:8080"}',
+            "crawler_json": '{"KATANA_CRAWL_DEPTH": 7, "KATANA_CONCURRENCY": 4}',
+            "agents_json": '{"fuzzer": false, "recon-specialist": true}',
+            "parallel_json": '{"REDTEAM_MAX_PARALLEL_BATCHES": 3}',
+        },
+    )
+    assert project_response.status_code == 201
+    project = project_response.json()
+
+    run = create_run(client, token, project["id"], "https://cfg-inject.example")
+    env_file = Path(run["engagement_root"]) / "workspace" / ".env"
+    assert env_file.exists(), "workspace/.env must be written by prepare_run_runtime"
+
+    parsed: dict[str, str] = {}
+    for line in env_file.read_text(encoding="utf-8").splitlines():
+        if not line or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        parsed[key] = value
+
+    assert parsed.get("KATANA_CRAWL_DEPTH") == "7"
+    assert parsed.get("KATANA_CONCURRENCY") == "4"
+    assert "fuzzer" in parsed.get("REDTEAM_DISABLED_AGENTS", "").split(",")
+    assert parsed.get("REDTEAM_MAX_PARALLEL_BATCHES") == "3"
+    assert parsed.get("HTTP_PROXY") == "http://proxy:8080"
+
+
+def test_prepare_run_runtime_writes_empty_workspace_env_when_no_project_config():
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "https://bare-cfg.example")
+    env_file = Path(run["engagement_root"]) / "workspace" / ".env"
+    assert env_file.exists()
+    assert env_file.read_text(encoding="utf-8") == ""
+
+
 def test_prepare_run_runtime_normalizes_legacy_auth_seed_credentials():
     client = TestClient(app)
     token = register_and_login(client, "alice")

@@ -87,6 +87,13 @@ def list_projects_for_user(user: User) -> list[Project]:
     return db.list_projects_for_user(user.id)
 
 
+def get_project_for_user(user: User, project_id: int) -> Project:
+    project = db.get_project_by_id(project_id)
+    if project is None or project.user_id != user.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+    return project
+
+
 def update_project_config_for_user(
     user: User,
     project_id: int,
