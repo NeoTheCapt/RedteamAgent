@@ -80,7 +80,7 @@ PROJECT_ID=<integer>
 ORCH_BASE_URL=http://127.0.0.1:18000
 TARGET_OKX=https://www.okx.com
 TARGET_LOCAL=http://127.0.0.1:8000
-OPENCLAW_TIMEOUT_SECONDS=1200
+OPENCLAW_TIMEOUT_SECONDS=3000  # auditor; scan-optimizer can use 1200
 ```
 
 The plist additionally sets `HERMES_SKILL`, `HERMES_TOOLSETS`, and `HERMES_SOURCE_TAG`

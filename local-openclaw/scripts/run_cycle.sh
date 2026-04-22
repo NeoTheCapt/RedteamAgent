@@ -101,6 +101,7 @@ extract_auditor_sections() {
   local api_src="$ROOT_DIR/audit-reports/$cycle_id/api.json"
   local logs_src="$ROOT_DIR/audit-reports/$cycle_id/logs.json"
   local feat_src="$ROOT_DIR/audit-reports/$cycle_id/features.json"
+  local review_src="$ROOT_DIR/audit-reports/$cycle_id/review.md"
   local bench_hist="$STATE_DIR/benchmark-metrics-history.json"
   if [[ ! -f "$before" && ! -f "$after" ]]; then
     return 0
@@ -108,7 +109,7 @@ extract_auditor_sections() {
 
   python3 - \
       "$before" "$after" "$api_src" "$logs_src" "$feat_src" "$bench_hist" \
-      "$cycle_id" "${OPENCLAW_TARGET_LOCAL:-}" <<'PY'
+      "$cycle_id" "${OPENCLAW_TARGET_LOCAL:-}" "$review_src" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -151,6 +152,7 @@ feat_doc   = load(sys.argv[5])
 bench_doc  = load(sys.argv[6])
 this_cycle = sys.argv[7]
 local_target = sys.argv[8] if len(sys.argv) > 8 else ""
+review_path = sys.argv[9] if len(sys.argv) > 9 else ""
 
 lines = []
 
@@ -296,6 +298,20 @@ if final:
         rerun_parts.append(f"regressions={regression_count}")
     if rerun_parts:
         lines.append("复验阶段:\n- " + ", ".join(rerun_parts))
+
+# --- 代码审查 (Phase 4): surface review.md if the agent wrote one ---
+if review_path:
+    rp = Path(review_path)
+    if rp.exists():
+        review_text = rp.read_text(encoding="utf-8", errors="replace").strip()
+        if review_text:
+            # Cap length so a huge review doesn't blow past Discord's 2000-char limit.
+            MAX_LEN = 1200
+            if len(review_text) > MAX_LEN:
+                review_text = review_text[:MAX_LEN].rstrip() + "\n…（已截断；完整内容见 review.md）"
+            lines.append("代码审查 (Phase 4):\n" + review_text)
+    else:
+        lines.append("代码审查 (Phase 4):\n- 未生成 review.md（agent 未完成 Phase 4，或 cycle 被中断）")
 
 if lines:
     print("\n\n".join(lines))

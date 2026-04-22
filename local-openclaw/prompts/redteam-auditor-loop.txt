@@ -15,7 +15,7 @@ The orchestrator-audit prep has already run and produced all inputs you need. Re
 
 ## What you must do
 
-Follow the four-phase workflow defined in your skill, in order:
+Follow the four-phase workflow defined in your skill, in order. **Checkpoint rule (non-negotiable):** at the end of every phase — and after every successful fix — write the progress artifacts to disk. The cycle controller has a hard timeout (~20 min) and may terminate you mid-phase. Anything only in your working memory will be lost and will show up in the Discord summary as "0 findings".
 
 1. **Discover** — fold `audit-reports/${CYCLE_ID}/findings-before.json` into your working queue. Do NOT re-run the orchestrator audit scripts; prep already did that. You MUST still gather:
    - `agent_bug` and `agent_recall` findings from recent engagement logs
@@ -36,19 +36,28 @@ Follow the four-phase workflow defined in your skill, in order:
        5. If after reload you still see a login form, the token is invalid/expired — record a finding `orch_ui_unavailable` with reason `token_invalid` and skip UI checks; do NOT attempt brute-force logins.
 
      If the `browser` toolset is not loaded at all, record every UI check as `orch_ui_unavailable` in `findings-before.json` and add a top-level finding explaining the session was started without browser access — do NOT substitute CLI-based checks.
-2. **Fix** — implement fixes for every in-scope finding in a single coherent pass. Do not split the work by category. Group related file edits.
+   **Phase 1 exit checkpoint (REQUIRED before any Fix work):**
+   - Rewrite `audit-reports/${CYCLE_ID}/findings-before.json` with the full merged list (prep-level findings + your agent_bug / agent_recall / orch_ui discoveries). Each finding MUST have `id`, `category`, `severity`, `summary`, `evidence`, and an initial `status: "open"`.
+   - Also copy it as the initial `audit-reports/${CYCLE_ID}/findings-after.json` with every finding still `status: "open"` — you will update statuses in Phase 2.
+   - Write `local-openclaw/state/auditor-state.json` with `exit_status: "discover_complete"` so that even if the cycle is killed right now, the controller has real counts to report.
+
+2. **Fix** — implement fixes for every in-scope finding in a single coherent pass. Do not split the work by category. Group related file edits. **After EACH successful fix commit** update `findings-after.json` in place: set that finding's `status` to `"fixed"` and append the commit SHA. Do NOT batch these updates to the end of the phase.
 3. **Re-verify** — after all fixes land, run the relevant contract / unit / integration tests that cover the edited code. Re-run targeted portions of the orchestrator audit scripts if needed:
    - `bash local-openclaw/scripts/audit_orchestrator_api.sh ${CYCLE_ID}`
    - `bash local-openclaw/scripts/audit_orchestrator_logs.sh ${CYCLE_ID}`
    - `python3 local-openclaw/scripts/audit_orchestrator_features.py ${CYCLE_ID}`
-4. **Unified Code Review** — final holistic review of the combined diff, then commit.
+
+   After re-verification, update `auditor-state.json.exit_status` to `"reverify_complete"` and commit `findings-after.json` if it diverged from what the re-runs now say.
+
+4. **Unified Code Review** — final holistic review of the combined diff. ALWAYS write your conclusions to `audit-reports/${CYCLE_ID}/review.md` (even if the conclusion is "no issues"). The Discord summary will include this file. Then mark `auditor-state.json.exit_status` as `"ok"`.
 
 ## What you must NOT do
 
 - Do NOT run scan-optimizer Phase 1 bug sweeps or Phase 2 recall tuning as a standalone activity — they are subsumed into the auditor workflow.
 - Do NOT write to `state/optimizer-state.json`; this cycle updates `state/auditor-state.json` only.
 - Do NOT deliver a Discord/Telegram report mid-cycle. Delivery is handled by `run_cycle.sh` after you exit.
-- Do NOT create runs against OKX or any production target while auditing; the orchestrator audit uses existing run history.
+- Do NOT create new orchestrator runs during the audit — not against OKX, not against the local target, not via UI, not via API, not via `create_runs.sh`. The auditor is a read-only observer over existing run history. Cycle 20260422T084042Z violated this by creating run #460 for UI testing; repeat violations will be treated as regressions. To exercise UI actions that need a live run, use the most recent completed / running run instead.
+- Do NOT brute-force the login form or try any password — if the localStorage token injection fails, record `token_invalid` and skip UI checks.
 
 ## Deliverables before you exit
 

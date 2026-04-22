@@ -64,7 +64,7 @@ PROJECT_ID=<integer>
 ORCH_BASE_URL=http://127.0.0.1:18000
 TARGET_OKX=https://www.okx.com
 TARGET_LOCAL=http://127.0.0.1:8000
-OPENCLAW_TIMEOUT_SECONDS=1200
+OPENCLAW_TIMEOUT_SECONDS=3000  # auditor cycles need >=2400s because Phase 1 UI walk + Phase 2 fixes + Phase 3 reverify routinely exceeds 20 min
 ```
 
 New keys required only by the auditor:
