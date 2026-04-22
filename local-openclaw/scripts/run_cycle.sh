@@ -109,7 +109,8 @@ extract_auditor_sections() {
 
   python3 - \
       "$before" "$after" "$api_src" "$logs_src" "$feat_src" "$bench_hist" \
-      "$cycle_id" "${OPENCLAW_TARGET_LOCAL:-}" "$review_src" <<'PY'
+      "$cycle_id" "${OPENCLAW_TARGET_LOCAL:-}" "$review_src" \
+      "${before_commit:-}" "${after_commit:-}" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -153,6 +154,8 @@ bench_doc  = load(sys.argv[6])
 this_cycle = sys.argv[7]
 local_target = sys.argv[8] if len(sys.argv) > 8 else ""
 review_path = sys.argv[9] if len(sys.argv) > 9 else ""
+before_sha  = sys.argv[10] if len(sys.argv) > 10 else ""
+after_sha   = sys.argv[11] if len(sys.argv) > 11 else ""
 
 lines = []
 
@@ -299,19 +302,28 @@ if final:
     if rerun_parts:
         lines.append("复验阶段:\n- " + ", ".join(rerun_parts))
 
-# --- 代码审查 (Phase 4): surface review.md if the agent wrote one ---
-if review_path:
-    rp = Path(review_path)
-    if rp.exists():
-        review_text = rp.read_text(encoding="utf-8", errors="replace").strip()
-        if review_text:
-            # Cap length so a huge review doesn't blow past Discord's 2000-char limit.
-            MAX_LEN = 1200
-            if len(review_text) > MAX_LEN:
-                review_text = review_text[:MAX_LEN].rstrip() + "\n…（已截断；完整内容见 review.md）"
-            lines.append("代码审查 (Phase 4):\n" + review_text)
-    else:
-        lines.append("代码审查 (Phase 4):\n- 未生成 review.md（agent 未完成 Phase 4，或 cycle 被中断）")
+# --- 代码审查 (Phase 4): review of THIS cycle's commits (baseline_sha..HEAD) ---
+# Three possible states to disambiguate for the operator:
+#   (a) no new commits → nothing to review, not a bug
+#   (b) new commits + review.md → show the review body
+#   (c) new commits + review.md missing → Phase 4 was skipped or killed
+has_new_commits = bool(before_sha and after_sha and before_sha != after_sha)
+review_file = Path(review_path) if review_path else None
+review_body = ""
+if review_file and review_file.exists():
+    review_body = review_file.read_text(encoding="utf-8", errors="replace").strip()
+
+if not has_new_commits:
+    lines.append(f"代码审查 (Phase 4):\n- 本周期无新提交，无需审查（baseline {before_sha[:7] if before_sha else '?'} == HEAD）")
+elif review_body:
+    MAX_LEN = 1200
+    if len(review_body) > MAX_LEN:
+        review_body = review_body[:MAX_LEN].rstrip() + "\n…（已截断；完整内容见 review.md）"
+    diff_range = f"{before_sha[:7]}..{after_sha[:7]}" if before_sha and after_sha else "(未知)"
+    lines.append(f"代码审查 (Phase 4) — 范围 {diff_range}:\n" + review_body)
+else:
+    diff_range = f"{before_sha[:7]}..{after_sha[:7]}" if before_sha and after_sha else "(未知)"
+    lines.append(f"代码审查 (Phase 4):\n- 本周期有新提交（{diff_range}）但 review.md 未生成；Phase 4 可能被超时或错误中断")
 
 if lines:
     print("\n\n".join(lines))
