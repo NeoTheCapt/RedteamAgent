@@ -1,5 +1,6 @@
 import io
 import json
+import signal
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -4325,10 +4326,48 @@ def test_ensure_runtime_log_follower_restarts_dead_follower(monkeypatch):
         return LiveFollower()
 
     monkeypatch.setattr("app.services.launcher.subprocess.Popen", fake_popen)
+    monkeypatch.setattr("app.services.launcher._runtime_log_follower_pids", lambda _container_name: [])
 
     follower = _ensure_runtime_log_follower(run_model, DeadFollower(), io.BytesIO())
     assert follower is not None
     assert follower.poll() is None
+    assert started_commands == [["docker", "logs", "-f", f"redteam-orch-run-{run['id']:04d}"]]
+
+
+def test_spawn_runtime_log_follower_terminates_orphaned_followers_before_start(monkeypatch):
+    from app.services.launcher import _spawn_runtime_log_follower
+
+    client = TestClient(app)
+    token = register_and_login(client, "alice-log-follower-cleanup")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "https://log-follower-cleanup.example")
+
+    run_model = db.get_run_by_id(run["id"])
+    assert run_model is not None
+
+    killed: list[tuple[int, signal.Signals]] = []
+    started_commands: list[list[str]] = []
+
+    class LiveFollower:
+        def poll(self):
+            return None
+
+    monkeypatch.setattr(
+        "app.services.launcher._runtime_log_follower_pids",
+        lambda container_name: [111, 222] if container_name == f"redteam-orch-run-{run['id']:04d}" else [],
+    )
+    monkeypatch.setattr("app.services.launcher.os.kill", lambda pid, sig: killed.append((pid, sig)))
+
+    def fake_popen(command, **kwargs):
+        started_commands.append(command)
+        return LiveFollower()
+
+    monkeypatch.setattr("app.services.launcher.subprocess.Popen", fake_popen)
+
+    follower = _spawn_runtime_log_follower(run_model, io.BytesIO())
+
+    assert follower.poll() is None
+    assert killed == [(111, signal.SIGTERM), (222, signal.SIGTERM)]
     assert started_commands == [["docker", "logs", "-f", f"redteam-orch-run-{run['id']:04d}"]]
 
 

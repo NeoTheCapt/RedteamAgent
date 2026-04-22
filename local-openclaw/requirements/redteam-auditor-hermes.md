@@ -7,7 +7,7 @@
 - **Orchestrator API contracts**: all REST endpoints under `/auth`, `/projects`, `/projects/{id}/runs`, and sub-resources
 - **Orchestrator backend/runtime logs**: uvicorn log, engagement process logs, Hermes agent logs
 - **Orchestrator feature validation**: Plan 5 config injection — `crawler_json`, `parallel_json`, `agents_json` → container env
-- **Orchestrator Web UI** (via playwright): 10 functional checks covering the full user journey
+- **Orchestrator Web UI** (via browser automation): 12 functional checks covering the full user journey
 - **Benchmark recall**: Juice Shop challenge recall history; regression detection vs peak
 
 ### Out of scope
@@ -51,7 +51,7 @@
 | `findings-before.json` absent at agent start | Agent constructs it from scratch using the 6 sources directly |
 | Single finding verify fails 3 times | Mark `skipped: manual_review_needed`; continue with remaining findings |
 | Phase 3 regression detected | `git reset --hard baseline_sha`; write `exit_status=blocked_regression`; still complete Phase 4 review on the rolled-back tree |
-| Playwright cannot connect to `http://127.0.0.1:18000` | Mark all 10 orch_ui checks as `orch_ui_unavailable`; skip UI findings; continue with other sources |
+| Browser automation cannot connect to `http://127.0.0.1:18000` | Mark all 12 orch_ui checks as `orch_ui_unavailable`; skip UI findings; continue with other sources |
 | Cycle exceeds 20 min wall clock | Write `exit_status=hermes_timeout`; commit any completed fix commits before aborting |
 
 ## Required Scheduler Env Keys (inherited from scan-optimizer)

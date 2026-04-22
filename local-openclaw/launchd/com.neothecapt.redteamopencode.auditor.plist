@@ -18,7 +18,7 @@
       <key>HERMES_SKILL</key>
       <string>redteam-auditor-hermes</string>
       <key>HERMES_TOOLSETS</key>
-      <string>terminal,file,skills,playwright</string>
+      <string>terminal,file,skills,browser,web,vision</string>
       <key>HERMES_SOURCE_TAG</key>
       <string>redteam-auditor</string>
       <key>OPENCLAW_TIMEOUT_SECONDS</key>

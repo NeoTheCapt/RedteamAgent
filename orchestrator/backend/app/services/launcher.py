@@ -3196,6 +3196,14 @@ def _runtime_log_follower_pids(container_name: str | None) -> list[int]:
     return follower_pids
 
 
+def _terminate_runtime_log_followers(container_name: str | None) -> None:
+    for follower_pid in _runtime_log_follower_pids(container_name):
+        try:
+            os.kill(follower_pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+
+
 def locate_runtime_pid(run: Run) -> int | None:
     metadata_path = process_metadata_path_for(run)
     payload: dict[str, object] = {}
@@ -3272,11 +3280,7 @@ def stop_run_runtime(run: Run) -> None:
             stderr=subprocess.DEVNULL,
             check=False,
         )
-        for follower_pid in _runtime_log_follower_pids(container_name):
-            try:
-                os.kill(follower_pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
+        _terminate_runtime_log_followers(container_name)
 
     pid = locate_runtime_pid(run)
     if isinstance(pid, int) and pid > 0:
@@ -3350,6 +3354,7 @@ def _runtime_log_follow_command(run: Run) -> list[str]:
 
 
 def _spawn_runtime_log_follower(run: Run, log_handle) -> subprocess.Popen[bytes]:
+    _terminate_runtime_log_followers(runtime_container_name(run))
     return subprocess.Popen(
         _runtime_log_follow_command(run),
         cwd=str(run.engagement_root),

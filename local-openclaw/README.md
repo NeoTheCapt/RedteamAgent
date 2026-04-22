@@ -35,7 +35,7 @@ The `redteam-auditor-hermes` skill replaces and extends `scan-optimizer-hermes` 
    - `orch_api`: probe every REST endpoint (create/read/update/delete + auth + 404 checks)
    - `orch_log`: scan uvicorn, process.log, and Hermes agent logs for exceptions and 5xx
    - `orch_feature`: verify Plan 5 config (`crawler_json`, `agents_json`) injects into container env
-   - `orch_ui`: playwright browser checks (10 checks: sidebar, edit modal, STOP ribbon, Documents, Events, Cases)
+   - `orch_ui`: browser-based UI checks (12 checks spanning dashboard, progress, edit/new-run flows, STOP, and Documents/Events/Cases tabs)
    All findings merged into `audit-reports/<cycle_id>/findings-before.json`.
 
 2. **Fix** — autonomously fix the top 8 findings; each fix gets its own commit
