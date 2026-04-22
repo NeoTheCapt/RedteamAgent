@@ -1,0 +1,52 @@
+Use the workspace skill `redteam-auditor-hermes`.
+
+You are running a single periodic audit cycle for the RedteamOpencode project. This is NOT a scan-optimizer cycle — do not touch `scan-optimizer` state or benchmarks except via the auditor workflow.
+
+## Cycle binding
+
+The orchestrator-audit prep has already run and produced all inputs you need. Respect them:
+
+- **Cycle id:** `${CYCLE_ID}`
+- **Repo root:** `/Users/cis/dev/projects/RedteamOpencode`
+- **Audit report dir:** `/Users/cis/dev/projects/RedteamOpencode/local-openclaw/audit-reports/${CYCLE_ID}`
+- **Merged findings:** `audit-reports/${CYCLE_ID}/findings-before.json`
+- **Auditor state:** `local-openclaw/state/auditor-state.json` (may not exist on first cycle)
+- **Prep context:** `local-openclaw/state/latest-context.md` (this file includes the "Auditor Cycle Context" section with finding counts and scheduled items)
+
+## What you must do
+
+Follow the four-phase workflow defined in your skill, in order:
+
+1. **Discover** — fold `audit-reports/${CYCLE_ID}/findings-before.json` into your working queue. Do NOT re-run the orchestrator audit scripts; prep already did that. You may still gather `agent_bug` and `agent_recall` findings from recent engagement logs per the skill.
+2. **Fix** — implement fixes for every in-scope finding in a single coherent pass. Do not split the work by category. Group related file edits.
+3. **Re-verify** — after all fixes land, run the relevant contract / unit / integration tests that cover the edited code. Re-run targeted portions of the orchestrator audit scripts if needed:
+   - `bash local-openclaw/scripts/audit_orchestrator_api.sh ${CYCLE_ID}`
+   - `bash local-openclaw/scripts/audit_orchestrator_logs.sh ${CYCLE_ID}`
+   - `python3 local-openclaw/scripts/audit_orchestrator_features.py ${CYCLE_ID}`
+4. **Unified Code Review** — final holistic review of the combined diff, then commit.
+
+## What you must NOT do
+
+- Do NOT run scan-optimizer Phase 1 bug sweeps or Phase 2 recall tuning as a standalone activity — they are subsumed into the auditor workflow.
+- Do NOT write to `state/optimizer-state.json`; this cycle updates `state/auditor-state.json` only.
+- Do NOT deliver a Discord/Telegram report mid-cycle. Delivery is handled by `run_cycle.sh` after you exit.
+- Do NOT create runs against OKX or any production target while auditing; the orchestrator audit uses existing run history.
+
+## Deliverables before you exit
+
+Update `local-openclaw/state/auditor-state.json` with, at minimum:
+```json
+{
+  "cycle_id": "${CYCLE_ID}",
+  "finished_at": "<ISO-8601 UTC>",
+  "findings_total": <int>,
+  "findings_fixed": <int>,
+  "findings_deferred": <int>,
+  "commits": ["<sha>", ...],
+  "notes": "one short line summarizing the session"
+}
+```
+
+Write `audit-reports/${CYCLE_ID}/findings-after.json` mirroring `findings-before.json` but with each finding's `status` set to `fixed`, `deferred`, or `reclassified` (with a reason).
+
+The controller (`run_cycle.sh`) will read these artifacts to build the summary that goes to Discord. Keep them accurate.

@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <dict>
+    <key>Label</key>
+    <string>com.neothecapt.redteamopencode.scan-optimizer</string>
+    <key>ProgramArguments</key>
+    <array>
+      <string>/bin/bash</string>
+      <string>/Users/cis/dev/projects/RedteamOpencode/local-openclaw/scripts/launchd_entrypoint.sh</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+      <key>PATH</key>
+      <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+      <key>LOCAL_OPENCLAW_ENV_FILE</key>
+      <string>/var/folders/9t/lf06qtzn129_s2fjwpc2h5f80000gn/T/tmp.2s4uRgYyZt</string>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>StartInterval</key>
+    <integer>900</integer>
+    <key>StandardOutPath</key>
+    <string>/Users/cis/dev/projects/RedteamOpencode/local-openclaw/logs/launchd-stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/cis/dev/projects/RedteamOpencode/local-openclaw/logs/launchd-stderr.log</string>
+    <key>WorkingDirectory</key>
+    <string>/Users/cis/dev/projects/RedteamOpencode/local-openclaw</string>
+  </dict>
+</plist>

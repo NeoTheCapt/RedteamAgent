@@ -1,0 +1,264 @@
+Use the workspace skill `scan-optimizer-loop`.
+
+Inputs to read before acting:
+
+- `/Users/cis/dev/projects/RedteamOpencode/local-openclaw/requirements/scan-optimizer-loop.md`
+- `/Users/cis/dev/projects/RedteamOpencode/local-openclaw/state/optimizer-state.json` if present
+- `/Users/cis/dev/projects/RedteamOpencode/local-openclaw/state/latest-context.md`
+
+Do one full unattended optimization cycle. The cycle has three sequential phases. Complete each phase fully before starting the next.
+
+**Primary optimization target:** The **RedTeam Agent project** (`agent/`, `orchestrator/`, project root scripts). Most code changes should go here.
+
+**Exception:** If you discover a confirmed bug in `local-openclaw/` (the controller itself) during any phase, fix it. Controller bugs that affect scoring, run lifecycle, or cycle correctness must be fixed immediately — do not defer them.
+
+## Phase 1: Bug Detection & Fix
+
+Start by analyzing the latest fixed-target runs and their logs/artifacts before creating or deleting anything.
+
+### Per-Target Rules
+
+#### OKX (https://www.okx.com)
+
+OKX runs are long-lived observation runs. They should stay `running` continuously — `completed` is NOT a normal state for OKX.
+- If the OKX run is `queued` or `running`, leave it alone — this is normal.
+- If the OKX run is `completed`, `failed`, `error`, `stopped`, `cancelled`, or `timeout`, the controller has already deleted it and created a fresh replacement. Investigate WHY the run terminated and fix the underlying bug in the RedTeam Agent code if needed.
+
+#### Local / Juice Shop (http://127.0.0.1:8000)
+
+Local runs are finite — they are expected to reach `completed` status.
+- If the local run is still `queued` or `running`, leave it running. Do not score an incomplete run.
+- If the local run is `completed`, proceed to Phase 2 for challenge score analysis.
+- If the local run is `failed`, `error`, `stopped`, `cancelled`, or `timeout`, fix the underlying bug in the RedTeam Agent code, delete the broken run, and create one fresh replacement.
+
+### Bug detection rules
+
+- Prioritize crawler correctness: inspect crawler output, `Observed path types`, source mix, explicit `katana` / `katana-xhr` usage signals, `cases.db`, `surfaces.jsonl`, and `katana_error.log` before declaring the run healthy.
+- Explicitly check whether `katana` and `katana-xhr` are contributing normally in `Observed path sources`, `cases.db` source counts, and `katana_output.jsonl`. If Katana output exists but neither source is landing, or if both are absent on a non-trivial run, treat that as a crawler-bug investigation trigger.
+- If `Observed path types` is too sparse, or most observed paths are not crawler-derived (`katana` / `katana-xhr`), treat that as a crawler-bug investigation trigger and dig deeper instead of skipping.
+- Fixes primarily target RedTeam Agent code (`agent/`, `orchestrator/`, root scripts). Fix `local-openclaw/` bugs if found.
+- Run targeted verification for each fix BEFORE committing.
+
+**CRITICAL RULE:** If you identify a confirmed bug during analysis, you MUST fix it. Do NOT output `NO_ACTIONABLE_BUG_HEALTHY_RUNS` after describing a real problem. Analyzing a bug without fixing it is a rule violation. If you described a root cause and proposed a fix, implement the fix — that IS a confirmed actionable bug.
+
+If no confirmed actionable bug is found, proceed to Phase 2. Do NOT commit yet.
+
+## Phase 2: Challenge Score Analysis & Recall Improvement
+
+Only runs after Phase 1 confirms no bug or all bugs are fixed.
+
+Check the `## Local Challenge Score` section in `latest-context.md`:
+- If `status: deferred` — the local run has not completed yet. Phase 2 is a no-op. Proceed to Phase 3.
+- If `status: scored` — the controller has queried the Juice Shop `/api/Challenges` endpoint and obtained the ground-truth challenge completion status. Proceed with analysis AND improvement.
+
+### What the challenge score tells you
+
+The `## Local Challenge Score` section contains:
+- `challenge_recall` — the fraction of Juice Shop challenges the agent solved (solved/total). This is **ground truth** from the Juice Shop API, not an estimate.
+- **Category Breakdown** — solved/total per vulnerability category
+- **Solved Challenges** — which challenges were solved, by difficulty
+- **Unsolved Challenges** — which challenges remain, grouped by difficulty
+
+### Step 1: Analyze recall gaps
+
+1. Read the challenge score data from `latest-context.md`.
+2. Read the `## Challenge Score History` section at the bottom of this prompt for recent trend.
+3. **Read the last 5 recall analysis reports** from `local-openclaw/recall-analysis/` (sorted by date, most recent first). For each report, note:
+   - What score was achieved
+   - What code changes were made
+   - Whether those changes improved, maintained, or **regressed** recall
+   - Which "Actions Taken" actually helped vs which were ineffective or harmful
+4. **Before proposing ANY code change, cross-check it against prior reports.** If a similar change was already made in a prior cycle and recall did NOT improve (or regressed), do NOT repeat it. Try a fundamentally different approach instead.
+5. Focus on **unsolved difficulty 1-3 challenges** — these should be solvable by automated scanning.
+6. For each unsolved low-difficulty challenge, diagnose the root cause:
+   - **Detection gap** — the agent's recon/source-analyzer didn't discover the relevant endpoint or parameter.
+   - **Missing attack vector** — the agent found the endpoint but didn't try the right attack type.
+   - **Execution bug** — the agent attempted the right attack but the payload/technique failed.
+   - **Reporting gap** — the agent may have actually exploited the vulnerability but didn't trigger the challenge completion (e.g., payload was analyzed but not actually submitted).
+
+### Step 2: Write detailed recall analysis report
+
+6. Write a detailed analysis report to `local-openclaw/recall-analysis/YYYY-MM-DD-<cycle_id>.md` with this structure:
+
+```markdown
+# Recall Analysis — <cycle_id>
+
+## Score Summary
+- challenge_recall: X.XXX (solved/total)
+- previous_recall: X.XXX (from last scored cycle)
+- peak_recall: X.XXX (highest ever scored)
+- delta_vs_previous: +/-X.XXX
+- delta_vs_peak: +/-X.XXX
+
+## Regression Analysis (if delta_vs_peak < 0)
+- Challenges that were solved in peak run but NOT in this run: list them
+- Which code changes between peak and now likely caused the regression?
+- Action: revert specific changes / adjust approach
+
+## New Solved Challenges (since last analysis)
+- [difficulty N] Challenge Name — how/why it was solved
+
+## Lost Challenges (solved in prior run but not this one)
+- [difficulty N] Challenge Name — why was it lost? what changed?
+
+## Prior Fix Effectiveness Review (last 5 cycles)
+- Cycle X: did Y → recall went from A to B (effective / ineffective / harmful)
+- Cycle Y: did Z → recall went from B to C (effective / ineffective / harmful)
+
+## Priority Unsolved Challenges (difficulty 1-3)
+
+### [difficulty 1] Challenge Name (category)
+- **Root cause**: detection_gap / missing_attack_vector / execution_bug / reporting_gap
+- **Analysis**: detailed explanation of why the agent missed this
+- **Evidence**: what the agent DID do (from findings.md, log.md, cases.db)
+- **Proposed fix**: specific change to agent code (which file, what to change)
+- **Fix type**: general-purpose / NOT feasible / already attempted in cycle YYYY-MM-DD
+- **Status**: fixed_this_cycle / deferred / blocked_by_X
+
+### [difficulty 2] Challenge Name (category)
+...
+
+## Actions Taken This Cycle
+- [ ] Fix 1: description → file changed
+- [ ] Fix 2: description → file changed
+
+## Deferred Items
+- Challenge Name: reason for deferral
+
+## Notes for Next Cycle
+- What to watch for, what to try next
+```
+
+7. This report is cumulative knowledge — each cycle builds on previous analyses. If a challenge was already analyzed in a prior report and the root cause hasn't changed, reference the prior report instead of re-analyzing from scratch.
+
+### Step 3: Fix the RedTeam Agent code
+
+8. For each diagnosed gap with a feasible general-purpose fix, implement it:
+   - Agent prompts: `agent/.opencode/prompts/agents/*.txt`, `agent/CLAUDE.md`, `agent/AGENTS.md`, `agent/operator-core.md`
+   - Skills: `agent/skills/*/SKILL.md`
+   - Scripts: `agent/scripts/*.sh` (runtime scripts only — NO test files here)
+   - Tests: `tests/agent-contracts/` (all test scripts go here, NOT in `agent/scripts/`)
+   - References: `agent/references/`
+   - Orchestrator: `orchestrator/backend/`, `orchestrator/frontend/`
+   - Docker: `agent/docker/`, `docker/`
+9. Every improvement must be **general-purpose** — it must help the agent against ANY target with this class of vulnerability, not just Juice Shop. Ask yourself: "Would this change also improve results against a completely different web application?" If the answer is no, do not make the change.
+10. Run targeted verification for each fix.
+11. Update the recall analysis report's "Actions Taken" section with the actual changes made.
+
+### Code change discipline (CRITICAL — past violations caused recall to regress from 18 to 1)
+
+The following rules exist because prior Phase 2 cycles added cumulative complexity that collapsed recall. Every code change MUST follow these constraints:
+
+- **Simplify, don't complexify.** If your fix adds more lines than it removes, justify why. Prefer removing unnecessary conditions over adding new ones.
+- **One change per gap.** Do not stack multiple conditional branches for one problem. Pick the single most impactful fix.
+- **Never bloat agent prompts.** Agent prompts (source-analyzer, vulnerability-analyst, operator) are read by an AI that gets confused by walls of conditional text. Keep prompts concise and directive. If a prompt paragraph exceeds 3 sentences, it is too long.
+- **Fix bugs in scripts, not in prompts.** If the agent is doing something wrong, fix the script logic or the tool — do not add a 5-sentence "do not do X, unless Y, except when Z" paragraph to the prompt. Prompt patches are the #1 cause of regression.
+- **Measure net line delta.** Before committing, run `git diff --stat`. If agent prompt/script files grew by more than 20 net lines, reconsider — you are likely over-engineering.
+- **Do not add new tools/scripts for marginal gains.** A new 200-line helper script that solves one edge case is worse than a 2-line fix to an existing script.
+- **Revert if unsure.** If you cannot clearly explain how your change improves recall for a specific unsolved challenge, do not make it.
+
+### Score analysis rules
+
+- The challenge score is ground truth (from Juice Shop API). Do not question it.
+- Focus on improving recall of low-difficulty challenges first (difficulty 1-3).
+- Higher-difficulty challenges (4-6) often require business logic or multi-step attacks that may not be feasible for automated scanning — don't force them.
+- Compare current recall against `## Challenge Score History`. If recall is regressing, treat that as high-priority.
+- Do NOT commit yet after Phase 2 — Phase 3 still needs to run.
+- The recall analysis report in `local-openclaw/recall-analysis/` is NOT committed to git. It stays local as persistent knowledge for future cycles.
+
+**CRITICAL RULE: The purpose of Phase 2 is to improve recall, not to write reports.** Analysis is the means; code changes are the goal. Every time Phase 2 is triggered with a scored run:
+
+1. You MUST modify at least one RedTeam Agent file to improve detection/exploitation capability. But prefer ONE precise fix over many speculative changes.
+2. Zero code changes after a scored Phase 2 is a rule violation.
+3. **If recall REGRESSED compared to peak (highest ever scored), this is the #1 priority.** Identify which prior changes caused the regression and REVERT them. Do not add new fixes on top of broken code.
+4. If a prior fix did not improve recall, do NOT repeat it. Try a fundamentally different angle.
+5. **Maximum 1-2 code changes per cycle.** Each must target a specific unsolved challenge with a clear mechanism. Do not scatter-shot.
+6. **Net line delta must be ≤ 0 for prompt files.** If you are adding lines to a prompt, you must remove at least as many. Prompt bloat is the proven #1 cause of recall regression.
+7. If you cannot clearly explain "this change will help solve [specific challenge] because [mechanism]", do not make the change.
+
+### Strictly prohibited changes
+
+The following types of changes are **absolutely prohibited** because they inflate the Juice Shop score without improving the agent's real capability against other targets:
+
+- **Hardcoded endpoints/paths** — Do not add specific URLs like `/rest/user/login`, `/ftp/`, `/api/Challenges`, `/redirect`, `/b2b/v2/orders` to agent prompts, skills, or scripts. The agent must discover endpoints through reconnaissance, not from a pre-programmed list.
+- **Hardcoded payloads** — Do not embed specific attack strings (e.g., `' OR 1=1--`, `<iframe src="javascript:alert(1)">`, specific product IDs or user IDs) that only work against Juice Shop.
+- **Challenge-aware detection** — Do not add rules that recognize Juice Shop challenge patterns (e.g., "if response contains 'challenge solved'", "look for score-board endpoints", "check /api/Challenges for progress").
+- **Target fingerprint shortcuts** — Do not add "if Express framework detected, try X" or "if Juice Shop detected, do Y" branching logic.
+- **Known-answer injection** — Do not encode knowledge of Juice Shop solutions (e.g., "the admin password is admin123", "use null byte in file upload", "the coupon code is...") into any agent file.
+- **Disguised specificity** — Do not write rules that appear generic but are crafted to match only Juice Shop (e.g., "always check for files at /ftp/" or "always try XXE on file upload endpoints that accept XML"). A truly general rule should be derivable from OWASP methodology without knowledge of the specific target.
+
+**The litmus test:** If you removed the Juice Shop instance and pointed the agent at a different web application (e.g., DVWA, WebGoat, HackTheBox), would your changes still improve the agent's performance? If not, the change is target-specific and must not be made.
+
+## Phase 3: Code Review & Optimization
+
+Only runs after Phase 1 and Phase 2 are both resolved.
+
+Review the RedTeam Agent code that was touched during this cycle AND any closely related code.
+
+### Priority: Subagent prompt health check
+
+**Every Phase 3 must audit the subagent prompt files.** These are the most critical files in the project — prompt bloat directly causes recall regression. Check each of:
+- `agent/.opencode/prompts/agents/source-analyzer.txt`
+- `agent/.opencode/prompts/agents/vulnerability-analyst.txt`
+- `agent/.opencode/prompts/agents/exploit-developer.txt`
+- `agent/.opencode/prompts/agents/operator.txt`
+- `agent/operator-core.md`
+
+For each subagent prompt, verify:
+1. **Line count** — compare against the peak baseline. If it grew, identify what was added and whether it helps or hurts.
+   - source-analyzer.txt: baseline ~260 lines
+   - vulnerability-analyst.txt: baseline ~211 lines
+   - operator-core.md: baseline ~296 lines
+2. **Clarity** — each instruction should be one clear directive sentence, not a multi-clause conditional paragraph. If any paragraph exceeds 3 sentences, split or simplify it.
+3. **Goal focus** — each subagent has ONE job. If the prompt drifts into telling the agent how to handle edge cases it rarely encounters, remove that text.
+4. **No conditional soup** — "do X, unless Y, except when Z, but if W then..." patterns confuse the AI agent. Replace with simple rules or fix the logic in scripts instead.
+5. **Net line delta** — if this cycle added lines to any prompt, remove at least as many unneeded lines to compensate.
+
+If any prompt has grown beyond its baseline without clear justification, **trim it back** as part of this phase.
+
+### General review
+
+Also look for:
+- **Dead code** — unused functions, unreachable branches
+- **Simplification** — overly complex logic that can be shorter
+- **Duplication** — same logic in multiple places
+
+Rules for this phase:
+- Scope: `agent/`, `orchestrator/`, `tests/`, project root scripts, and `local-openclaw/` if bugs are found.
+- Test scripts belong in `tests/agent-contracts/`, NOT in `agent/scripts/`. If you find test files in `agent/scripts/`, move them.
+- Do NOT add docstrings, comments, or type annotations to code you didn't touch in Phase 1 or 2.
+- Every fix must be verified (at minimum: `bash -n` for shell, `python3 -c "import ast; ..."` for Python, relevant tests if they exist).
+- Keep changes minimal and safe.
+
+If no review issues are found, that's fine — this phase can produce zero changes.
+
+## Commit & Finish
+
+After all three phases:
+
+- If any code changes were made across Phase 1, 2, or 3 (bug fixes, recall improvements, or review cleanups), create exactly one local git commit summarizing all changes.
+- If no changes were made across all phases, make no commit and exit with the exact line `NO_ACTIONABLE_BUG_HEALTHY_RUNS`.
+- Do not push.
+- Keep all local loop artifacts under `local-openclaw/`.
+
+Do not create new runs if the latest fixed-target runs are still healthy and active. When you need fresh verification runs after a fix:
+- For OKX: `FORCE_REPLACE_ACTIVE_RUNS=1 TARGET_FILTER=okx /Users/cis/dev/projects/RedteamOpencode/local-openclaw/scripts/create_runs.sh`
+- For local (Juice Shop): `FORCE_REPLACE_ACTIVE_RUNS=1 TARGET_FILTER=local /Users/cis/dev/projects/RedteamOpencode/local-openclaw/scripts/create_runs.sh`
+
+**NEVER run `docker restart juice-shop` yourself.** The controller handles Juice Shop restart exclusively in the post-cycle step. If you restart Juice Shop during Phase 1-3, all challenge score data is destroyed and the current cycle's Phase 2 scoring becomes invalid.
+
+## General Rules
+
+- No questions.
+- No confirmation.
+- Primary target is the RedTeam Agent project. Fix `local-openclaw/` controller bugs if found.
+- The controller detects success by checking for a new commit; once the commit exists the cycle ends. Do not commit until all three phases are complete and verification confirms the fixes work.
+
+When the cycle is complete, print the final summary **in Chinese**. The controller extracts sections by matching the Chinese titles below, so keep them stable:
+
+1. 检查的任务 ID
+2. 确认修复的 bug（Phase 1）
+3. 准招分析与改进（Phase 2）
+4. 代码审查与优化（Phase 3）
+5. 已执行的验证
+6. 本地提交 ID

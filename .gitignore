@@ -10,7 +10,19 @@
 /opencode.json
 /.hermes/
 /tools/
-/local-openclaw/
+# local-openclaw: track shared tooling (scripts, prompts, skills, tests),
+# ignore per-operator state (scheduler.env with tokens, cycle logs, findings).
+# Note: must exclude `/local-openclaw/*` (not `/local-openclaw/`) so the
+# negation rules below can re-include specific children. Git won't descend
+# into a fully-excluded directory.
+/local-openclaw/*
+!/local-openclaw/scripts/
+!/local-openclaw/prompts/
+!/local-openclaw/requirements/
+!/local-openclaw/skills/
+!/local-openclaw/tests/
+!/local-openclaw/launchd/
+!/local-openclaw/README.md
 /tests/
 /orchestrator/tests/
 /orchestrator/backend/data/
