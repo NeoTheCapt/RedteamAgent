@@ -82,7 +82,13 @@ case "$SUBCOMMAND" in
     fi
 
     transformed_message="$(transform_prompt "$message")"
-    skill_name="${HERMES_SKILL:-scan-optimizer-hermes}"
+    # Historical accident: controllers export OPENCLAW_SKILL, but this shim
+    # originally only read HERMES_SKILL. That mismatch caused the auditor's
+    # toolset dispatch below to silently fall through to the scan-optimizer
+    # branch (verified in cycle 20260422T080126Z — no browser was loaded
+    # despite OPENCLAW_SKILL=redteam-auditor-hermes). Fall back to
+    # OPENCLAW_SKILL so either name works.
+    skill_name="${HERMES_SKILL:-${OPENCLAW_SKILL:-scan-optimizer-hermes}}"
     # Default toolsets depend on the skill: the redteam-auditor cycle needs
     # `browser`+`web`+`vision` so the orch_ui oracle can actually render the
     # Dashboard / Progress pages and catch UI gaps that pure-API probes
