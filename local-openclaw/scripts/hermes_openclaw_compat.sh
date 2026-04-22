@@ -83,7 +83,20 @@ case "$SUBCOMMAND" in
 
     transformed_message="$(transform_prompt "$message")"
     skill_name="${HERMES_SKILL:-scan-optimizer-hermes}"
-    toolsets="${HERMES_TOOLSETS:-terminal,file,skills}"
+    # Default toolsets depend on the skill: the redteam-auditor cycle needs
+    # `browser`+`web`+`vision` so the orch_ui oracle can actually render the
+    # Dashboard / Progress pages and catch UI gaps that pure-API probes
+    # (orch_api/orch_log/orch_feature) can't see. Can still override via
+    # HERMES_TOOLSETS if an operator wants a narrower session.
+    case "$skill_name" in
+        redteam-auditor-hermes)
+            default_toolsets="terminal,file,skills,browser,web,vision"
+            ;;
+        *)
+            default_toolsets="terminal,file,skills"
+            ;;
+    esac
+    toolsets="${HERMES_TOOLSETS:-$default_toolsets}"
     source_tag="${HERMES_SOURCE_TAG:-scan-optimizer-compat}"
 
     cd "$REPO_ROOT"

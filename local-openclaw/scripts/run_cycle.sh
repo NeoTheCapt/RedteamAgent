@@ -98,11 +98,17 @@ extract_auditor_sections() {
   # is present, which makes the caller fall back to the raw Openclaw tail.
   local before="$ROOT_DIR/audit-reports/$cycle_id/findings-before.json"
   local after="$ROOT_DIR/audit-reports/$cycle_id/findings-after.json"
+  local api_src="$ROOT_DIR/audit-reports/$cycle_id/api.json"
+  local logs_src="$ROOT_DIR/audit-reports/$cycle_id/logs.json"
+  local feat_src="$ROOT_DIR/audit-reports/$cycle_id/features.json"
+  local bench_hist="$STATE_DIR/benchmark-metrics-history.json"
   if [[ ! -f "$before" && ! -f "$after" ]]; then
     return 0
   fi
 
-  python3 - "$before" "$after" <<'PY'
+  python3 - \
+      "$before" "$after" "$api_src" "$logs_src" "$feat_src" "$bench_hist" \
+      "$cycle_id" "${OPENCLAW_TARGET_LOCAL:-}" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -139,8 +145,76 @@ def load(path):
 
 before_doc = load(sys.argv[1])
 after_doc = load(sys.argv[2])
+api_doc    = load(sys.argv[3])
+logs_doc   = load(sys.argv[4])
+feat_doc   = load(sys.argv[5])
+bench_doc  = load(sys.argv[6])
+this_cycle = sys.argv[7]
+local_target = sys.argv[8] if len(sys.argv) > 8 else ""
 
 lines = []
+
+# --- 阶段 1: prep 自动探测的三个源 ---
+prep_lines = ["阶段执行情况（prep 自动探测）:"]
+for label, doc, source_tag in (
+    ("后端 API (orch_api)",     api_doc,  "api"),
+    ("后端日志 (orch_log)",     logs_doc, "logs"),
+    ("后端特性 (orch_feature)", feat_doc, "features"),
+):
+    if doc is None:
+        prep_lines.append(f"- {label}: 未执行（{source_tag}.json 不存在）")
+        continue
+    pc = doc.get("pass_count")
+    fc = doc.get("fail_count")
+    if pc is None and fc is None:
+        prep_lines.append(f"- {label}: 无结果计数")
+        continue
+    prep_lines.append(f"- {label}: pass={pc or 0} fail={fc or 0}")
+lines.append("\n".join(prep_lines))
+
+# --- 阶段 2: agent 侧源 (agent_bug / agent_recall / orch_ui) ---
+# 这些源没有独立 JSON —— 只能通过 findings 中出现的 category 反推是否
+# 真的做过分析。没有相关 finding 时无法区分 "做过但无异常" 和 "没做"。
+agent_side = {"agent_bug": 0, "agent_recall": 0, "orch_ui": 0}
+source = after_doc or before_doc
+if source:
+    for f in (source.get("findings") or []) + (source.get("deferred") or []):
+        cat = f.get("category")
+        if cat in agent_side:
+            agent_side[cat] += 1
+
+agent_lines = ["Agent 侧源（由 Hermes 分析，未发现不代表未执行）:"]
+LABEL = {"agent_bug": "Agent bug 扫描", "agent_recall": "Agent 召回", "orch_ui": "前端 UI 冒烟"}
+for k in ("agent_bug", "agent_recall", "orch_ui"):
+    n = agent_side[k]
+    agent_lines.append(f"- {LABEL[k]}: {'出现 ' + str(n) + ' 项发现' if n else '本周期无发现'}")
+lines.append("\n".join(agent_lines))
+
+# --- 阶段 3: 基准 (benchmark) ---
+if bench_doc and local_target:
+    bench_target = None
+    # 容忍尾斜杠差异
+    for key in (local_target, local_target.rstrip("/"), local_target.rstrip("/") + "/"):
+        if key in (bench_doc.get("targets") or {}):
+            bench_target = bench_doc["targets"][key]
+            break
+    bench_lines = ["基准（benchmark）:"]
+    if not bench_target:
+        bench_lines.append(f"- 目标 {local_target}: 历史中无记录")
+    else:
+        last_cycle = bench_target.get("cycle_id") or "?"
+        last_update = bench_target.get("updated_at") or "?"
+        metrics = bench_target.get("last_metrics") or {}
+        recall = metrics.get("challenge_recall", "?")
+        solved = metrics.get("solved_challenges", "?")
+        total  = metrics.get("total_challenges", "?")
+        bench_lines.append(f"- 目标: {local_target}")
+        bench_lines.append(f"- 最近召回: {recall} （{solved}/{total} 挑战）")
+        if last_cycle == this_cycle:
+            bench_lines.append(f"- 本周期完成评分（{last_update}）")
+        else:
+            bench_lines.append(f"- 本周期未重新评分；数据沿用 cycle {last_cycle}（{last_update}）")
+    lines.append("\n".join(bench_lines))
 
 # --- 发现阶段：用发现项最多的那份做类别 / 严重度汇总 ---
 def _discovery_count(doc):

@@ -71,6 +71,11 @@ New keys required only by the auditor:
 
 ```
 HERMES_SKILL=redteam-auditor-hermes
-HERMES_TOOLSETS=terminal,file,skills,playwright
+HERMES_TOOLSETS=terminal,file,skills,browser,web,vision
 HERMES_SOURCE_TAG=redteam-auditor
 ```
+
+Note: the Hermes browser automation toolset is called `browser` (not
+`playwright`). `hermes_openclaw_compat.sh` now auto-defaults the auditor skill
+to `terminal,file,skills,browser,web,vision` when `HERMES_TOOLSETS` is unset, so
+the scheduler.env override is optional.

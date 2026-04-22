@@ -17,7 +17,9 @@ The orchestrator-audit prep has already run and produced all inputs you need. Re
 
 Follow the four-phase workflow defined in your skill, in order:
 
-1. **Discover** — fold `audit-reports/${CYCLE_ID}/findings-before.json` into your working queue. Do NOT re-run the orchestrator audit scripts; prep already did that. You may still gather `agent_bug` and `agent_recall` findings from recent engagement logs per the skill.
+1. **Discover** — fold `audit-reports/${CYCLE_ID}/findings-before.json` into your working queue. Do NOT re-run the orchestrator audit scripts; prep already did that. You MUST still gather:
+   - `agent_bug` and `agent_recall` findings from recent engagement logs
+   - `orch_ui` findings by **actually opening** `http://127.0.0.1:18000` in the `browser` toolset and walking the 12 UI checks from the skill (Dashboard, Progress per-phase content, agent enumeration, ProjectEditModal, NewRunForm, Stop button, Documents/Events/Cases tabs). If the `browser` toolset is not loaded, record every UI check as `orch_ui_unavailable` in `findings-before.json` and add a top-level finding explaining the session was started without browser access — do NOT substitute CLI-based checks.
 2. **Fix** — implement fixes for every in-scope finding in a single coherent pass. Do not split the work by category. Group related file edits.
 3. **Re-verify** — after all fixes land, run the relevant contract / unit / integration tests that cover the edited code. Re-run targeted portions of the orchestrator audit scripts if needed:
    - `bash local-openclaw/scripts/audit_orchestrator_api.sh ${CYCLE_ID}`
