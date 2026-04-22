@@ -643,9 +643,10 @@ return {ok:true};
     def type_text(self, selector: str, text: str, timeout_ms: int, clear: bool = True) -> None:
         self._type_selector(selector, text, timeout_ms, clear=clear, action="type", record={})
 
-    def type_by_label(self, label: str, text: str, timeout_ms: int, clear: bool = True) -> None:
+    def _resolve_selector_by_label(self, label: str, timeout_ms: int, *, field_selector: str, action: str) -> str:
         lookup_script = """
 const needle = (arguments[0] || '').trim();
+const fieldSelector = arguments[1] || 'input, textarea, select';
 const normalize = (input) => (input || '').replace(/\\s+/g, ' ').trim();
 const matches = (input) => normalize(input).toLowerCase().includes(needle.toLowerCase());
 const escapeCss = (value) => {
@@ -671,19 +672,25 @@ const selectorFor = (el) => {
   }
   return parts.join(' > ');
 };
-const writableSelector = 'input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="checkbox"]):not([type="radio"]), textarea, select, [contenteditable="true"]';
 const findByLabel = () => {
   for (const labelEl of Array.from(document.querySelectorAll('label'))) {
     if (!matches(labelEl.innerText || labelEl.textContent || '')) continue;
     let target = null;
     const forId = labelEl.getAttribute('for');
     if (forId) target = document.getElementById(forId);
-    if (!target) target = labelEl.querySelector(writableSelector);
+    if (!target) target = labelEl.querySelector(fieldSelector);
+    if (!target) {
+      let current = labelEl.parentElement;
+      while (current && !target) {
+        target = current.querySelector(fieldSelector);
+        current = current.parentElement;
+      }
+    }
     if (target) return target;
   }
   return null;
 };
-const directCandidates = Array.from(document.querySelectorAll(writableSelector));
+const directCandidates = Array.from(document.querySelectorAll(fieldSelector));
 const candidates = [
   findByLabel(),
   ...directCandidates.filter((el) => {
@@ -700,12 +707,21 @@ return {ok:false, error:'label not found'};
             lookup_script,
             timeout_ms=timeout_ms,
             reason=f"label {label}",
-            args=[label],
+            args=[label, field_selector],
             predicate=lambda result: isinstance(result, dict) and result.get("ok") and bool(result.get("selector")),
         )
         selector = str(value.get("selector") or "")
         if not selector:
-            raise StepError(f"type_by_label failed for label {label}: {value}")
+            raise StepError(f"{action} failed for label {label}: {value}")
+        return selector
+
+    def type_by_label(self, label: str, text: str, timeout_ms: int, clear: bool = True) -> None:
+        selector = self._resolve_selector_by_label(
+            label,
+            timeout_ms,
+            field_selector='input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="checkbox"]):not([type="radio"]), textarea, select, [contenteditable="true"]',
+            action="type_by_label",
+        )
         self._type_selector(
             selector,
             text,
@@ -830,6 +846,124 @@ return {
             max=str(value_record.get("max") or ""),
             step=str(value_record.get("step") or ""),
             input_type=str(value_record.get("type") or ""),
+        )
+
+    def select_option(
+        self,
+        selector: str,
+        timeout_ms: int,
+        *,
+        value: Any = None,
+        text: Any = None,
+        index: Any = None,
+        action: str = "select_option",
+        record: dict[str, Any] | None = None,
+    ) -> None:
+        script = """
+const selector = arguments[0];
+const requestedValue = arguments[1];
+const requestedText = arguments[2];
+const requestedIndex = arguments[3];
+const el = document.querySelector(selector);
+if (!el) return {ok:false, error:'selector not found'};
+el.scrollIntoView({block:'center', inline:'center'});
+el.focus();
+if ((el.tagName || '').toLowerCase() !== 'select') {
+  return {ok:false, error:'element is not select'};
+}
+const normalize = (input) => String(input ?? '').replace(/\\s+/g, ' ').trim().toLowerCase();
+const options = Array.from(el.options || []);
+let targetIndex = -1;
+let mode = '';
+if (requestedIndex !== null && requestedIndex !== undefined && String(requestedIndex).trim() !== '') {
+  const numericIndex = Number(requestedIndex);
+  if (Number.isInteger(numericIndex) && numericIndex >= 0 && numericIndex < options.length) {
+    targetIndex = numericIndex;
+    mode = 'index';
+  }
+}
+if (targetIndex === -1 && requestedValue !== null && requestedValue !== undefined && String(requestedValue).trim() !== '') {
+  const rawValue = String(requestedValue);
+  targetIndex = options.findIndex((option) => String(option.value ?? '') === rawValue);
+  if (targetIndex !== -1) mode = 'value';
+}
+if (targetIndex === -1 && requestedText !== null && requestedText !== undefined && String(requestedText).trim() !== '') {
+  const normalizedText = normalize(requestedText);
+  targetIndex = options.findIndex((option) => normalize(option.textContent || option.innerText || '') === normalizedText);
+  if (targetIndex !== -1) mode = 'text';
+}
+if (targetIndex === -1) {
+  return {
+    ok:false,
+    error:'option not found',
+    available_options: options.map((option, idx) => ({index: idx, value: String(option.value ?? ''), text: String((option.textContent || option.innerText || '').trim())})),
+  };
+}
+el.selectedIndex = targetIndex;
+el.value = options[targetIndex].value;
+el.dispatchEvent(new Event('input', {bubbles:true}));
+el.dispatchEvent(new Event('change', {bubbles:true}));
+el.dispatchEvent(new Event('blur', {bubbles:true}));
+const selected = options[el.selectedIndex] || null;
+return {
+  ok:true,
+  requested_value: requestedValue === null || requestedValue === undefined ? '' : String(requestedValue),
+  requested_text: requestedText === null || requestedText === undefined ? '' : String(requestedText),
+  requested_index: requestedIndex === null || requestedIndex === undefined ? '' : String(requestedIndex),
+  effective_index: String(el.selectedIndex),
+  effective_value: selected ? String(selected.value ?? '') : '',
+  effective_text: selected ? String((selected.textContent || selected.innerText || '').trim()) : '',
+  option_count: options.length,
+  mode,
+};
+"""
+        self.wait_for_selector(selector, timeout_ms)
+        value_record = self.call_with_alert_recovery(
+            lambda: self.client.execute(script, [selector, value, text, index]),
+            source_action=action,
+        )
+        if not isinstance(value_record, dict) or not value_record.get("ok"):
+            raise StepError(f"{action} failed for {selector}: {value_record}")
+        payload = record or {}
+        self.record(
+            action,
+            selector=selector,
+            timeout_ms=timeout_ms,
+            requested_value=str(value_record.get("requested_value") or ""),
+            requested_text=str(value_record.get("requested_text") or ""),
+            requested_index=str(value_record.get("requested_index") or ""),
+            effective_value=str(value_record.get("effective_value") or ""),
+            effective_text=str(value_record.get("effective_text") or ""),
+            effective_index=str(value_record.get("effective_index") or ""),
+            option_count=int(value_record.get("option_count") or 0),
+            match_mode=str(value_record.get("mode") or ""),
+            **payload,
+        )
+
+    def select_by_label(
+        self,
+        label: str,
+        timeout_ms: int,
+        *,
+        value: Any = None,
+        text: Any = None,
+        index: Any = None,
+        action: str = "select_by_label",
+    ) -> None:
+        selector = self._resolve_selector_by_label(
+            label,
+            timeout_ms,
+            field_selector="select",
+            action=action,
+        )
+        self.select_option(
+            selector,
+            timeout_ms,
+            value=value,
+            text=text,
+            index=index,
+            action=action,
+            record={"label": label, "matched_selector": selector},
         )
 
     def _normalize_upload_paths(self, raw_paths: Any) -> list[Path]:
@@ -993,6 +1127,26 @@ return {ok:true};
                 str(raw_step["selector"]),
                 raw_value,
                 timeout_ms,
+                action=action,
+            )
+            return
+        if action in {"select", "select_option", "choose_option"}:
+            self.select_option(
+                str(raw_step["selector"]),
+                timeout_ms,
+                value=raw_step.get("value"),
+                text=raw_step.get("text") or raw_step.get("option_text") or raw_step.get("label_text"),
+                index=raw_step.get("index"),
+                action=action,
+            )
+            return
+        if action == "select_by_label":
+            self.select_by_label(
+                str(raw_step["label"]),
+                timeout_ms,
+                value=raw_step.get("value"),
+                text=raw_step.get("text") or raw_step.get("option_text"),
+                index=raw_step.get("index"),
                 action=action,
             )
             return
