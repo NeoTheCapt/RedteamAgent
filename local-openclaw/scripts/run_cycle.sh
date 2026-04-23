@@ -320,7 +320,25 @@ source = before_doc
 if _discovery_count(after_doc) > _discovery_count(before_doc):
     source = after_doc
 if source:
-    findings = list(source.get("findings") or []) + list(source.get("deferred") or [])
+    # Dedup by finding id so the discovery counts aren't inflated when Hermes
+    # writes the duplicate empty-shell records seen in 134501 / 144908.
+    raw_findings = list(source.get("findings") or []) + list(source.get("deferred") or [])
+    seen_ids: dict[str, dict] = {}
+    findings: list[dict] = []
+    for f in raw_findings:
+        fid = f.get("id")
+        if fid and fid in seen_ids:
+            # Keep whichever record has the meatier content.
+            existing = seen_ids[fid]
+            if len((f.get("summary") or "").strip()) > len((existing.get("summary") or "").strip()):
+                # Replace in-place
+                idx = findings.index(existing)
+                findings[idx] = f
+                seen_ids[fid] = f
+            continue
+        if fid:
+            seen_ids[fid] = f
+        findings.append(f)
     total = len(findings)
     by_cat: dict[str, int] = {}
     by_sev: dict[str, int] = {}
@@ -345,8 +363,39 @@ if source:
 # --- 修复 / 重新分类 / 延后阶段：优先使用 findings-after ---
 final = after_doc or before_doc
 if final:
+    # Dedup by finding id: observed in cycles 134501 and 144908, Hermes
+    # sometimes writes two entries for the same id — one complete record
+    # (status=deferred + summary + reason) and one empty-fields shell
+    # (status=None, summary=""). Keep the non-empty one. If status AND summary
+    # are both present on two records for the same id, prefer the one with
+    # status != "open" and status != None (terminal records are authoritative).
+    raw = list(final.get("findings") or []) + list(final.get("deferred") or [])
+    dedup: dict[str, dict] = {}
+    for f in raw:
+        fid = f.get("id")
+        if not fid:
+            continue
+        existing = dedup.get(fid)
+        if existing is None:
+            dedup[fid] = f
+            continue
+        # Prefer the record with a non-null status and non-empty summary.
+        def _score(rec: dict) -> int:
+            s = rec.get("status")
+            sm = rec.get("summary")
+            score = 0
+            if s and s not in ("open", ""):
+                score += 2
+            if sm and str(sm).strip():
+                score += 2
+            if rec.get("evidence"):
+                score += 1
+            return score
+        if _score(f) > _score(existing):
+            dedup[fid] = f
+
     buckets: dict[str, list[dict]] = {"fixed": [], "deferred": [], "reclassified": [], "open": []}
-    for f in list(final.get("findings") or []) + list(final.get("deferred") or []):
+    for f in dedup.values():
         status = f.get("status") or "open"
         buckets.setdefault(status, []).append(f)
 
@@ -497,6 +546,25 @@ send_cycle_summary() {
   title="$(cycle_title)"
   local body=""
 
+  # Promote the auditor's explicit exit_status into the cycle-level status
+  # shown at the top of the Discord summary, so `ok_no_fixes` (a legitimate
+  # "codebase is clean" outcome) visually differs from a cosmetic-commit
+  # `success`. Only override when the auditor skill was the one running.
+  local display_status="$cycle_status"
+  if [[ "${OPENCLAW_SKILL:-}" == "redteam-auditor-hermes" ]]; then
+    local auditor_exit
+    auditor_exit="$(python3 -c "
+import json, pathlib
+p = pathlib.Path('$STATE_DIR/auditor-state.json')
+if p.exists():
+    try: print(json.loads(p.read_text()).get('exit_status',''))
+    except: pass
+" 2>/dev/null || true)"
+    if [[ "$auditor_exit" == "ok_no_fixes" ]]; then
+      display_status="success_no_fixes"
+    fi
+  fi
+
   if [[ "${OPENCLAW_SKILL:-}" == "redteam-auditor-hermes" ]]; then
     body="$(extract_auditor_sections || true)"
   fi
@@ -517,7 +585,7 @@ send_cycle_summary() {
   cat > "$msg_file" <<EOF
 ${title}周期完成
 
-状态: $cycle_status
+状态: $display_status
 周期 ID: $cycle_id
 尝试次数: $attempt_count
 OKX 任务: ${okx_run_id:-unknown} (${okx_run_status:-unknown})
@@ -765,6 +833,24 @@ else
 
       if [[ "$cycle_status" != "success" ]]; then
         break
+      fi
+
+      # Auditor may legitimately finish with no commits when everything is
+      # clean. It writes exit_status=ok_no_fixes to auditor-state.json in
+      # that case. Treat that as success (no commit expected) instead of
+      # the "failed_no_fix_commit" status used for real stuck-cycles.
+      if [[ "${OPENCLAW_SKILL:-}" == "redteam-auditor-hermes" ]]; then
+        _auditor_exit="$(python3 -c "
+import json, pathlib
+p = pathlib.Path('$STATE_DIR/auditor-state.json')
+if p.exists():
+    try: print(json.loads(p.read_text()).get('exit_status',''))
+    except: pass
+" 2>/dev/null || true)"
+        if [[ "$_auditor_exit" == "ok_no_fixes" ]]; then
+          log "auditor reported exit_status=ok_no_fixes; codebase clean, no commit expected"
+          break
+        fi
       fi
 
       cycle_status="failed_no_fix_commit"

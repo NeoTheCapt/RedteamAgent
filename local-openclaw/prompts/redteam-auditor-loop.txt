@@ -45,7 +45,7 @@ If you sense you're running low on budget (e.g. UI work is taking many tool call
 
      If the `browser` toolset is not loaded at all, record every UI check as `orch_ui_unavailable` in `findings-before.json` and add a top-level finding explaining the session was started without browser access — do NOT substitute CLI-based checks.
    **Phase 1 exit checkpoint (REQUIRED before any Fix work):**
-   - Rewrite `audit-reports/${CYCLE_ID}/findings-before.json` with the full merged list (prep-level findings + your agent_bug / agent_recall / orch_ui discoveries). Each finding MUST have `id`, `category`, `severity`, `summary`, `evidence`, and an initial `status: "open"`.
+   - Rewrite `audit-reports/${CYCLE_ID}/findings-before.json` with the full merged list (prep-level findings + your agent_bug / agent_recall / orch_ui discoveries). Each finding MUST have `id`, `category`, `severity`, `summary`, `evidence`, `fingerprint` (see skill — `<category>-<sha256(category+lowercased_summary)[:12]>`), and an initial `status: "open"`. The `fingerprint` is the stable cross-cycle id; `FND-XXX` is only unique within this cycle.
    - Also copy it as the initial `audit-reports/${CYCLE_ID}/findings-after.json` with every finding still `status: "open"` — you will update statuses in Phase 2.
    - Write `audit-reports/${CYCLE_ID}/source-status.json` so the operator can tell whether each source was actually scanned. The file MUST have one entry per agent-side source and use these exact statuses:
      ```json
@@ -59,6 +59,14 @@ If you sense you're running low on budget (e.g. UI work is taking many tool call
    - Write `local-openclaw/state/auditor-state.json` with `exit_status: "discover_complete"` so that even if the cycle is killed right now, the controller has real counts to report.
 
 2. **Fix** — implement fixes for every in-scope finding in a single coherent pass. Do not split the work by category. Group related file edits.
+
+   **Clean-cycle exit (REQUIRED when the codebase actually is clean):** if ALL of the following are true, set `auditor-state.json.exit_status` to `"ok_no_fixes"` and skip to Phase 4 (review) without any commits:
+   - prep's `orch_api`, `orch_log`, `orch_feature` sources all have `fail_count == 0` AND no findings
+   - `agent_bug` scan surfaced no runs with `status ∉ {queued,running,completed}` AND no tracebacks/runtime_errors in recent engagement logs
+   - `agent_recall` either matches the peak OR is already `deferred` with the standard "no fresh benchmark available" reason
+   - all 12 `orch_ui` checks have `result: passed` with screenshot evidence
+
+   You are NOT required to invent a finding just to produce a commit. A cycle that correctly identifies "nothing to fix" is a successful cycle. The Discord summary renders `exit_status: ok_no_fixes` differently from `success` so the operator knows the difference. **Do NOT** force a cosmetic commit (rename a variable, bump a test fixture, tweak a CSS color) just to avoid an `ok_no_fixes` result — that pollutes git history and masks the real signal that the codebase is stable.
 
    **Fix-site / finding match rule (non-negotiable):** before committing any code change, verify that every file you touched maps back to the finding you claim to be fixing. Concretely:
    - Take the finding's `evidence.file:line` / `evidence.run_json` / `evidence.log_tail` / `suggested_fix_path` fields.
@@ -111,5 +119,7 @@ Update `local-openclaw/state/auditor-state.json` with, at minimum:
 ```
 
 Write `audit-reports/${CYCLE_ID}/findings-after.json` mirroring `findings-before.json` but with each finding's `status` set to `fixed`, `deferred`, or `reclassified` (with a reason).
+
+**findings-after.json schema rule (non-negotiable):** every finding id appears EXACTLY ONCE in the file (counting entries across both the `findings` and `deferred` arrays). Never write two records for the same id — even if one records the "fix" and another records a "deferred" note. Instead, put all context on the single record via its `status`, `reason`, `commit`, and `evidence` fields. The Discord renderer now defensively dedups by id, but that's a safety net, not a license to write dirty data.
 
 The controller (`run_cycle.sh`) will read these artifacts to build the summary that goes to Discord. Keep them accurate.
