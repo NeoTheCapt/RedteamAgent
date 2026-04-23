@@ -233,8 +233,12 @@ recover_abnormal_runs() {
 
     case "$okx_status" in
         failed|failure|error|errored|stopped|cancelled|canceled|timeout)
-            echo "[$(timestamp)] OKX run is abnormal (status=$okx_status); creating fresh replacement" >&2
-            if TARGET_FILTER=okx FORCE_REPLACE_ACTIVE_RUNS=1 "$ROOT_DIR/scripts/create_runs.sh" >&2; then
+            # Preserve the terminal run so the auditor's agent_bug source can
+            # still read log.md / run.json / findings when analyzing what went
+            # wrong. Without KEEP_TERMINAL_RUNS the DELETE endpoint would
+            # rmtree the engagement directory before Hermes gets to see it.
+            echo "[$(timestamp)] OKX run is abnormal (status=$okx_status); creating fresh replacement (preserving failed run for post-mortem)" >&2
+            if TARGET_FILTER=okx FORCE_REPLACE_ACTIVE_RUNS=1 KEEP_TERMINAL_RUNS=1 "$ROOT_DIR/scripts/create_runs.sh" >&2; then
                 needs_recovery=1
             else
                 echo "[$(timestamp)] warning: failed to create OKX replacement run" >&2
@@ -263,8 +267,8 @@ recover_abnormal_runs() {
 
     case "$local_status" in
         failed|failure|error|errored|stopped|cancelled|canceled|timeout)
-            echo "[$(timestamp)] local run is abnormal (status=$local_status); creating replacement (Juice Shop NOT restarted — deferred to post-cycle)" >&2
-            if TARGET_FILTER=local FORCE_REPLACE_ACTIVE_RUNS=1 "$ROOT_DIR/scripts/create_runs.sh" >&2; then
+            echo "[$(timestamp)] local run is abnormal (status=$local_status); creating replacement (preserving failed run for post-mortem; Juice Shop NOT restarted — deferred to post-cycle)" >&2
+            if TARGET_FILTER=local FORCE_REPLACE_ACTIVE_RUNS=1 KEEP_TERMINAL_RUNS=1 "$ROOT_DIR/scripts/create_runs.sh" >&2; then
                 needs_recovery=1
             else
                 echo "[$(timestamp)] warning: failed to create local replacement run" >&2

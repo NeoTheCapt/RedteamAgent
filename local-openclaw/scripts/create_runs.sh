@@ -14,10 +14,24 @@ PROJECT_ID="${PROJECT_ID:?set PROJECT_ID}"
 TARGET_OKX="${TARGET_OKX:-https://www.okx.com}"
 TARGET_LOCAL="${TARGET_LOCAL:-http://127.0.0.1:8000}"
 FORCE_REPLACE_ACTIVE_RUNS="${FORCE_REPLACE_ACTIVE_RUNS:-0}"
+# When KEEP_TERMINAL_RUNS=1, cleanup_target_runs skips runs whose status is
+# already terminal (failed / error / errored / stopped / cancelled / canceled /
+# timeout / completed). Used by run_cycle_prep.sh::recover_abnormal_runs so
+# the auditor cycle can still read log.md / run.json / findings from the
+# failed run in Phase 1 (agent_bug source). Without this flag, the orchestrator
+# DELETE endpoint rmtree's the entire engagement directory and forensic
+# evidence is lost before Hermes runs.
+KEEP_TERMINAL_RUNS="${KEEP_TERMINAL_RUNS:-0}"
 # Optional comma-separated subset of fixed targets to manage for this invocation.
 # Accepted values: okx, local, the full target URL, or all.
 TARGET_FILTER_RAW="${TARGET_FILTER:-all}"
 TARGET_FILTER="${TARGET_FILTER_RAW//[[:space:]]/}"
+
+_TERMINAL_STATUSES_REGEX='^(failed|failure|error|errored|stopped|cancelled|canceled|timeout|completed|complete|succeeded|success)$'
+
+_is_terminal_status() {
+    [[ "$1" =~ $_TERMINAL_STATUSES_REGEX ]]
+}
 
 api_get_runs() {
     orchestrator_curl \
@@ -60,6 +74,10 @@ cleanup_target_runs() {
     while IFS=$'\t' read -r run_id run_status; do
         [[ -z "${run_id:-}" ]] && continue
         if [[ -n "$keep_id" && "$run_id" == "$keep_id" ]]; then
+            continue
+        fi
+        if [[ "$KEEP_TERMINAL_RUNS" == "1" ]] && _is_terminal_status "$run_status"; then
+            echo "preserving terminal run ${run_id} for ${target} (status=${run_status}; KEEP_TERMINAL_RUNS=1)" >&2
             continue
         fi
         echo "deleting stale/extra run ${run_id} for ${target} (status=${run_status})" >&2
