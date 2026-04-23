@@ -2696,19 +2696,11 @@ def _terminal_reason_from_artifacts(run: Run) -> tuple[bool, str, str, str]:
             init_only_exit=init_only_exit,
         ))
 
-    engagement_dir = _active_engagement_dir(run)
-    queue_reason = ""
-    if engagement_dir is not None:
-        pending_cases, processing_cases = _count_remaining_cases(engagement_dir / "cases.db")
-        if pending_cases or processing_cases:
-            queue_reason = f"Queue still has pending={pending_cases} processing={processing_cases}."
-
-    inferred_reason = queue_reason or completion_reason
-    if init_only_exit or inferred_reason:
+    if init_only_exit or completion_reason:
         return (succeeded, *_terminal_reason(
             succeeded=False,
             return_code=0,
-            completion_reason=inferred_reason,
+            completion_reason=completion_reason,
             init_only_exit=init_only_exit,
         ))
     return (succeeded, *_terminal_reason(

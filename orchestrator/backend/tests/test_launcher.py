@@ -2547,7 +2547,7 @@ def test_supervise_container_ignores_replayed_opencode_log_mtime_when_text_times
     assert metadata["stop_reason_text"] == "Runtime produced no new output before stall timeout elapsed."
 
 
-def test_auto_launch_missing_container_uses_incomplete_queue_artifacts(monkeypatch):
+def test_auto_launch_missing_container_uses_scope_status_over_midqueue_case_counts(monkeypatch):
     client = TestClient(app)
     token = register_and_login(client, "alice")
     project = create_project(client, token)
@@ -2626,8 +2626,8 @@ def test_auto_launch_missing_container_uses_incomplete_queue_artifacts(monkeypat
     assert latest is not None
     assert latest.status == "failed"
     metadata = json.loads((Path(run["engagement_root"]) / "run.json").read_text(encoding="utf-8"))
-    assert metadata["stop_reason_code"] == "queue_incomplete"
-    assert metadata["stop_reason_text"] == "Queue still has pending=1 processing=0."
+    assert metadata["stop_reason_code"] == "engagement_incomplete"
+    assert metadata["stop_reason_text"] == "Engagement status is in_progress."
 
 
 
