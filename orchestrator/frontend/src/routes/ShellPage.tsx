@@ -188,7 +188,9 @@ export function ShellPage(props: ShellPageProps) {
   async function handleStop(projectId: number, runId: number) {
     try {
       await stopRun(token, projectId, runId);
-      // Optimistic refetch — the sidebar polls every 5s anyway.
+      if (onRefreshProjects) {
+        await onRefreshProjects();
+      }
     } catch (err) {
       console.warn("stop failed:", err);
     }

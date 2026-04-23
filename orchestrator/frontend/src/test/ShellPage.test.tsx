@@ -13,8 +13,11 @@ vi.mock("../components/shell/Sidebar", () => ({
   Sidebar: () => <div data-testid="sidebar" />,
 }));
 vi.mock("../components/shell/RunPanel", () => ({
-  RunPanel: ({ children }: { children: React.ReactNode }) => (
-    <div data-testid="run-panel">{children}</div>
+  RunPanel: ({ children, onStop }: { children: React.ReactNode; onStop?: () => void | Promise<void> }) => (
+    <div data-testid="run-panel">
+      {onStop ? <button onClick={() => void onStop()}>STOP</button> : null}
+      {children}
+    </div>
   ),
 }));
 vi.mock("../components/shell/TabNav", () => ({
@@ -53,8 +56,9 @@ vi.mock("../lib/api", async () => {
     stopRun: vi.fn().mockResolvedValue(undefined),
   };
 });
-import { getRunSummary } from "../lib/api";
+import { getRunSummary, stopRun } from "../lib/api";
 const mockGetRunSummary = getRunSummary as unknown as ReturnType<typeof vi.fn>;
+const mockStopRun = stopRun as unknown as ReturnType<typeof vi.fn>;
 
 // ── Import component under test (after mocks) ──────────────────────────────
 import { ShellPage } from "../routes/ShellPage";
@@ -188,5 +192,26 @@ describe("ShellPage — stale summary on run switch (Bug 1)", () => {
     await waitFor(() =>
       expect(screen.getByTestId("dashboard-tab")).toHaveTextContent("http://run20.test"),
     );
+  });
+
+  it("refreshes projects after a stop request so the run state can transition promptly", async () => {
+    const onRefreshProjects = vi.fn().mockResolvedValue(undefined);
+    mockGetRunSummary.mockResolvedValue(mkSummary("http://run10.test"));
+    mockStopRun.mockResolvedValue(undefined);
+
+    render(<ShellPage {...defaultProps({ onRefreshProjects })} />);
+    act(() => setHash("/projects/1/runs/10/dashboard"));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("dashboard-tab")).toHaveTextContent("http://run10.test"),
+    );
+
+    await act(async () => {
+      screen.getByText("STOP").click();
+      await Promise.resolve();
+    });
+
+    expect(mockStopRun).toHaveBeenCalledWith("tok", 1, 10);
+    expect(onRefreshProjects).toHaveBeenCalledTimes(1);
   });
 });
