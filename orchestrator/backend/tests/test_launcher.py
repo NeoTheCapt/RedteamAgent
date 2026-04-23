@@ -280,6 +280,100 @@ def test_stop_run_runtime_terminates_orphaned_runtime_log_followers(monkeypatch)
 
 
 
+def test_stop_run_runtime_clears_terminal_active_runtime_metadata(monkeypatch):
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "https://cleanup.example")
+    stopped_run = db.update_run_status(run["id"], "stopped")
+
+    run_root = Path(run["engagement_root"])
+    metadata_path = run_root / "run.json"
+    metadata_path.write_text(
+        json.dumps(
+            {
+                "active_agents": 1,
+                "agents": [
+                    {
+                        "agent_name": "source-analyzer",
+                        "parallel_count": 1,
+                        "phase": "consume-test",
+                        "status": "active",
+                        "summary": "Processing 1 queued case(s)",
+                        "task_name": "source-analyzer",
+                        "updated_at": "2026-04-23 13:05:11",
+                    }
+                ],
+                "current_action": {
+                    "agent_name": "source-analyzer",
+                    "phase": "consume-test",
+                    "summary": "Processing 1 queued case(s)",
+                    "task_name": "source-analyzer",
+                },
+                "current_agent": "source-analyzer",
+                "current_agent_name": "source-analyzer",
+                "current_phase": "consume-test",
+                "current_summary": "Processing 1 queued case(s)",
+                "current_task": "source-analyzer",
+                "current_task_name": "source-analyzer",
+                "ended_at": "2026-04-23 13:06:55",
+                "phase": "consume-test",
+                "phase_waterfall": [
+                    {
+                        "active_agents": 1,
+                        "label": "Consume & Test",
+                        "latest_summary": "Processing 1 queued case(s)",
+                        "phase": "consume-test",
+                        "state": "active",
+                        "task_events": 482,
+                    }
+                ],
+                "run_id": run["id"],
+                "status": "stopped",
+                "stop_reason_code": "user_stopped",
+                "stop_reason_text": "Run stopped by operator.",
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    process_metadata_path = run_root / "runtime" / "process.json"
+    process_metadata_path.parent.mkdir(parents=True, exist_ok=True)
+    process_metadata_path.write_text(
+        json.dumps({"run_id": run["id"], "container_name": f"redteam-orch-run-{run['id']:04d}"}) + "\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr("app.services.launcher.subprocess.run", lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0, stdout="", stderr=""))
+    monkeypatch.setattr("app.services.launcher.subprocess.check_output", lambda *_args, **_kwargs: "")
+    monkeypatch.setattr("app.services.launcher.locate_runtime_pid", lambda _run: None)
+    monkeypatch.setattr("app.services.launcher.os.kill", lambda *_args, **_kwargs: None)
+
+    from app.services.launcher import stop_run_runtime
+
+    stop_run_runtime(stopped_run)
+
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    assert metadata["active_agents"] == 0
+    assert metadata["current_agent"] is None
+    assert metadata["current_task"] is None
+    assert metadata["current_agent_name"] == ""
+    assert metadata["current_task_name"] == ""
+    assert metadata["current_summary"] == "Run stopped by operator."
+    assert metadata["current_action"]["agent_name"] == ""
+    assert metadata["current_action"]["task_name"] == ""
+    assert metadata["current_action"]["summary"] == "Run stopped by operator."
+    assert metadata["agents"][0]["status"] == "idle"
+    assert metadata["agents"][0]["parallel_count"] == 0
+    assert metadata["agents"][0]["summary"] == "Run stopped by operator."
+    assert metadata["phase_waterfall"][0]["active_agents"] == 0
+    assert metadata["phase_waterfall"][0]["state"] == "pending"
+    assert metadata["phase_waterfall"][0]["latest_summary"] == "Run stopped by operator."
+
+
 def test_auto_launch_emits_runtime_heartbeat_when_process_is_still_running(monkeypatch):
     client = TestClient(app)
     token = register_and_login(client, "alice")

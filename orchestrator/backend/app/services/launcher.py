@@ -3040,6 +3040,55 @@ def _update_run_metadata(run: Run, **fields: object) -> None:
     metadata_path_for(run).write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
+def _clear_terminal_runtime_metadata(run: Run) -> None:
+    payload = _read_run_metadata(run)
+    if not payload:
+        return
+
+    reason_text = str(payload.get("stop_reason_text") or "").strip()
+    ended_at = payload.get("ended_at")
+    current_phase = str(payload.get("current_phase") or payload.get("phase") or "").strip()
+
+    payload["active_agents"] = 0
+    payload["current_agent"] = None
+    payload["current_task"] = None
+    payload["current_agent_name"] = ""
+    payload["current_task_name"] = ""
+    if reason_text:
+        payload["current_summary"] = reason_text
+
+    current_action = payload.get("current_action")
+    if isinstance(current_action, dict):
+        current_action["agent_name"] = ""
+        current_action["task_name"] = ""
+        if reason_text:
+            current_action["summary"] = reason_text
+
+    for agent in payload.get("agents") or []:
+        if not isinstance(agent, dict):
+            continue
+        if str(agent.get("status") or "").strip().lower() != "active":
+            continue
+        agent["status"] = "idle"
+        agent["parallel_count"] = 0
+        if reason_text:
+            agent["summary"] = reason_text
+        if ended_at:
+            agent["updated_at"] = ended_at
+
+    for phase in payload.get("phase_waterfall") or []:
+        if not isinstance(phase, dict):
+            continue
+        phase["active_agents"] = 0
+        phase_name = str(phase.get("phase") or "").strip()
+        if phase_name == current_phase and str(phase.get("state") or "").strip().lower() == "active":
+            phase["state"] = "pending"
+            if reason_text:
+                phase["latest_summary"] = reason_text
+
+    metadata_path_for(run).write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
 def _current_auto_resume_count(run: Run) -> int:
     value = _read_run_metadata(run).get("auto_resume_count")
     try:
@@ -3342,6 +3391,9 @@ def stop_run_runtime(run: Run) -> None:
                     stderr=subprocess.DEVNULL,
                     check=False,
                 )
+
+    if str(getattr(run, "status", "") or "").strip().lower() in {"stopped", "failed", "completed"}:
+        _clear_terminal_runtime_metadata(run)
 
 
 def _drain_runtime_log_follower(log_follower: subprocess.Popen[bytes] | None, *, timeout: int = 5) -> None:
