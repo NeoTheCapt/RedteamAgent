@@ -4,7 +4,6 @@ import { listDispatches, listCases } from "../../lib/api";
 import { useAutoRefresh } from "../../lib/useAutoRefresh";
 import { summarizeAgentParticipation } from "../../lib/agentParticipation";
 import { KanbanColumn } from "./KanbanColumn";
-import { AgentsPanel } from "../dashboard/AgentsPanel";
 import "./progress.css";
 
 type ProgressTabProps = {
@@ -149,14 +148,13 @@ export function ProgressTab({ token, projectId, runId, currentPhase, summary }: 
           Failed to load progress: {error}
         </div>
       )}
-      <AgentsPanel summary={summary} dispatches={dispatches} />
-      {participation.text !== "no active agents" && participation.breakdown.length > 0 && (
-        <div className="progress__meta" aria-label="Agent participation summary">
-          <div className="progress__meta-label">Concurrency summary</div>
-          <div className="progress__meta-value">{participation.activeTotal} agents active</div>
-          <div className="progress__meta-sub">{participation.text}</div>
+      <div className="progress__meta" aria-label="Agent participation summary">
+        <div className="progress__meta-label">Agent participation</div>
+        <div className="progress__meta-value">{participation.activeTotal} agents active</div>
+        <div className="progress__meta-sub">
+          {participation.text} · full breakdown on the <strong>Dashboard</strong> tab
         </div>
-      )}
+      </div>
       <div className="progress">
         {CANONICAL_PHASES.map(({ phase, label }) => {
           const phaseDispatches = dispatchesByPhase.get(phase) ?? [];

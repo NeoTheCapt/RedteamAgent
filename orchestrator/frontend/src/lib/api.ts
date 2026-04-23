@@ -112,6 +112,7 @@ export type RunSummary = {
     task_name: string;
     summary: string;
     updated_at: string;
+    parallel_count?: number;
   }>;
   dispatches: {
     total: number;

@@ -763,6 +763,22 @@ def _build_agent_cards(
         if getattr(event, "event_type", "").startswith("task."):
             latest_task_by_agent[agent_name] = event
 
+    # parallel_count — number of concurrent same-type subagent dispatches.
+    # Primary source: the cases table's `assigned_agent` column via
+    # processing_agents, which reflects actual in-flight parallel work (e.g.
+    # two vulnerability-analyst dispatches processing two separate batches at
+    # the same time). Fallback to 1 for agents that are merely "active" but
+    # have no cases.db concurrency signal (legacy phases, non-queued work).
+    parallel_map: dict[str, int] = {}
+    for entry in processing_agents or []:
+        name = entry.get("agent_name") or ""
+        if not name:
+            continue
+        try:
+            parallel_map[name] = int(entry.get("count") or 0)
+        except (TypeError, ValueError):
+            parallel_map[name] = 0
+
     cards: list[dict] = []
     for agent_name in sorted(latest_by_agent):
         latest_event = latest_by_agent[agent_name]
@@ -779,6 +795,10 @@ def _build_agent_cards(
             elif event_type == "task.completed":
                 status_name = "completed"
 
+        parallel_count = parallel_map.get(agent_name, 0)
+        if parallel_count == 0 and status_name in {"active", "running"}:
+            parallel_count = 1
+
         cards.append(
             {
                 "agent_name": agent_name,
@@ -787,6 +807,7 @@ def _build_agent_cards(
                 "task_name": getattr(status_event, "task_name", ""),
                 "summary": getattr(latest_event, "summary", ""),
                 "updated_at": getattr(latest_event, "created_at", ""),
+                "parallel_count": parallel_count,
             }
         )
 
@@ -803,6 +824,7 @@ def _build_agent_cards(
                 "task_name": agent_name,
                 "summary": f"Processing {processing['count']} queued case(s)",
                 "updated_at": "",
+                "parallel_count": int(processing.get("count") or 0) or 1,
             }
             if existing:
                 existing.update(payload)
@@ -821,6 +843,7 @@ def _build_agent_cards(
                 "task_name": "",
                 "summary": "No activity yet.",
                 "updated_at": "",
+                "parallel_count": 0,
             }
         )
 

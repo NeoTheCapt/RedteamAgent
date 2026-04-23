@@ -27,26 +27,38 @@ const STATUS_TONE: Record<string, { label: string; className: string }> = {
 };
 
 export function AgentsPanel({ summary, dispatches }: AgentsPanelProps) {
-  // Count concurrent dispatches per agent_name (only running ones) so that
-  // parallel same-type dispatches are visible ("2× vuln-analyst"). When the
-  // dispatches table is empty (many runs never go through parallel_dispatch),
-  // fall back to 1 for every active agent from summary.agents.
-  const parallelByAgent = new Map<string, number>();
+  // Parallel count comes from two sources, in priority order:
+  //  1) Running Dispatch rows for this agent (parallel_dispatch.sh path —
+  //     precise, one row per parallel batch)
+  //  2) Backend's summary.agents[].parallel_count, derived from the cases
+  //     table's `assigned_agent` column (works for non-parallel-dispatch
+  //     flows too, since any concurrent case work gets recorded there)
+  //  3) Fallback: 1 for active/running agents with no other signal, 0 otherwise
+  const parallelByDispatch = new Map<string, number>();
   for (const d of dispatches) {
     if (d.state !== "running") continue;
-    parallelByAgent.set(d.agent, (parallelByAgent.get(d.agent) ?? 0) + 1);
+    parallelByDispatch.set(d.agent, (parallelByDispatch.get(d.agent) ?? 0) + 1);
   }
 
-  const rows: AgentRow[] = summary.agents.map((a) => ({
-    agent_name: a.agent_name,
-    status: a.status,
-    phase: a.phase,
-    task_name: a.task_name,
-    summary: a.summary,
-    updated_at: a.updated_at,
-    parallel_count: parallelByAgent.get(a.agent_name)
-                 ?? (a.status === "active" || a.status === "running" ? 1 : 0),
-  }));
+  const rows: AgentRow[] = summary.agents.map((a) => {
+    const isRunning = a.status === "active" || a.status === "running";
+    const fromDispatches = parallelByDispatch.get(a.agent_name) ?? 0;
+    const fromBackend = a.parallel_count ?? 0;
+    const parallel = fromDispatches > 0
+      ? fromDispatches
+      : fromBackend > 0
+        ? fromBackend
+        : isRunning ? 1 : 0;
+    return {
+      agent_name: a.agent_name,
+      status: a.status,
+      phase: a.phase,
+      task_name: a.task_name,
+      summary: a.summary,
+      updated_at: a.updated_at,
+      parallel_count: parallel,
+    };
+  });
 
   // Primary sort: active first, then non-idle, then idle. Secondary: by name.
   const sortKey = (s: string) =>

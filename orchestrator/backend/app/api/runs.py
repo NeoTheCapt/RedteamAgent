@@ -99,6 +99,7 @@ class RunSummaryAgentResponse(BaseModel):
     task_name: str
     summary: str
     updated_at: str
+    parallel_count: int = 0
 
 
 class RunSummaryCoverageResponse(BaseModel):
