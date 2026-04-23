@@ -577,16 +577,10 @@ def _reconcile_run_status(run: Run, project: Project | None = None, user: User |
             stale_processing_activity_at is None or metadata_activity > stale_processing_activity_at
         ):
             stale_processing_activity_at = metadata_activity
-        recent_processing_handoff = (
-            not active_runtime_agents
-            and (
-                auto_resume_guard_active
-                or (
-                    stale_processing_activity_at is not None
-                    and (_utc_now_naive() - stale_processing_activity_at)
-                    < timedelta(seconds=PROCESSING_AGENT_MISMATCH_GRACE_SECONDS)
-                )
-            )
+        recent_processing_handoff = auto_resume_guard_active or (
+            stale_processing_activity_at is not None
+            and (_utc_now_naive() - stale_processing_activity_at)
+            < timedelta(seconds=PROCESSING_AGENT_MISMATCH_GRACE_SECONDS)
         )
         if (
             current_phase.replace("_", "-") not in EARLY_PHASE_STALL_PHASES

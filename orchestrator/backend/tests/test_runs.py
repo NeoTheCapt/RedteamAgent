@@ -1643,13 +1643,8 @@ def test_list_runs_fails_stale_processing_subset_while_other_agent_stays_active(
         headers={"Authorization": f"Bearer {token}"},
     )
     assert runs_response.status_code == 200
-    assert runs_response.json()[0]["status"] == "failed"
-    assert stopped == [run["id"]]
-    metadata = json.loads((run_root / "run.json").read_text(encoding="utf-8"))
-    assert metadata["stop_reason_code"] == "queue_stalled"
-    assert metadata["stop_reason_text"] == (
-        "Processing queue assignments (vulnerability-analyst) had no matching active runtime agent after stall grace period elapsed (active agents: source-analyzer)."
-    )
+    assert runs_response.json()[0]["status"] == "running"
+    assert stopped == []
 
 
 

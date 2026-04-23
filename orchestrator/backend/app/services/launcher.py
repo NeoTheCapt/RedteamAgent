@@ -1376,15 +1376,9 @@ def _running_container_stall_reason(run: Run) -> tuple[str, str, str] | None:
         stale_processing_activity_at is None or metadata_activity_at > stale_processing_activity_at
     ):
         stale_processing_activity_at = metadata_activity_at
-    recent_processing_handoff = (
-        not active_runtime_agents
-        and (
-            auto_resume_guard_active
-            or (
-                stale_processing_activity_at is not None
-                and (time.time() - stale_processing_activity_at) < PROCESSING_AGENT_MISMATCH_GRACE_SECONDS
-            )
-        )
+    recent_processing_handoff = auto_resume_guard_active or (
+        stale_processing_activity_at is not None
+        and (time.time() - stale_processing_activity_at) < PROCESSING_AGENT_MISMATCH_GRACE_SECONDS
     )
     if current_phase not in EARLY_PHASE_STALL_PHASES and stale_processing_agents and not recent_processing_handoff:
         assigned = ", ".join(sorted(stale_processing_agents))

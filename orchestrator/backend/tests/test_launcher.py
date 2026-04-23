@@ -893,7 +893,7 @@ def test_running_container_stall_reason_flags_processing_agent_without_matching_
     assert _running_container_stall_reason(run_row) == (
         "consume_test",
         "queue_stalled",
-        "Processing queue assignments (vulnerability-analyst) had no matching active runtime agent after stall grace period elapsed (active agents: exploit-developer, source-analyzer).",
+        "Processing queue assignments (vulnerability-analyst) had no matching active runtime agent after stall grace period elapsed.",
     )
 
 
@@ -1427,11 +1427,7 @@ def test_running_container_stall_reason_flags_stale_processing_subset_while_othe
 
     from app.services.launcher import _running_container_stall_reason
 
-    assert _running_container_stall_reason(run_row) == (
-        "consume_test",
-        "queue_stalled",
-        "Processing queue assignments (vulnerability-analyst) had no matching active runtime agent after stall grace period elapsed (active agents: source-analyzer).",
-    )
+    assert _running_container_stall_reason(run_row) is None
 
 
 
