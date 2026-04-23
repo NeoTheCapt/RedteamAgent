@@ -119,14 +119,6 @@ if [[ -n "${LISTEN_PID:-}" ]]; then
   exit 1
 fi
 
-# Keepalive background task: pick defaults that cover the standard auditor
-# setup (project 19 observing OKX + local Juice Shop). Operators with a
-# different project can override either key.
-export REDTEAM_ORCHESTRATOR_KEEPALIVE_PROJECT_ID="${REDTEAM_ORCHESTRATOR_KEEPALIVE_PROJECT_ID:-19}"
-export REDTEAM_ORCHESTRATOR_KEEPALIVE_TARGETS="${REDTEAM_ORCHESTRATOR_KEEPALIVE_TARGETS:-http://127.0.0.1:8000,https://www.okx.com}"
-export REDTEAM_ORCHESTRATOR_KEEPALIVE_INTERVAL_SECONDS="${REDTEAM_ORCHESTRATOR_KEEPALIVE_INTERVAL_SECONDS:-60}"
-export REDTEAM_ORCHESTRATOR_KEEPALIVE_GRACE_SECONDS="${REDTEAM_ORCHESTRATOR_KEEPALIVE_GRACE_SECONDS:-120}"
-
 CMD=(
   "$BACKEND_VENV/bin/python" -m uvicorn
   app.main:app

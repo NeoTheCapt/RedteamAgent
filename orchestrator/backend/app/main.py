@@ -1,4 +1,3 @@
-import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -14,7 +13,6 @@ from .api.runs import router as runs_router
 from .config import settings
 from .api.auth import router as auth_router
 from .db import get_project_by_id, get_run_by_id, get_user_by_id, init_db
-from .services.keepalive import keepalive_loop
 from .services.runs import recover_active_run_supervisors_on_startup
 from .ws import broadcaster, ws_tickets
 
@@ -23,15 +21,7 @@ from .ws import broadcaster, ws_tickets
 async def lifespan(app: FastAPI):
     init_db()
     recover_active_run_supervisors_on_startup()
-    keepalive_task = asyncio.create_task(keepalive_loop(), name="keepalive-loop")
-    try:
-        yield
-    finally:
-        keepalive_task.cancel()
-        try:
-            await keepalive_task
-        except (asyncio.CancelledError, Exception):
-            pass
+    yield
 
 
 app = FastAPI(title=settings.app_name, lifespan=lifespan)
