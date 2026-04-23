@@ -60,6 +60,16 @@ If you sense you're running low on budget (e.g. UI work is taking many tool call
 
 2. **Fix** — implement fixes for every in-scope finding in a single coherent pass. Do not split the work by category. Group related file edits.
 
+   **Fix-site / finding match rule (non-negotiable):** before committing any code change, verify that every file you touched maps back to the finding you claim to be fixing. Concretely:
+   - Take the finding's `evidence.file:line` / `evidence.run_json` / `evidence.log_tail` / `suggested_fix_path` fields.
+   - Compare their directory prefixes to the paths in your diff.
+   - If the diff touches files that share NO directory with the finding's evidence, STOP — you're making a category-mismatched commit. Examples of disallowed patterns:
+     - Finding evidence cites `run_api: run 501 status=failed, stop_reason_code=queue_incomplete`. Evidence paths are in `orchestrator/backend/app/services/launcher.py` and `/Users/cis/.redteam-orchestrator/.../run-0501/run.json`. A diff touching only `agent/.opencode/prompts/agents/operator.txt` is a mismatch — do NOT commit it as a fix for this finding.
+     - Finding is `orch_ui` for a Progress tab bug. Evidence is `orchestrator/frontend/src/components/progress/*.tsx`. A diff touching only `orchestrator/backend/app/db.py` is a mismatch.
+     - Finding is `orch_api` for a 401 on `/auth/me`. Evidence is `orchestrator/backend/app/services/runs.py`. A diff that re-renders prompt files is a mismatch.
+   - If you genuinely cannot find the right file to touch, mark the finding `deferred` with `reason: "root cause not traced within this cycle's budget"`. Do NOT substitute a tangentially-related rewrite just to produce a commit.
+   - Reference: cycle `20260423T134501Z` committed `8aed200` "rerender operator prompts" as the fix for FND-001 (a `queue_incomplete` classification bug in `launcher.py`). The commit touched zero orchestrator backend files and actively regressed prior parallel_dispatch rules. That is the anti-pattern this rule exists to prevent.
+
    **Severity priority rule (non-negotiable):** sort all open findings by severity `critical > high > medium > low`, then tackle them in that order. You may NOT commit a fix for a `medium` finding while a `high` or `critical` finding is still `status: open`, even if the higher-severity one looks harder or requires backend investigation. If a `high`/`critical` finding cannot be fixed within this cycle, you MUST document the blocker in its `reason` field and mark it `deferred: true`; only then are lower-severity fixes permitted.
 
    **Persistent-bug rule:** if a finding has the same `check_id` or the same category-and-summary signature as one that was `fixed` in a previous cycle (check `local-openclaw/audit-reports/*/findings-after.json` for the most recent 3 cycles, or grep `local-openclaw/state/auditor-state.json` history), the previous fix didn't actually work. Do NOT just reapply a cosmetic tweak to the same file. Instead:

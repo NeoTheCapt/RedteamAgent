@@ -135,6 +135,52 @@ total_findings="$(python3 -c "import json; d=json.load(open('$AUDIT_DIR/findings
 echo "[$(timestamp)] findings-before.json written: $total_findings total findings" >&2
 
 # ---------------------------------------------------------------------------
+# Step 4b: Merge persistent operator-curated findings (if any)
+#
+# Bugs that survived one or more auditor cycles (because Hermes mis-routed the
+# fix, ran out of budget, or made a category-mismatched commit that got
+# re-verified elsewhere) can be pinned to this file so every subsequent cycle
+# re-discovers them without relying on the automated probes to catch them
+# again. Each entry is a standard finding object; id prefix should be
+# `PERSIST-` so it's easy to tell them apart from freshly-scanned findings.
+# ---------------------------------------------------------------------------
+PERSIST_FILE="$STATE_DIR/persistent-findings.json"
+if [[ -f "$PERSIST_FILE" ]]; then
+    python3 - "$AUDIT_DIR/findings-before.json" "$PERSIST_FILE" <<'PYEOF'
+import json, sys
+from pathlib import Path
+
+findings_path = Path(sys.argv[1])
+persist_path  = Path(sys.argv[2])
+try:
+    base = json.loads(findings_path.read_text())
+except Exception:
+    base = {"findings": [], "deferred": [], "total_findings": 0}
+try:
+    persist = json.loads(persist_path.read_text())
+except Exception:
+    sys.exit(0)
+
+persisted = persist.get("findings") or []
+if not persisted:
+    sys.exit(0)
+
+existing_ids = {f.get("id") for f in base.get("findings") or []}
+existing_ids.update(f.get("id") for f in base.get("deferred") or [])
+new_findings = [f for f in persisted if f.get("id") not in existing_ids]
+
+if new_findings:
+    base.setdefault("findings", []).extend(new_findings)
+    base["total_findings"] = len(base["findings"]) + len(base.get("deferred") or [])
+    sources = set(base.get("source_tags") or [])
+    sources.add("persistent")
+    base["source_tags"] = sorted(sources)
+    findings_path.write_text(json.dumps(base, indent=2) + "\n", encoding="utf-8")
+    print(f"[merge_persistent] added {len(new_findings)} persistent finding(s) from {persist_path.name}")
+PYEOF
+fi
+
+# ---------------------------------------------------------------------------
 # Step 5: Append auditor context to latest-context.md
 # ---------------------------------------------------------------------------
 CONTEXT_FILE="$STATE_DIR/latest-context.md"

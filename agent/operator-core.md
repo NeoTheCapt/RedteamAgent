@@ -20,7 +20,7 @@ After `/engage` initialization completes, repeat until all attack paths exhauste
 ## Output Token Management
 
 - Do ONE advancing unit per response, then immediately continue.
-- In consume-test, Treat the non-empty fetch and matching `task(...)` call as one atomic consume-test step. Do NOT interpret the fetch as a complete step or as permission to stop with fetched cases left in `processing`.
+- In consume-test, a fetch and its matching `task(...)` call(s) form one atomic consume-test step — for `parallel_dispatch.sh fetch` this means ALL non-empty slots' `task(...)` calls must fire in the SAME assistant turn as the fetch; for fallback single-batch dispatch this means ONE fetch + ONE `task(...)`. Do NOT interpret the fetch as a complete step or as permission to stop with fetched cases left in `processing`.
 - Outside that fetch→dispatch pairing, keep responses lean: one tool call, one dispatch, one batch decision.
 - Keep text SHORT between tool calls. No long summaries.
 - NEVER write a long analysis paragraph when you should be calling a tool.
@@ -67,11 +67,12 @@ PARALLEL: Independent tasks → parallel. Dependent → sequential.
    - every non-empty fetched batch MUST be followed by exactly one matching subagent task in the same loop pass
    - `api`, `graphql`, `form`, `upload`, and `websocket` batches MUST dispatch `vulnerability-analyst`
    - `api-spec`, `page`, `data`, `javascript`, `stylesheet`, and `unknown` batches MUST dispatch `source-analyzer`
-   - consume-test dispatch is SERIALIZED: fetch and dispatch exactly one non-empty batch at a time, wait for that subagent result, record its `### Case Outcomes`, then fetch the next batch
+   - consume-test dispatch is PARALLEL when the queue has >=2 non-empty type buckets. Use `./scripts/parallel_dispatch.sh` to fetch multiple slots at once (up to `REDTEAM_MAX_PARALLEL_BATCHES`, default 3) and launch the matching `task(...)` calls for all non-empty slots in the SAME assistant turn. Serialized single-batch dispatch is a fallback ONLY when the queue has just one non-empty bucket with <=`REDTEAM_BATCH_SIZE` cases left (typically end-of-queue).
+   - parallel consume-test flow (preferred): run `./scripts/parallel_dispatch.sh fetch "$DIR" "<type>:<limit>:<agent>" [...]`, launch ALL non-empty slot `task(...)` calls in the SAME assistant turn, save each subagent's full output to the slot's `outcomes_file` path, then run `./scripts/parallel_dispatch.sh record "$DIR"` to consolidate outcomes — DO NOT record per-slot via `dispatcher.sh done` calls.
    - a consume-test subagent handoff is not complete unless it includes a literal `### Case Outcomes` section that accounts for every fetched case ID exactly once with `DONE`, `REQUEUE`, or `ERROR`; if that section is missing or incomplete, immediately request a corrected handoff before touching queue state
-   - do NOT launch overlapping `task` calls inside the same consume-test pass, even when multiple fetched batch files are non-empty
+   - parallel dispatch is the default; overlapping `task(...)` calls for the SAME parallel_dispatch round are REQUIRED (each slot = one task). The only forbidden overlap is launching a NEW fetch before the current round's slots have all returned.
    - never leave fetched cases in `processing` without a dispatched subagent task
-   - after each dispatched subagent returns, immediately consume its `### Case Outcomes` and run the required `done` / `requeue` updates before the next fetch cycle
+   - after each parallel_dispatch round returns, immediately run `./scripts/parallel_dispatch.sh record "$DIR"` (in fallback single-batch mode, consume the `### Case Outcomes` via `done` / `requeue` updates) before the next fetch cycle
    - once outcome recording starts for a consume-test batch, that SAME turn must either (a) finish the queue updates and immediately perform the next fetch+dispatch step, or (b) run the stop/completion checks and emit an explicit stop reason; never end on commentary-only text such as `[operator] Continuing consume_test.` while queue work remains
    - if coverage-expanding source batches remain pending (`api-spec`, `javascript`, `unknown`, or a clearly seed-like `page` such as the root/bootstrap page), do NOT keep chaining vulnerability-analyst batches indefinitely; after any completed API-family batch, the next queue selection SHOULD attempt one of those `source-analyzer` batches before taking another API-family batch
    - do NOT let generic low-yield `page`, `stylesheet`, or `data` backlog (for example redirects, media-heavy pages, or static assets) starve high-signal API-family work once coverage-expanding source batches have already been drained
