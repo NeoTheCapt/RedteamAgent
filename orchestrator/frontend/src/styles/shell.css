@@ -108,6 +108,21 @@
   font-family: var(--font-mono);
 }
 
+.run-panel__badge--done {
+  background: rgba(69, 212, 139, 0.16);
+  color: var(--c-green);
+}
+
+.run-panel__badge--failed {
+  background: rgba(255, 106, 133, 0.16);
+  color: var(--c-red);
+}
+
+.run-panel__badge--stopped {
+  background: rgba(255, 184, 77, 0.12);
+  color: var(--c-text-dim);
+}
+
 .run-panel__time {
   font-size: var(--fs-sm);
   color: var(--c-text-dim);

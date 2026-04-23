@@ -18,9 +18,18 @@ function ribbonState(run: Run): "done" | "failed" | "stopped" | "active" {
   return "active";
 }
 
+function badgeLabel(run: Run, currentPhase?: string | null): string | null {
+  if (currentPhase && ribbonState(run) === "active") {
+    return currentPhase.toUpperCase();
+  }
+  const normalizedStatus = run.status.replace(/_/g, "-").toUpperCase();
+  return normalizedStatus || null;
+}
+
 export function RunPanel({ run, runtimeLabel, currentPhase, onStop, children }: RunPanelProps) {
   const state = ribbonState(run);
   const isRunning = state === "active";
+  const label = badgeLabel(run, currentPhase);
   const [stopping, setStopping] = useState(false);
 
   async function handleStopClick() {
@@ -39,8 +48,8 @@ export function RunPanel({ run, runtimeLabel, currentPhase, onStop, children }: 
           {isRunning && <span className="run-panel__dot" aria-label="running" />}
           <span className="run-panel__target">{run.target}</span>
           <span className="run-panel__id">#r-{run.id}</span>
-          {currentPhase && (
-            <span className="run-panel__badge">{currentPhase.toUpperCase()}</span>
+          {label && (
+            <span className={`run-panel__badge run-panel__badge--${state}`}>{label}</span>
           )}
         </div>
         <div className="run-panel__ctx-right">

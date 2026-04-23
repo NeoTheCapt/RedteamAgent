@@ -58,6 +58,27 @@ describe("RunPanel", () => {
     expect(container.querySelector(".run-panel--failed")).toBeNull();
   });
 
+  it("shows terminal FAILED badge instead of stale phase for failed runs", () => {
+    render(
+      <RunPanel run={mkRun({ status: "failed" })} currentPhase="consume-test" onStop={vi.fn()}>
+        <div />
+      </RunPanel>
+    );
+    expect(screen.getByText("FAILED")).toBeInTheDocument();
+    expect(screen.queryByText("CONSUME-TEST")).toBeNull();
+    expect(screen.queryByText("◼ STOP")).toBeNull();
+  });
+
+  it("shows terminal STOPPED badge for stopped runs", () => {
+    render(
+      <RunPanel run={mkRun({ status: "stopped" })} currentPhase="consume-test">
+        <div />
+      </RunPanel>
+    );
+    expect(screen.getByText("STOPPED")).toBeInTheDocument();
+    expect(screen.queryByText("CONSUME-TEST")).toBeNull();
+  });
+
   it("hides STOP button for stopped runs", () => {
     render(
       <RunPanel run={mkRun({ status: "stopped" })} onStop={vi.fn()}>
