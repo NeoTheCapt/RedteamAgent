@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, fireEvent, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi } from "vitest";
 import { RunPanel } from "../components/shell/RunPanel";
@@ -15,6 +15,7 @@ function mkRun(s: Partial<Run> = {}): Run {
 describe("RunPanel", () => {
   it("shows target, id, phase badge, and STOP for active run", async () => {
     const onStop = vi.fn();
+    const user = userEvent.setup();
     render(
       <RunPanel run={mkRun({ target: "juice-shop", id: 42 })}
         currentPhase="consume-test"
@@ -28,8 +29,9 @@ describe("RunPanel", () => {
     expect(screen.getByText("#r-42")).toBeInTheDocument();
     expect(screen.getByText("CONSUME-TEST")).toBeInTheDocument();
     expect(screen.getByText("runtime 23m")).toBeInTheDocument();
-    await userEvent.click(screen.getByText("◼ STOP"));
+    await user.click(screen.getByText("◼ STOP"));
     expect(onStop).toHaveBeenCalled();
+    expect(screen.getByText("STOPPING")).toBeInTheDocument();
     expect(screen.getByTestId("children")).toBeInTheDocument();
   });
 
@@ -86,5 +88,27 @@ describe("RunPanel", () => {
       </RunPanel>
     );
     expect(screen.queryByText("◼ STOP")).toBeNull();
+  });
+
+  it("keeps the STOPPING badge visible for the transition window", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-23T11:00:00Z"));
+    const onStop = vi.fn().mockResolvedValue(undefined);
+    render(
+      <RunPanel run={mkRun({ target: "juice-shop", id: 7 })} currentPhase="consume-test" onStop={onStop}>
+        <div />
+      </RunPanel>
+    );
+
+    act(() => {
+      fireEvent.click(screen.getByText("◼ STOP"));
+    });
+    expect(screen.getByText("STOPPING")).toBeInTheDocument();
+
+    act(() => {
+      vi.advanceTimersByTime(5_100);
+    });
+    expect(screen.queryByText("STOPPING")).toBeNull();
+    vi.useRealTimers();
   });
 });

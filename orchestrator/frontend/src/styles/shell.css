@@ -120,7 +120,7 @@
 
 .run-panel__badge--stopped {
   background: rgba(255, 184, 77, 0.12);
-  color: var(--c-text-dim);
+  color: var(--c-amber);
 }
 
 .run-panel__time {
@@ -356,7 +356,7 @@
 }
 .sidebar__run--stopped .sidebar__run-state {
   background: rgba(255, 184, 77, 0.10);
-  color: var(--c-text-dim);
+  color: var(--c-amber);
 }
 
 .sidebar__run-id {
@@ -573,5 +573,5 @@ li.sidebar__run > .sidebar__action:focus-visible {
 }
 .sidebar__run-main.sidebar__run--stopped .sidebar__run-state {
   background: rgba(255, 184, 77, 0.10);
-  color: var(--c-text-dim);
+  color: var(--c-amber);
 }
