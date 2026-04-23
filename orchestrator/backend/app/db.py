@@ -27,8 +27,12 @@ class RunNotFoundError(Exception):
 
 _INIT_LOCK = threading.Lock()
 _INITIALIZED_DB_PATH: Path | None = None
-_DB_OPEN_RETRY_ATTEMPTS = 5
-_DB_OPEN_RETRY_DELAY_SECONDS = 0.05
+# Auth-gated UI routes can fan out many concurrent requests; brief filesystem or
+# sqlite open hiccups on the main orchestrator DB should not blank the whole UI.
+# Keep retrying long enough to ride out transient "unable to open database file"
+# failures observed in live summary/cases/ws-ticket polling.
+_DB_OPEN_RETRY_ATTEMPTS = 20
+_DB_OPEN_RETRY_DELAY_SECONDS = 0.1
 
 
 def database_path() -> Path:

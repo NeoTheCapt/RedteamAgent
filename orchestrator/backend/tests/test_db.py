@@ -96,6 +96,54 @@ def test_summary_endpoint_retries_transient_db_open_error_during_auth(monkeypatc
     assert attempts["remaining"] == 0
 
 
+def test_summary_endpoint_survives_longer_transient_db_open_error_during_auth(monkeypatch):
+    client = TestClient(app)
+    token = register_and_login(client, "alice_long_retry")
+    project = create_project(client, token, name="Alpha long retry")
+    run = create_run(client, token, project["id"], "https://target.example")
+    active_dir = setup_active_engagement(run)
+
+    (active_dir / "scope.json").write_text(
+        json.dumps(
+            {
+                "target": "https://target.example",
+                "hostname": "target.example",
+                "status": "in_progress",
+                "phases_completed": ["recon"],
+                "current_phase": "collect",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with sqlite3.connect(active_dir / "cases.db") as connection:
+        connection.execute("CREATE TABLE cases (type TEXT NOT NULL, status TEXT NOT NULL)")
+        connection.execute("INSERT INTO cases (type, status) VALUES ('page', 'pending')")
+        connection.commit()
+
+    original_connect = db.sqlite3.connect
+    attempts = {"remaining": 12}
+    db_path = db.database_path()
+
+    def flaky_connect(target, *args, **kwargs):
+        candidate = Path(target) if not isinstance(target, Path) else target
+        if attempts["remaining"] and candidate == db_path:
+            attempts["remaining"] -= 1
+            raise sqlite3.OperationalError("unable to open database file")
+        return original_connect(target, *args, **kwargs)
+
+    monkeypatch.setattr(db.sqlite3, "connect", flaky_connect)
+
+    response = client.get(
+        f"/projects/{project['id']}/runs/{run['id']}/summary",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["overview"]["current_phase"] == "collect"
+    assert attempts["remaining"] == 0
+
+
 def test_connection_uses_wal_mode():
     from app import db
     db.init_db()
