@@ -101,6 +101,18 @@ describe("ProgressTab", () => {
     });
   });
 
+  it("exports a 5-column layout hint so all progress phases can fit in one board view", async () => {
+    mockDispatches.mockResolvedValue([]);
+    mockCases.mockResolvedValue([]);
+    const { container } = render(
+      <ProgressTab token="t" projectId={1} runId={2} currentPhase="consume" summary={mkSummary()} />,
+    );
+
+    await waitFor(() => {
+      expect(container.querySelector(".progress")).toHaveAttribute("data-phase-count", "5");
+    });
+  });
+
   it("groups dispatches into their phase columns", async () => {
     mockDispatches.mockResolvedValue([
       { id: "d1", phase: "recon", round: 0, agent: "recon-specialist", slot: "s0", task: "nmap", state: "done", started_at: 1000, finished_at: 1100, error: null },

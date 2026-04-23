@@ -155,7 +155,7 @@ export function ProgressTab({ token, projectId, runId, currentPhase, summary }: 
           {participation.text} · full breakdown on the <strong>Dashboard</strong> tab
         </div>
       </div>
-      <div className="progress">
+      <div className="progress" data-phase-count={CANONICAL_PHASES.length}>
         {CANONICAL_PHASES.map(({ phase, label }) => {
           const phaseDispatches = dispatchesByPhase.get(phase) ?? [];
           const colState = columnState(phase, currentPhase, phaseDispatches);

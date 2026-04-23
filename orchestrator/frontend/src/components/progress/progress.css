@@ -35,13 +35,20 @@
 }
 
 .progress {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(var(--progress-phase-count, 5), minmax(220px, 1fr));
   gap: var(--sp-3);
-  height: 100%;
+  flex: 1;
+  min-height: 0;
   overflow-x: auto;
   overflow-y: hidden;
   padding-bottom: var(--sp-2);
   position: relative;
+  align-items: stretch;
+}
+
+.progress[data-phase-count="5"] {
+  --progress-phase-count: 5;
 }
 
 /* --- Kanban column --- */
