@@ -22,6 +22,10 @@
 !/local-openclaw/skills/
 !/local-openclaw/tests/
 !/local-openclaw/launchd/
+# But the generated .plist files are per-operator (labels like
+# com.neothecapt.*) and are rewritten by manage_launchd.sh — the template
+# lives in that script, so the artifacts themselves stay out of git.
+/local-openclaw/launchd/*.plist
 !/local-openclaw/README.md
 /tests/
 /orchestrator/tests/
