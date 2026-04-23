@@ -90,7 +90,7 @@ describe("RunPanel", () => {
     expect(screen.queryByText("◼ STOP")).toBeNull();
   });
 
-  it("keeps the STOPPING badge visible for the transition window", () => {
+  it("keeps the STOPPING badge visible for the 10 second transition window", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-04-23T11:00:00Z"));
     const onStop = vi.fn().mockResolvedValue(undefined);
@@ -100,13 +100,14 @@ describe("RunPanel", () => {
       </RunPanel>
     );
 
-    act(() => {
+    await act(async () => {
       fireEvent.click(screen.getByText("◼ STOP"));
+      await Promise.resolve();
     });
     expect(screen.getByText("STOPPING")).toBeInTheDocument();
 
     act(() => {
-      vi.advanceTimersByTime(5_100);
+      vi.advanceTimersByTime(10_100);
     });
     expect(screen.queryByText("STOPPING")).toBeNull();
     vi.useRealTimers();

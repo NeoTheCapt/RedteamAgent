@@ -10,7 +10,7 @@ type RunPanelProps = {
   children: ReactNode;
 };
 
-const STOPPING_RIBBON_MS = 5_000;
+const STOPPING_RIBBON_MS = 10_000;
 
 function ribbonState(run: Run): "done" | "failed" | "stopped" | "active" {
   const s = run.status.toLowerCase();
