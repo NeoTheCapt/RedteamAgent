@@ -1,0 +1,82 @@
+/* AgentsPanel — shared between Dashboard and Progress tabs. Must be
+   independent of dashboard.css because Progress doesn't load that file. */
+
+.agents-panel {
+  margin-bottom: var(--sp-4);
+}
+
+.agents-panel__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.agents-panel__row {
+  display: grid;
+  grid-template-columns: 14px 1.4fr auto 1fr auto 2fr;
+  column-gap: var(--sp-3);
+  align-items: center;
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-md);
+  background: var(--c-panel-soft);
+  font-size: var(--fs-sm);
+}
+
+.agents-panel__dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--c-border-strong);
+}
+
+.agents-panel__name {
+  font-family: var(--font-mono);
+  font-weight: var(--fw-semibold);
+  color: var(--c-text);
+}
+
+.agents-panel__parallel {
+  font-family: var(--font-mono);
+  color: var(--c-accent-strong);
+  font-weight: var(--fw-bold);
+}
+
+.agents-panel__phase {
+  font-family: var(--font-mono);
+  color: var(--c-text-dim);
+  font-size: var(--fs-xs);
+}
+
+.agents-panel__state {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-semibold);
+  padding: 2px var(--sp-2);
+  border-radius: var(--r-sm);
+  color: var(--c-text-dim);
+  border: 1px solid var(--c-border);
+}
+
+.agents-panel__summary {
+  color: var(--c-text-dim);
+  font-size: var(--fs-xs);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agents-panel__row--active .agents-panel__dot   { background: var(--c-amber); box-shadow: 0 0 8px rgba(255, 184, 77, 0.6); }
+.agents-panel__row--active .agents-panel__state { color: var(--c-amber); border-color: rgba(255, 184, 77, 0.4); background: rgba(255, 184, 77, 0.12); }
+
+.agents-panel__row--done   .agents-panel__dot   { background: var(--c-green); }
+.agents-panel__row--done   .agents-panel__state { color: var(--c-green); border-color: rgba(69, 212, 139, 0.4); background: rgba(69, 212, 139, 0.1); }
+
+.agents-panel__row--failed .agents-panel__dot   { background: var(--c-red); }
+.agents-panel__row--failed .agents-panel__state { color: var(--c-red); border-color: rgba(239, 83, 80, 0.4); background: rgba(239, 83, 80, 0.12); }
+
+.agents-panel__row--idle   .agents-panel__dot   { background: var(--c-border-strong); }
+.agents-panel__row--idle   .agents-panel__state { opacity: 0.7; }

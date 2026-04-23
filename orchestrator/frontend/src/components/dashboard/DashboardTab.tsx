@@ -7,6 +7,7 @@ import { KpiRow } from "./KpiRow";
 import { PhaseStrip } from "./PhaseStrip";
 import { SeverityDonut } from "./SeverityDonut";
 import { CategoryBars } from "./CategoryBars";
+import { AgentsPanel } from "./AgentsPanel";
 import "./dashboard.css";
 
 type DashboardTabProps = {
@@ -36,6 +37,7 @@ export function DashboardTab({ token, projectId, runId, summary }: DashboardTabP
     <div className="dashboard">
       <KpiRow summary={summary} participation={participation} />
       <PhaseStrip summary={summary} />
+      <AgentsPanel summary={summary} dispatches={dispatches} />
       <div className="dashboard__grid">
         <CategoryBars summary={summary} />
         <div className="dashboard__col">

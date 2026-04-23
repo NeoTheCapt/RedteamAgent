@@ -203,6 +203,7 @@
   gap: var(--sp-4);
 }
 
+
 .dashboard__col {
   display: flex;
   flex-direction: column;
