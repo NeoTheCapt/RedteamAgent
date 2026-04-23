@@ -111,7 +111,8 @@ extract_auditor_sections() {
   python3 - \
       "$before" "$after" "$api_src" "$logs_src" "$feat_src" "$bench_hist" \
       "$cycle_id" "${OPENCLAW_TARGET_LOCAL:-}" "$review_src" \
-      "${before_commit:-}" "${after_commit:-}" "$source_status" <<'PY'
+      "${before_commit:-}" "${after_commit:-}" "$source_status" \
+      "$REPO_ROOT" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -167,216 +168,149 @@ before_sha  = sys.argv[10] if len(sys.argv) > 10 else ""
 after_sha   = sys.argv[11] if len(sys.argv) > 11 else ""
 source_status_path = sys.argv[12] if len(sys.argv) > 12 else ""
 source_status_doc = load(source_status_path) if source_status_path else None
+repo_root = sys.argv[13] if len(sys.argv) > 13 else ""
+
+import re
+import subprocess
 
 lines = []
 
-# --- 阶段 1: prep 自动探测的三个源 ---
-prep_lines = ["阶段执行情况（prep 自动探测）:"]
-for label, doc, source_tag in (
-    ("后端 API (orch_api)",     api_doc,  "api"),
-    ("后端日志 (orch_log)",     logs_doc, "logs"),
-    ("后端特性 (orch_feature)", feat_doc, "features"),
-):
-    if doc is None:
-        prep_lines.append(f"- {label}: 未执行（{source_tag}.json 不存在）")
-        continue
-    pc = doc.get("pass_count")
-    fc = doc.get("fail_count")
-    if pc is None and fc is None:
-        prep_lines.append(f"- {label}: 无结果计数")
-        continue
-    prep_lines.append(f"- {label}: pass={pc or 0} fail={fc or 0}")
-lines.append("\n".join(prep_lines))
-
-# --- 阶段 2: agent 侧源 (agent_bug / agent_recall / orch_ui) ---
-# Preferred: read source-status.json which Hermes writes during Phase 1
-# with explicit per-source status (clean / found / unavailable / skipped /
-# error / not_run) plus notes. Without this file we can only count
-# findings, which conflates "scanned clean" with "not scanned".
 STATUS_ZH = {
     "clean":       "已完成，0 发现",
-    "found":       None,  # rendered as "出现 N 项发现" below
-    "unavailable": "未执行（前置条件缺失）",
+    "found":       None,  # rendered as count below
+    "unavailable": "未执行",
     "skipped":     "主动跳过",
     "error":       "执行失败",
-    "not_run":     "未执行（agent 被中断）",
+    "not_run":     "未执行（中断）",
 }
-LABEL = {"agent_bug": "Agent bug 扫描", "agent_recall": "Agent 召回", "orch_ui": "前端 UI 冒烟"}
-
-# Count findings per category from the authoritative findings doc.
-agent_counts = {"agent_bug": 0, "agent_recall": 0, "orch_ui": 0}
-source = after_doc or before_doc
-if source:
-    for f in (source.get("findings") or []) + (source.get("deferred") or []):
-        cat = f.get("category")
-        if cat in agent_counts:
-            agent_counts[cat] += 1
-
-agent_lines = ["Agent 侧源:"]
-for k in ("agent_bug", "agent_recall", "orch_ui"):
-    entry = None
-    if isinstance(source_status_doc, dict):
-        entry = source_status_doc.get(k)
-    if isinstance(entry, dict):
-        st = (entry.get("status") or "").lower()
-        notes = (entry.get("notes") or "").strip()
-        reason = (entry.get("reason") or "").strip()
-        count = entry.get("count")
-        if st == "found":
-            n = count if isinstance(count, int) else agent_counts[k]
-            line = f"- {LABEL[k]}: 出现 {n} 项发现"
-        elif st in STATUS_ZH:
-            line = f"- {LABEL[k]}: {STATUS_ZH[st]}"
-        else:
-            line = f"- {LABEL[k]}: 状态未知（{entry.get('status','?')}）"
-        extra = reason or notes
-        if extra:
-            # Cap so a verbose note doesn't dominate the summary.
-            if len(extra) > 120:
-                extra = extra[:120].rstrip() + "…"
-            line += f"（{extra}）"
-        agent_lines.append(line)
-    else:
-        # Legacy fallback: infer from finding count only.
-        n = agent_counts[k]
-        if n > 0:
-            agent_lines.append(f"- {LABEL[k]}: 出现 {n} 项发现")
-        else:
-            agent_lines.append(f"- {LABEL[k]}: 无明确状态（source-status.json 未写；findings 中也无记录）")
-lines.append("\n".join(agent_lines))
-
-# --- 前端 UI 检查详情（orch_ui 的 per-check 细表） ---
-# Renders every check_id defined in the skill so the operator can tell
-# which pages were actually walked and which were skipped. If the
-# source-status.json entry doesn't carry the `checks` list (older cycles
-# or agent skipped Phase 1 writeout), say so explicitly instead of
-# silently omitting the section.
+AGENT_LABEL = {"agent_bug": "agent_bug", "agent_recall": "agent_recall"}
 RESULT_ZH = {
     "passed":      "通过",
     "failed":      "失败",
     "unavailable": "前置缺失",
-    "skipped":     "未执行",
+    "skipped":     "主动跳过",
     "error":       "执行错误",
 }
-ui_entry = source_status_doc.get("orch_ui") if isinstance(source_status_doc, dict) else None
-if isinstance(ui_entry, dict):
-    ui_checks = ui_entry.get("checks") or []
-    if ui_checks:
-        ui_lines = [f"前端 UI 检查详情（共 {len(ui_checks)} 项 / 期望 12 项）:"]
-        # Sort by check_id (ui-01 … ui-12) so rows are stable across cycles.
-        for check in sorted(ui_checks, key=lambda c: str(c.get("check_id", ""))):
-            cid = check.get("check_id", "?")
-            name = check.get("name", "(未命名)")
-            res = (check.get("result") or "").lower()
-            res_zh = RESULT_ZH.get(res, res or "?")
-            fid = check.get("finding_id")
-            screenshot = check.get("screenshot")
-            suffix_parts = []
-            if fid:
-                suffix_parts.append(f"finding {fid}")
-            if screenshot:
-                suffix_parts.append(f"截图 {screenshot}")
-            if check.get("notes"):
-                note = str(check["notes"]).strip()
-                if len(note) > 80:
-                    note = note[:80].rstrip() + "…"
-                suffix_parts.append(note)
-            suffix = f"（{' / '.join(suffix_parts)}）" if suffix_parts else ""
-            ui_lines.append(f"- {cid} {name}: {res_zh}{suffix}")
-        lines.append("\n".join(ui_lines))
-    else:
-        lines.append("前端 UI 检查详情:\n- source-status.json.orch_ui.checks 为空（agent 未记录 per-check 状态）")
-else:
-    # Surface the absence prominently, not just as a fallback line in the
-    # agent-side block above — operator needs to know UI checks weren't
-    # structurally tracked this cycle.
-    lines.append("前端 UI 检查详情:\n- 本周期未生成 per-check 记录（orch_ui 扫描未按 skill 要求写入 source-status.json）")
 
-# --- 阶段 3: 基准 (benchmark) ---
-if bench_doc and local_target:
-    bench_target = None
-    # 容忍尾斜杠差异
-    for key in (local_target, local_target.rstrip("/"), local_target.rstrip("/") + "/"):
-        if key in (bench_doc.get("targets") or {}):
-            bench_target = bench_doc["targets"][key]
-            break
-    bench_lines = ["基准（benchmark）:"]
-    if not bench_target:
-        bench_lines.append(f"- 目标 {local_target}: 历史中无记录")
-    else:
-        last_cycle = bench_target.get("cycle_id") or "?"
-        last_update = bench_target.get("updated_at") or "?"
-        metrics = bench_target.get("last_metrics") or {}
-        recall = metrics.get("challenge_recall", "?")
-        solved = metrics.get("solved_challenges", "?")
-        total  = metrics.get("total_challenges", "?")
-        bench_lines.append(f"- 目标: {local_target}")
-        bench_lines.append(f"- 最近召回: {recall} （{solved}/{total} 挑战）")
-        if last_cycle == this_cycle:
-            bench_lines.append(f"- 本周期完成评分（{last_update}）")
+# Count findings per category from the authoritative doc.
+agent_counts = {"agent_bug": 0, "agent_recall": 0, "orch_ui": 0}
+src_for_count = after_doc or before_doc
+if src_for_count:
+    for f in (src_for_count.get("findings") or []) + (src_for_count.get("deferred") or []):
+        cat = f.get("category")
+        if cat in agent_counts:
+            agent_counts[cat] += 1
+
+# ── Phase 1 · 发现 ───────────────────────────────────────────
+phase1 = ["── Phase 1 · 发现 ──"]
+
+# prep row: API 22/22 ✓   日志 1/1 ✓   特性 10/10 ✓
+prep_cells = []
+for label, doc in (("API", api_doc), ("日志", logs_doc), ("特性", feat_doc)):
+    if doc is None:
+        prep_cells.append(f"{label} 未执行")
+        continue
+    pc = doc.get("pass_count") or 0
+    fc = doc.get("fail_count") or 0
+    total = pc + fc
+    mark = "✓" if fc == 0 and total > 0 else ("✗" if fc > 0 else "?")
+    prep_cells.append(f"{label} {pc}/{total} {mark}")
+phase1.append("prep:  " + "   ".join(prep_cells))
+
+# agent row: agent_bug=2  agent_recall=1
+agent_cells = []
+for k in ("agent_bug", "agent_recall"):
+    entry = source_status_doc.get(k) if isinstance(source_status_doc, dict) else None
+    if isinstance(entry, dict):
+        st = (entry.get("status") or "").lower()
+        count = entry.get("count")
+        if st == "found":
+            n = count if isinstance(count, int) else agent_counts[k]
+            agent_cells.append(f"{AGENT_LABEL[k]}={n}")
+        elif st == "clean":
+            agent_cells.append(f"{AGENT_LABEL[k]}=0")
         else:
-            bench_lines.append(f"- 本周期未重新评分；数据沿用 cycle {last_cycle}（{last_update}）")
-    lines.append("\n".join(bench_lines))
+            zh = STATUS_ZH.get(st, st or "?")
+            agent_cells.append(f"{AGENT_LABEL[k]}[{zh}]")
+    else:
+        agent_cells.append(f"{AGENT_LABEL[k]}={agent_counts[k]}")
+phase1.append("agent: " + "  ".join(agent_cells))
 
-# --- 发现阶段：用发现项最多的那份做类别 / 严重度汇总 ---
+# UI row: collapsed when everything passed; expanded when there are failures.
+ui_entry = source_status_doc.get("orch_ui") if isinstance(source_status_doc, dict) else None
+ui_checks = (ui_entry.get("checks") if isinstance(ui_entry, dict) else None) or []
+if not ui_checks:
+    phase1.append("UI:    未记录 per-check 状态")
+else:
+    total = len(ui_checks)
+    passed = [c for c in ui_checks if (c.get("result") or "").lower() == "passed"]
+    skipped = [c for c in ui_checks if (c.get("result") or "").lower() in ("skipped", "unavailable")]
+    failing = [c for c in ui_checks if (c.get("result") or "").lower() in ("failed", "error")]
+    if not failing:
+        suffix = ""
+        if skipped:
+            # Name the skipped check(s) inline — one line stays cheap.
+            names = ", ".join(str(c.get("check_id") or "?") for c in skipped[:3])
+            suffix = f"（{len(skipped)} 主动跳过: {names}{'…' if len(skipped)>3 else ''}）"
+        phase1.append(f"UI:    {len(passed)}/{total} 通过{suffix}")
+    else:
+        phase1.append(f"UI:    {len(passed)}/{total} 通过  失败 {len(failing)}:")
+        for c in failing:
+            cid = c.get("check_id", "?")
+            name = c.get("name", "(未命名)")
+            res_zh = RESULT_ZH.get((c.get("result") or "").lower(), c.get("result") or "?")
+            note = str(c.get("notes") or "").strip()
+            if len(note) > 80:
+                note = note[:80].rstrip() + "…"
+            note_part = f"（{note}）" if note else ""
+            phase1.append(f"  - {cid} {name}: {res_zh}{note_part}")
+
+# 汇总: N 项（高×1, 中×2; Agent bug×2, Agent 召回×1）
 def _discovery_count(doc):
     if not doc:
         return -1
     return len(doc.get("findings") or []) + len(doc.get("deferred") or [])
 
-source = before_doc
+discovery_source = before_doc
 if _discovery_count(after_doc) > _discovery_count(before_doc):
-    source = after_doc
-if source:
-    # Dedup by finding id so the discovery counts aren't inflated when Hermes
-    # writes the duplicate empty-shell records seen in 134501 / 144908.
-    raw_findings = list(source.get("findings") or []) + list(source.get("deferred") or [])
-    seen_ids: dict[str, dict] = {}
+    discovery_source = after_doc
+if discovery_source:
+    raw_findings = list(discovery_source.get("findings") or []) + list(discovery_source.get("deferred") or [])
+    seen: dict[str, dict] = {}
     findings: list[dict] = []
     for f in raw_findings:
         fid = f.get("id")
-        if fid and fid in seen_ids:
-            # Keep whichever record has the meatier content.
-            existing = seen_ids[fid]
+        if fid and fid in seen:
+            existing = seen[fid]
             if len((f.get("summary") or "").strip()) > len((existing.get("summary") or "").strip()):
-                # Replace in-place
-                idx = findings.index(existing)
-                findings[idx] = f
-                seen_ids[fid] = f
+                findings[findings.index(existing)] = f
+                seen[fid] = f
             continue
         if fid:
-            seen_ids[fid] = f
+            seen[fid] = f
         findings.append(f)
     total = len(findings)
     by_cat: dict[str, int] = {}
     by_sev: dict[str, int] = {}
     for f in findings:
-        cat = f.get("category") or "unknown"
-        sev = f.get("severity") or "low"
-        by_cat[cat] = by_cat.get(cat, 0) + 1
-        by_sev[sev] = by_sev.get(sev, 0) + 1
+        by_cat[f.get("category") or "unknown"] = by_cat.get(f.get("category") or "unknown", 0) + 1
+        by_sev[f.get("severity") or "low"] = by_sev.get(f.get("severity") or "low", 0) + 1
+    sev_parts = [f"{SEVERITY_LABEL[k]}×{by_sev[k]}" for k in ("critical", "high", "medium", "low") if k in by_sev]
+    cat_parts = [f"{CATEGORY_LABEL.get(k, k)}×{by_cat[k]}" for k, _ in sorted(by_cat.items(), key=lambda kv: -kv[1])]
+    summary_pieces = []
+    if sev_parts:
+        summary_pieces.append(", ".join(sev_parts))
+    if cat_parts:
+        summary_pieces.append("; ".join(cat_parts))
+    tail = ("（" + " | ".join(summary_pieces) + "）") if summary_pieces else ""
+    phase1.append(f"汇总:  {total} 项{tail}")
 
-    section = [f"发现阶段（共 {total} 项）"]
-    if by_cat:
-        section.append("类别分布:")
-        for cat, count in sorted(by_cat.items()):
-            section.append(f"- {CATEGORY_LABEL.get(cat, cat)}: {count}")
-    if by_sev:
-        section.append("严重度分布:")
-        for sev in ("critical", "high", "medium", "low"):
-            if sev in by_sev:
-                section.append(f"- {SEVERITY_LABEL[sev]}: {by_sev[sev]}")
-    lines.append("\n".join(section))
+lines.append("\n".join(phase1))
 
-# --- 修复 / 重新分类 / 延后阶段：优先使用 findings-after ---
+# ── Phase 2 · 修复 ───────────────────────────────────────────
 final = after_doc or before_doc
+buckets: dict[str, list[dict]] = {"fixed": [], "deferred": [], "reclassified": [], "open": []}
 if final:
-    # Dedup by finding id: observed in cycles 134501 and 144908, Hermes
-    # sometimes writes two entries for the same id — one complete record
-    # (status=deferred + summary + reason) and one empty-fields shell
-    # (status=None, summary=""). Keep the non-empty one. If status AND summary
-    # are both present on two records for the same id, prefer the one with
-    # status != "open" and status != None (terminal records are authoritative).
     raw = list(final.get("findings") or []) + list(final.get("deferred") or [])
     dedup: dict[str, dict] = {}
     for f in raw:
@@ -387,7 +321,6 @@ if final:
         if existing is None:
             dedup[fid] = f
             continue
-        # Prefer the record with a non-null status and non-empty summary.
         def _score(rec: dict) -> int:
             s = rec.get("status")
             sm = rec.get("summary")
@@ -401,107 +334,187 @@ if final:
             return score
         if _score(f) > _score(existing):
             dedup[fid] = f
-
-    buckets: dict[str, list[dict]] = {"fixed": [], "deferred": [], "reclassified": [], "open": []}
     for f in dedup.values():
         status = f.get("status") or "open"
         buckets.setdefault(status, []).append(f)
 
-    def render_bucket(key, header):
-        items = buckets.get(key) or []
-        if not items:
-            return None
-        body = [header]
-        for f in items:
-            fid = f.get("id", "?")
-            summary = (f.get("summary") or "").strip() or "(无摘要)"
-            reason = (f.get("reason") or "").strip()
-            parts = []
-            if key == "fixed":
-                scope = (f.get("reverify_scope") or "").strip()
-                scope_label = REVERIFY_SCOPE_LABEL.get(scope)
-                if scope_label:
-                    parts.append(f"[{scope_label}]")
-            if reason:
-                parts.append(f"（原因：{reason}）")
-            suffix = (" " + " ".join(parts)) if parts else ""
-            body.append(f"- {fid}: {summary}{suffix}")
-        return "\n".join(body)
+phase2 = ["── Phase 2 · 修复 ──"]
 
-    fixed_section = render_bucket("fixed", "修复阶段:")
-    if fixed_section:
-        lines.append(fixed_section)
-    reclassified_section = render_bucket("reclassified", "重新分类（视为非本仓库问题）:")
-    if reclassified_section:
-        lines.append(reclassified_section)
-    deferred_section = render_bucket("deferred", "延后项:")
-    if deferred_section:
-        lines.append(deferred_section)
-    open_section = render_bucket("open", "仍未修复:")
-    if open_section:
-        lines.append(open_section)
+def _render_finding(f: dict, show_scope: bool) -> str:
+    fid = f.get("id", "?")
+    summary = (f.get("summary") or "").strip() or "(无摘要)"
+    reason = (f.get("reason") or "").strip()
+    parts = []
+    if show_scope:
+        scope = (f.get("reverify_scope") or "").strip()
+        lbl = REVERIFY_SCOPE_LABEL.get(scope)
+        if lbl:
+            parts.append(f"[{lbl}]")
+    if reason:
+        # Trim long reasons so bullets stay one line each.
+        if len(reason) > 140:
+            reason = reason[:140].rstrip() + "…"
+        parts.append(f"（{reason}）")
+    suffix = (" " + " ".join(parts)) if parts else ""
+    return f"  {fid}  {summary}{suffix}"
 
-    # 复验计数（如果 findings-after 里带了）
+had_any = False
+for key, header in (
+    ("fixed", "已修复"),
+    ("reclassified", "重新分类"),
+    ("deferred", "延后"),
+    ("open", "仍未修复"),
+):
+    items = buckets.get(key) or []
+    if not items:
+        continue
+    had_any = True
+    phase2.append(f"{header} ({len(items)}):")
+    for f in items:
+        phase2.append(_render_finding(f, show_scope=(key == "fixed")))
+if not had_any:
+    phase2.append("  本周期无待处理 finding")
+lines.append("\n".join(phase2))
+
+# ── Phase 3 · 复验 ───────────────────────────────────────────
+phase3 = ["── Phase 3 · 复验 ──"]
+if final:
     rerun_parts = []
-    pass_count = final.get("pass_count")
-    fail_count = final.get("fail_count")
-    if isinstance(pass_count, int) or isinstance(fail_count, int):
-        rerun_parts.append(f"pass={pass_count or 0} fail={fail_count or 0}")
-    fixed_count = final.get("findings_fixed")
-    regression_count = final.get("regression_count")
-    if fixed_count is not None:
-        rerun_parts.append(f"fixed={fixed_count}")
-    if regression_count is not None:
-        rerun_parts.append(f"regressions={regression_count}")
+    pc2 = final.get("pass_count")
+    fc2 = final.get("fail_count")
+    if isinstance(pc2, int) or isinstance(fc2, int):
+        rerun_parts.append(f"pass={pc2 or 0} fail={fc2 or 0}")
+    fc3 = final.get("findings_fixed")
+    rc3 = final.get("regression_count")
+    if fc3 is not None:
+        rerun_parts.append(f"fixed={fc3}")
+    if rc3 is not None:
+        rerun_parts.append(f"regressions={rc3}")
 
-    # Scope breakdown across fixed findings — honest "how many of these are
-    # actually verified this cycle" signal. Skips findings without the field
-    # so prior-cycle artifacts render unchanged.
     scope_counts: dict[str, int] = {}
     for f in buckets.get("fixed") or []:
         scope = (f.get("reverify_scope") or "").strip()
-        if not scope:
-            continue
-        scope_counts[scope] = scope_counts.get(scope, 0) + 1
-    scope_parts = []
-    for key in (
-        "static_live", "static_test",
-        "pending_restart", "runtime_restart_passed", "runtime_restart_still_failing",
-        "pending_new_run",
-    ):
-        if scope_counts.get(key):
-            scope_parts.append(f"{REVERIFY_SCOPE_LABEL[key]}={scope_counts[key]}")
+        if scope:
+            scope_counts[scope] = scope_counts.get(scope, 0) + 1
+    scope_parts = [
+        f"{REVERIFY_SCOPE_LABEL[k]}×{scope_counts[k]}"
+        for k in ("static_live", "static_test",
+                  "pending_restart", "runtime_restart_passed", "runtime_restart_still_failing",
+                  "pending_new_run")
+        if scope_counts.get(k)
+    ]
 
-    if rerun_parts or scope_parts:
-        reverify_lines = ["复验阶段:"]
-        if rerun_parts:
-            reverify_lines.append("- " + ", ".join(rerun_parts))
-        if scope_parts:
-            reverify_lines.append("- 验证范围: " + ", ".join(scope_parts))
-        lines.append("\n".join(reverify_lines))
+    if rerun_parts:
+        phase3.append("prep rerun: " + ", ".join(rerun_parts))
+    if scope_parts:
+        phase3.append("范围:  " + "   ".join(scope_parts))
+    if len(phase3) == 1:
+        phase3.append("无复验数据")
+else:
+    phase3.append("无复验数据")
+lines.append("\n".join(phase3))
 
-# --- 代码审查 (Phase 4): review of THIS cycle's commits (baseline_sha..HEAD) ---
-# Three possible states to disambiguate for the operator:
-#   (a) no new commits → nothing to review, not a bug
-#   (b) new commits + review.md → show the review body
-#   (c) new commits + review.md missing → Phase 4 was skipped or killed
+# ── Phase 4 · 代码审查 ──────────────────────────────────────
+phase4 = ["── Phase 4 · 代码审查 ──"]
 has_new_commits = bool(before_sha and after_sha and before_sha != after_sha)
+diff_range = f"{before_sha[:7]}..{after_sha[:7]}" if before_sha and after_sha else "(未知)"
 review_file = Path(review_path) if review_path else None
-review_body = ""
-if review_file and review_file.exists():
-    review_body = review_file.read_text(encoding="utf-8", errors="replace").strip()
+review_body = review_file.read_text(encoding="utf-8", errors="replace").strip() if (review_file and review_file.exists()) else ""
+
+_GIT_CWD = repo_root or "."
+
+def _commits_in_range(base: str, head: str) -> list[tuple[str, str]]:
+    if not base or not head or base == head:
+        return []
+    out = subprocess.run(
+        ["git", "log", "--format=%h  %s", f"{base}..{head}"],
+        cwd=_GIT_CWD, text=True, capture_output=True,
+    )
+    if out.returncode != 0:
+        return []
+    result = []
+    for line in out.stdout.splitlines():
+        sha, _, subject = line.partition("  ")
+        if sha:
+            result.append((sha, subject))
+    return result
+
+def _changed_files(base: str, head: str) -> list[str]:
+    if not base or not head or base == head:
+        return []
+    out = subprocess.run(
+        ["git", "diff", "--name-only", f"{base}..{head}"],
+        cwd=_GIT_CWD, text=True, capture_output=True,
+    )
+    return [ln for ln in out.stdout.splitlines() if ln.strip()] if out.returncode == 0 else []
+
+def _distill_review(body: str) -> list[str]:
+    """Pull a tight bullet list out of review.md.
+
+    Preference order:
+      1. bullets under a `## Review conclusions` (or Chinese equivalent) heading
+      2. any short bullet list at the top of the file
+      3. empty — caller falls back to truncated body
+    """
+    if not body:
+        return []
+    lines_ = body.splitlines()
+    target_headings = ("## review conclusions", "## 审查结论", "## conclusions", "## 审查结果")
+    start_idx = None
+    for i, ln in enumerate(lines_):
+        low = ln.strip().lower()
+        if any(low == h for h in target_headings):
+            start_idx = i + 1
+            break
+    if start_idx is None:
+        return []
+    bullets = []
+    for ln in lines_[start_idx:]:
+        stripped = ln.strip()
+        if stripped.startswith("## ") or stripped.startswith("# "):
+            break
+        if stripped.startswith(("- ", "* ")):
+            text = stripped[2:].strip()
+            if len(text) > 140:
+                text = text[:140].rstrip() + "…"
+            bullets.append(text)
+        elif stripped and bullets:
+            # Continuation line of the last bullet; skip to keep output tight.
+            pass
+    return bullets
 
 if not has_new_commits:
-    lines.append(f"代码审查 (Phase 4):\n- 本周期无新提交，无需审查（baseline {before_sha[:7] if before_sha else '?'} == HEAD）")
-elif review_body:
-    MAX_LEN = 1200
-    if len(review_body) > MAX_LEN:
-        review_body = review_body[:MAX_LEN].rstrip() + "\n…（已截断；完整内容见 review.md）"
-    diff_range = f"{before_sha[:7]}..{after_sha[:7]}" if before_sha and after_sha else "(未知)"
-    lines.append(f"代码审查 (Phase 4) — 范围 {diff_range}:\n" + review_body)
+    phase4.append(f"本周期无新提交，无需审查（baseline {before_sha[:7] if before_sha else '?'} == HEAD）")
 else:
-    diff_range = f"{before_sha[:7]}..{after_sha[:7]}" if before_sha and after_sha else "(未知)"
-    lines.append(f"代码审查 (Phase 4):\n- 本周期有新提交（{diff_range}）但 review.md 未生成；Phase 4 可能被超时或错误中断")
+    commits = _commits_in_range(before_sha, after_sha)
+    changed = _changed_files(before_sha, after_sha)
+    phase4.append(f"范围: {diff_range}（{len(changed)} 个文件）")
+    if commits:
+        phase4.append("")
+        phase4.append("Commits:")
+        for sha, subject in commits:
+            if len(subject) > 100:
+                subject = subject[:100].rstrip() + "…"
+            phase4.append(f"  {sha}  {subject}")
+    if review_body:
+        distilled = _distill_review(review_body)
+        phase4.append("")
+        phase4.append("结论:")
+        if distilled:
+            for b in distilled:
+                phase4.append(f"  ✓ {b}")
+        else:
+            # No structured conclusions block; show a short truncation so the
+            # operator at least sees the top of the review rather than nothing.
+            MAX_LEN = 600
+            body_head = review_body if len(review_body) <= MAX_LEN else review_body[:MAX_LEN].rstrip() + "\n…（已截断；完整内容见 review.md）"
+            for ln in body_head.splitlines()[:14]:
+                phase4.append(f"  {ln}")
+    else:
+        phase4.append("")
+        phase4.append("结论: review.md 未生成（Phase 4 可能被超时或错误中断）")
+
+lines.append("\n".join(phase4))
 
 if lines:
     print("\n\n".join(lines))
