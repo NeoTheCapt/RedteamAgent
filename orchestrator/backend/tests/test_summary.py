@@ -165,6 +165,86 @@ def test_run_summary_recovers_from_scope_less_active_marker():
     assert payload["current"]["phase"] == "collect"
 
 
+def test_run_summary_treats_user_stopped_runs_as_terminal():
+    from app import db
+
+    client = TestClient(app)
+    token = register_and_login(client, "alice-stopped-summary")
+    project = create_project(client, token)
+    run = create_run(client, token, project["id"], "http://127.0.0.1:8000")
+    db.update_run_status(run["id"], "stopped")
+    active_dir = setup_active_engagement(run)
+
+    (active_dir / "scope.json").write_text(
+        json.dumps(
+            {
+                "target": "http://127.0.0.1:8000",
+                "hostname": "127.0.0.1",
+                "port": 8000,
+                "scope": ["127.0.0.1"],
+                "status": "in_progress",
+                "start_time": "2026-04-23T14:51:02Z",
+                "phases_completed": ["recon", "collect"],
+                "current_phase": "consume_test",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (active_dir / "log.md").write_text("recent activity\n", encoding="utf-8")
+    with sqlite3.connect(active_dir / "cases.db") as connection:
+        connection.execute(
+            "CREATE TABLE cases (method TEXT, url TEXT, type TEXT NOT NULL, status TEXT NOT NULL, assigned_agent TEXT, source TEXT)"
+        )
+        connection.executemany(
+            "INSERT INTO cases (method, url, type, status, assigned_agent, source) VALUES (?, ?, ?, ?, ?, ?)",
+            [
+                ("GET", "http://127.0.0.1:8000/api/one", "api", "processing", "vulnerability-analyst:s1", "katana-xhr"),
+                ("GET", "http://127.0.0.1:8000/api/two", "api", "processing", "vulnerability-analyst:s2", "katana-xhr"),
+            ],
+        )
+        connection.commit()
+
+    run_json_path = Path(run["engagement_root"], "run.json")
+    payload = json.loads(run_json_path.read_text(encoding="utf-8"))
+    payload.update(
+        {
+            "status": "stopped",
+            "stop_reason_code": "user_stopped",
+            "stop_reason_text": "Run stopped by operator.",
+            "current_phase": "consume-test",
+            "active_agents": 2,
+            "current_agent": "vulnerability-analyst",
+            "current_task": "vulnerability-analyst",
+            "current_summary": "Analysis start",
+        }
+    )
+    run_json_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    client.post(
+        f"/projects/{project['id']}/runs/{run['id']}/events",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "event_type": "task.started",
+            "phase": "consume-test",
+            "task_name": "vulnerability-analyst",
+            "agent_name": "vulnerability-analyst",
+            "summary": "Analysis start",
+        },
+    )
+
+    response = client.get(
+        f"/projects/{project['id']}/runs/{run['id']}/summary",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+
+    assert payload["target"]["status"] == "stopped"
+    assert payload["overview"]["active_agents"] == 0
+    assert payload["overview"]["current_phase"] == "consume-test"
+    assert payload["current"]["summary"] == "Run stopped by operator."
+
+
 def test_run_summary_combines_target_coverage_and_agent_state():
     client = TestClient(app)
     token = register_and_login(client, "alice")

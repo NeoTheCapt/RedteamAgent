@@ -49,7 +49,7 @@ AGENT_PHASES = {
     "report-writer": "report",
 }
 DEFAULT_SUBAGENT_ROSTER = tuple(AGENT_PHASES.keys())
-TERMINAL_RUN_STATUSES = {"failed", "completed"}
+TERMINAL_RUN_STATUSES = {"failed", "completed", "stopped"}
 OVERVIEW_FUTURE_SKEW = timedelta(minutes=5)
 
 
@@ -940,7 +940,7 @@ def _build_target_card(run, scope: dict, active_root: Path) -> dict:
     else:
         scope_entries = []
     target_status = normalized_scope.get("status") or run.status
-    if run.status in {"failed", "completed"}:
+    if _is_terminal_run_status(run.status):
         target_status = run.status
     return {
         "target": run.target,
