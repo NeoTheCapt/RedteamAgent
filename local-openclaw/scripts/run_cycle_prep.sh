@@ -309,6 +309,21 @@ case "$_local_status_now" in
         if [[ -n "$completed_run_id" && "$completed_run_id" == "$last_scored_run_id" ]]; then
             echo "[$(timestamp)] local run $completed_run_id already scored in a prior cycle; Phase 2 will be skipped"
             OPENCLAW_SKIP_JUICE_SHOP_SCORE=1 "$ROOT_DIR/scripts/build_context.sh" | tee "$LOGS_DIR/build-context.log"
+            # Refresh the local run. Without this, cycles keep observing the same
+            # completed run forever — the post-cycle restart path is gated on
+            # (scored_this_cycle AND new_commit), neither of which fires when
+            # the run was already scored in a prior cycle. OKX path already
+            # refreshes on `completed` via recover_abnormal_runs; this mirrors
+            # that semantics for the local target once scoring is stale.
+            echo "[$(timestamp)] local run $completed_run_id stale (already scored); restarting Juice Shop + creating fresh run" >&2
+            if command -v docker >/dev/null 2>&1; then
+                docker restart juice-shop >/dev/null 2>&1 || echo "[$(timestamp)] warning: docker restart juice-shop failed" >&2
+                sleep 3
+            fi
+            set +e
+            FORCE_REPLACE_ACTIVE_RUNS=1 TARGET_FILTER=local "$ROOT_DIR/scripts/create_runs.sh" >&2
+            set -e
+            refresh_runs_json
         else
             echo "[$(timestamp)] local run $completed_run_id completed (new); scoring challenge recall..."
             "$ROOT_DIR/scripts/build_context.sh" | tee "$LOGS_DIR/build-context.log"
