@@ -27,7 +27,7 @@ If you sense you're running low on budget (e.g. UI work is taking many tool call
 
 1. **Discover** — fold `audit-reports/${CYCLE_ID}/findings-before.json` into your working queue. Do NOT re-run the orchestrator audit scripts; prep already did that. You MUST still gather:
    - `agent_bug` and `agent_recall` findings from recent engagement logs
-   - `orch_ui` findings by **actually opening** `http://127.0.0.1:18000` in the `browser` toolset and walking the 12 UI checks from the skill (Dashboard, Progress per-phase content, agent enumeration, ProjectEditModal, NewRunForm, Stop button, Documents/Events/Cases tabs).
+   - `orch_ui` findings by **actually opening** `http://127.0.0.1:18000` in the `browser` toolset and walking ALL 12 UI checks (ui-01 through ui-12) from the skill (Sidebar, ProjectEditModal open/persist, NewRunForm, Inherited config summary, Run delete, STOP, Documents, Events pause, Cases keyboard, Progress phase content, Agent participation). **For each check, save a screenshot named `ui-XX-<short>.png` under `audit-reports/${CYCLE_ID}/ui-screenshots/` — even if the check PASSES.** `source-status.json.orch_ui.checks` must list all 12 entries with `{check_id, name, result, screenshot, finding_id, notes}`. A check without a saved screenshot MUST be `result: skipped` (never `passed`). Do NOT invent check results from prior-cycle memory — if budget runs out before a check, mark it `skipped` explicitly.
 
      **UI auth bootstrap (do this before any UI check):**
      The orchestrator frontend reads its session from `localStorage["redteam-orchestrator-session"]` as `{"token": "...", "username": "admin"}`. Do NOT try to log in via the form — there is no shared password. Instead:

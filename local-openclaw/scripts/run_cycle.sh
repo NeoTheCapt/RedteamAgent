@@ -237,6 +237,53 @@ for k in ("agent_bug", "agent_recall", "orch_ui"):
             agent_lines.append(f"- {LABEL[k]}: 无明确状态（source-status.json 未写；findings 中也无记录）")
 lines.append("\n".join(agent_lines))
 
+# --- 前端 UI 检查详情（orch_ui 的 per-check 细表） ---
+# Renders every check_id defined in the skill so the operator can tell
+# which pages were actually walked and which were skipped. If the
+# source-status.json entry doesn't carry the `checks` list (older cycles
+# or agent skipped Phase 1 writeout), say so explicitly instead of
+# silently omitting the section.
+RESULT_ZH = {
+    "passed":      "通过",
+    "failed":      "失败",
+    "unavailable": "前置缺失",
+    "skipped":     "未执行",
+    "error":       "执行错误",
+}
+ui_entry = source_status_doc.get("orch_ui") if isinstance(source_status_doc, dict) else None
+if isinstance(ui_entry, dict):
+    ui_checks = ui_entry.get("checks") or []
+    if ui_checks:
+        ui_lines = [f"前端 UI 检查详情（共 {len(ui_checks)} 项 / 期望 12 项）:"]
+        # Sort by check_id (ui-01 … ui-12) so rows are stable across cycles.
+        for check in sorted(ui_checks, key=lambda c: str(c.get("check_id", ""))):
+            cid = check.get("check_id", "?")
+            name = check.get("name", "(未命名)")
+            res = (check.get("result") or "").lower()
+            res_zh = RESULT_ZH.get(res, res or "?")
+            fid = check.get("finding_id")
+            screenshot = check.get("screenshot")
+            suffix_parts = []
+            if fid:
+                suffix_parts.append(f"finding {fid}")
+            if screenshot:
+                suffix_parts.append(f"截图 {screenshot}")
+            if check.get("notes"):
+                note = str(check["notes"]).strip()
+                if len(note) > 80:
+                    note = note[:80].rstrip() + "…"
+                suffix_parts.append(note)
+            suffix = f"（{' / '.join(suffix_parts)}）" if suffix_parts else ""
+            ui_lines.append(f"- {cid} {name}: {res_zh}{suffix}")
+        lines.append("\n".join(ui_lines))
+    else:
+        lines.append("前端 UI 检查详情:\n- source-status.json.orch_ui.checks 为空（agent 未记录 per-check 状态）")
+else:
+    # Surface the absence prominently, not just as a fallback line in the
+    # agent-side block above — operator needs to know UI checks weren't
+    # structurally tracked this cycle.
+    lines.append("前端 UI 检查详情:\n- 本周期未生成 per-check 记录（orch_ui 扫描未按 skill 要求写入 source-status.json）")
+
 # --- 阶段 3: 基准 (benchmark) ---
 if bench_doc and local_target:
     bench_target = None
