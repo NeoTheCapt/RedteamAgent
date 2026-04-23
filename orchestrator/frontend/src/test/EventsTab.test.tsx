@@ -123,6 +123,28 @@ describe("EventsTab", () => {
     vi.useRealTimers();
   });
 
+  it("pause drops an in-flight REST seed response that resolves after pause is enabled", async () => {
+    let resolveSeed: ((value: ReturnType<typeof mkEvent>[]) => void) | null = null;
+    mockListEvents.mockImplementationOnce(
+      () => new Promise((resolve) => {
+        resolveSeed = resolve;
+      }),
+    );
+
+    render(<EventsTab token="t" projectId={1} runId={2} />);
+    await act(async () => { await Promise.resolve(); });
+
+    await userEvent.click(screen.getByRole("button", { name: /Pause/i }));
+
+    await act(async () => {
+      resolveSeed?.([mkEvent({ id: 101, summary: "late-seed" })]);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(screen.queryByText("late-seed")).not.toBeInTheDocument();
+  });
+
   it("shows seed error banner when REST history fetch fails and clears it on recovery", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
 

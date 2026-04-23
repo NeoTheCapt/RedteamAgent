@@ -34,11 +34,11 @@ export function EventsTab({ token, projectId, runId }: EventsTabProps) {
       if (pausedRef.current) return;
       try {
         const seed = await listEvents(token, projectId, runId);
-        if (signal.aborted) return;
+        if (signal.aborted || pausedRef.current) return;
         setEvents((prev) => mergeEvents(prev, seed as DisplayEvent[]));
         setSeedError(null);
       } catch (err) {
-        if (signal.aborted) return;
+        if (signal.aborted || pausedRef.current) return;
         setSeedError(err instanceof Error ? err.message : String(err));
       }
     },
