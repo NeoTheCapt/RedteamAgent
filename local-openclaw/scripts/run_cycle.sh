@@ -1016,6 +1016,83 @@ fi
 
 persist_cycle_state
 
+# Bounded backend runtime re-verify — only when THIS cycle touched
+# orchestrator/backend/**/*.py and at least one finding is tagged
+# `reverify_scope: pending_restart`. The running uvicorn holds stale
+# bytecode after a Phase 2 backend fix; without a restart the three
+# prep scripts are re-reading the OLD in-memory code and a passing
+# result means nothing. We do the restart once here (roughly 2s API
+# downtime), rerun the prep scripts under `<cycle_id>-reverify`, and
+# flip each `pending_restart` finding to either `runtime_restart_passed`
+# or `runtime_restart_still_failing` (reopening the latter so the next
+# cycle picks it up with elevated severity).
+if [[ "${OPENCLAW_SKILL:-}" == "redteam-auditor-hermes" ]] \
+   && [[ -n "${new_commit:-}" ]] \
+   && { [[ "$cycle_status" == "success" ]] || [[ "$cycle_status" == "success_with_openclaw_error" ]]; } \
+   && [[ -f "$cycle_dir/findings-after.json" ]]; then
+
+  backend_touched="$(git -C "$REPO_ROOT" diff --name-only \
+      "${before_commit}".."${after_commit}" 2>/dev/null \
+      | grep -E '^orchestrator/backend/.*\.py$' | head -1 || true)"
+
+  pending_restart_count="$(python3 - "$cycle_dir/findings-after.json" <<'PY' 2>/dev/null || echo 0
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception:
+    print(0); sys.exit(0)
+n = sum(
+    1
+    for f in (d.get("findings") or []) + (d.get("deferred") or [])
+    if isinstance(f, dict) and (f.get("reverify_scope") or "") == "pending_restart"
+)
+print(n)
+PY
+)"
+
+  if [[ -n "$backend_touched" ]] && [[ "${pending_restart_count:-0}" -gt 0 ]]; then
+    log "bounded backend reverify: backend touched ($backend_touched) and $pending_restart_count pending_restart finding(s); restarting uvicorn"
+
+    reverify_log="$cycle_dir/bounded-reverify.log"
+    : > "$reverify_log"
+
+    set +e
+    bash "$REPO_ROOT/orchestrator/stop.sh" >>"$reverify_log" 2>&1
+    bash "$REPO_ROOT/orchestrator/run.sh" >>"$reverify_log" 2>&1
+    set -e
+
+    # Poll healthz up to 20s before running the prep scripts; if it never
+    # comes back 2xx we skip the flip entirely (safer than flipping on
+    # bogus data).
+    healthy=0
+    for _i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+      if curl -fsS --max-time 3 http://127.0.0.1:18000/healthz >/dev/null 2>&1; then
+        healthy=1; break
+      fi
+      sleep 1
+    done
+
+    if [[ "$healthy" -eq 1 ]]; then
+      reverify_cycle="${cycle_id}-reverify"
+      set +e
+      bash   "$ROOT_DIR/scripts/audit_orchestrator_api.sh"       "$reverify_cycle" >>"$reverify_log" 2>&1
+      bash   "$ROOT_DIR/scripts/audit_orchestrator_logs.sh"      "$reverify_cycle" >>"$reverify_log" 2>&1
+      python3 "$ROOT_DIR/scripts/audit_orchestrator_features.py" "$reverify_cycle" >>"$reverify_log" 2>&1
+      python3 "$ROOT_DIR/scripts/apply_backend_reverify.py" \
+          "$cycle_id" "$reverify_cycle" >>"$reverify_log" 2>&1
+      flip_exit=$?
+      set -e
+      if [[ "$flip_exit" -eq 0 ]]; then
+        log "bounded backend reverify: folded results into findings-after.json"
+      else
+        log "bounded backend reverify: apply_backend_reverify.py exited $flip_exit (see $reverify_log)"
+      fi
+    else
+      log "bounded backend reverify: healthz never returned 2xx; skipping flip (see $reverify_log)"
+    fi
+  fi
+fi
+
 # F4 — Validate cycle artifacts before the Discord summary goes out.
 # The validator is a read-only schema check over findings-after.json,
 # source-status.json, and commit-message finding-id references. If it
