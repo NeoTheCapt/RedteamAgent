@@ -1,3 +1,39 @@
+.progress-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  height: 100%;
+}
+
+.progress__meta {
+  background: var(--c-panel);
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-lg);
+  padding: var(--sp-3) var(--sp-4);
+}
+
+.progress__meta-label {
+  color: var(--c-text-dim);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-semibold);
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+}
+
+.progress__meta-value {
+  color: var(--c-text);
+  font-family: var(--font-mono);
+  font-size: var(--fs-lg);
+  font-weight: var(--fw-bold);
+  margin-top: var(--sp-1);
+}
+
+.progress__meta-sub {
+  color: var(--c-text-dim);
+  font-size: var(--fs-sm);
+  margin-top: var(--sp-1);
+}
+
 .progress {
   display: flex;
   gap: var(--sp-3);
@@ -68,6 +104,23 @@
   display: flex;
   flex-direction: column;
   gap: var(--sp-3);
+}
+
+.phase-summary {
+  background: var(--c-panel-soft);
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-md);
+  padding: var(--sp-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+
+.phase-summary__line {
+  margin: 0;
+  color: var(--c-text-muted);
+  font-size: var(--fs-xs);
+  line-height: 1.5;
 }
 
 .kanban-col__empty {

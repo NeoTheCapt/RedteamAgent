@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { Case, Dispatch } from "../../lib/api";
 import { DispatchCard } from "./DispatchCard";
 import { CaseChip } from "./CaseChip";
+import { PhaseSummary } from "./PhaseSummary";
 
 type KanbanColumnProps = {
   phase: string;
@@ -9,6 +10,7 @@ type KanbanColumnProps = {
   state: "done" | "active" | "pending";
   dispatches: Dispatch[];
   casesByDispatchId: Map<string | null, Case[]>;
+  summaryLines?: string[];
   /**
    * Cases that belong in this column but aren't tied to any dispatch row
    * (dispatch_id = null). Rendered in a trailing "Unassigned" slot.
@@ -17,7 +19,7 @@ type KanbanColumnProps = {
 };
 
 export function KanbanColumn({
-  phase, label, state, dispatches, casesByDispatchId, unassignedCases = [],
+  phase, label, state, dispatches, casesByDispatchId, summaryLines = [], unassignedCases = [],
 }: KanbanColumnProps) {
   const stateClass = `kanban-col--${state}`;
   const runningCount = dispatches.filter((d) => d.state === "running").length;
@@ -29,6 +31,7 @@ export function KanbanColumn({
         <span className="kanban-col__badge">{runningCount > 0 ? `${runningCount} running` : state}</span>
       </header>
       <div className="kanban-col__stack">
+        <PhaseSummary lines={summaryLines} />
         {dispatches.length === 0 && unassignedCases.length === 0 && (
           <p className="kanban-col__empty">no dispatches</p>
         )}

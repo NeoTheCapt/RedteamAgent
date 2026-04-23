@@ -198,7 +198,14 @@ export function ShellPage(props: ShellPageProps) {
     if (!selected || !summary) return <EmptyTab label="Loading run..." note="Fetching summary data." />;
     switch (tab) {
       case "dashboard":
-        return <DashboardTab summary={summary} />;
+        return (
+          <DashboardTab
+            token={token}
+            projectId={selected.__projectId}
+            runId={selected.id}
+            summary={summary}
+          />
+        );
       case "progress":
         return (
           <ProgressTab
@@ -206,6 +213,7 @@ export function ShellPage(props: ShellPageProps) {
             projectId={selected.__projectId}
             runId={selected.id}
             currentPhase={summary.overview.current_phase ?? null}
+            summary={summary}
           />
         );
       case "cases":
