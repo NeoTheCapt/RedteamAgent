@@ -102,6 +102,7 @@ extract_auditor_sections() {
   local logs_src="$ROOT_DIR/audit-reports/$cycle_id/logs.json"
   local feat_src="$ROOT_DIR/audit-reports/$cycle_id/features.json"
   local review_src="$ROOT_DIR/audit-reports/$cycle_id/review.md"
+  local source_status="$ROOT_DIR/audit-reports/$cycle_id/source-status.json"
   local bench_hist="$STATE_DIR/benchmark-metrics-history.json"
   if [[ ! -f "$before" && ! -f "$after" ]]; then
     return 0
@@ -110,7 +111,7 @@ extract_auditor_sections() {
   python3 - \
       "$before" "$after" "$api_src" "$logs_src" "$feat_src" "$bench_hist" \
       "$cycle_id" "${OPENCLAW_TARGET_LOCAL:-}" "$review_src" \
-      "${before_commit:-}" "${after_commit:-}" <<'PY'
+      "${before_commit:-}" "${after_commit:-}" "$source_status" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -156,6 +157,8 @@ local_target = sys.argv[8] if len(sys.argv) > 8 else ""
 review_path = sys.argv[9] if len(sys.argv) > 9 else ""
 before_sha  = sys.argv[10] if len(sys.argv) > 10 else ""
 after_sha   = sys.argv[11] if len(sys.argv) > 11 else ""
+source_status_path = sys.argv[12] if len(sys.argv) > 12 else ""
+source_status_doc = load(source_status_path) if source_status_path else None
 
 lines = []
 
@@ -178,21 +181,60 @@ for label, doc, source_tag in (
 lines.append("\n".join(prep_lines))
 
 # --- 阶段 2: agent 侧源 (agent_bug / agent_recall / orch_ui) ---
-# 这些源没有独立 JSON —— 只能通过 findings 中出现的 category 反推是否
-# 真的做过分析。没有相关 finding 时无法区分 "做过但无异常" 和 "没做"。
-agent_side = {"agent_bug": 0, "agent_recall": 0, "orch_ui": 0}
+# Preferred: read source-status.json which Hermes writes during Phase 1
+# with explicit per-source status (clean / found / unavailable / skipped /
+# error / not_run) plus notes. Without this file we can only count
+# findings, which conflates "scanned clean" with "not scanned".
+STATUS_ZH = {
+    "clean":       "已完成，0 发现",
+    "found":       None,  # rendered as "出现 N 项发现" below
+    "unavailable": "未执行（前置条件缺失）",
+    "skipped":     "主动跳过",
+    "error":       "执行失败",
+    "not_run":     "未执行（agent 被中断）",
+}
+LABEL = {"agent_bug": "Agent bug 扫描", "agent_recall": "Agent 召回", "orch_ui": "前端 UI 冒烟"}
+
+# Count findings per category from the authoritative findings doc.
+agent_counts = {"agent_bug": 0, "agent_recall": 0, "orch_ui": 0}
 source = after_doc or before_doc
 if source:
     for f in (source.get("findings") or []) + (source.get("deferred") or []):
         cat = f.get("category")
-        if cat in agent_side:
-            agent_side[cat] += 1
+        if cat in agent_counts:
+            agent_counts[cat] += 1
 
-agent_lines = ["Agent 侧源（由 Hermes 分析，未发现不代表未执行）:"]
-LABEL = {"agent_bug": "Agent bug 扫描", "agent_recall": "Agent 召回", "orch_ui": "前端 UI 冒烟"}
+agent_lines = ["Agent 侧源:"]
 for k in ("agent_bug", "agent_recall", "orch_ui"):
-    n = agent_side[k]
-    agent_lines.append(f"- {LABEL[k]}: {'出现 ' + str(n) + ' 项发现' if n else '本周期无发现'}")
+    entry = None
+    if isinstance(source_status_doc, dict):
+        entry = source_status_doc.get(k)
+    if isinstance(entry, dict):
+        st = (entry.get("status") or "").lower()
+        notes = (entry.get("notes") or "").strip()
+        reason = (entry.get("reason") or "").strip()
+        count = entry.get("count")
+        if st == "found":
+            n = count if isinstance(count, int) else agent_counts[k]
+            line = f"- {LABEL[k]}: 出现 {n} 项发现"
+        elif st in STATUS_ZH:
+            line = f"- {LABEL[k]}: {STATUS_ZH[st]}"
+        else:
+            line = f"- {LABEL[k]}: 状态未知（{entry.get('status','?')}）"
+        extra = reason or notes
+        if extra:
+            # Cap so a verbose note doesn't dominate the summary.
+            if len(extra) > 120:
+                extra = extra[:120].rstrip() + "…"
+            line += f"（{extra}）"
+        agent_lines.append(line)
+    else:
+        # Legacy fallback: infer from finding count only.
+        n = agent_counts[k]
+        if n > 0:
+            agent_lines.append(f"- {LABEL[k]}: 出现 {n} 项发现")
+        else:
+            agent_lines.append(f"- {LABEL[k]}: 无明确状态（source-status.json 未写；findings 中也无记录）")
 lines.append("\n".join(agent_lines))
 
 # --- 阶段 3: 基准 (benchmark) ---

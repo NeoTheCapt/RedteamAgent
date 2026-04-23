@@ -181,6 +181,22 @@ def main(argv: list[str]) -> int:
         write_report(report_path, cycle_id)
         return 0
 
+    # Preflight: if the token is stale (orchestrator restarted since last
+    # cycle, session rotated, etc.) every authed call below would re-emit
+    # a 401 finding that looks like a product bug. Short-circuit with one
+    # sentinel "token expired" finding instead. Verified necessary after
+    # cycle 20260423T023057Z.
+    probe_status, _ = _api(base_url, "GET", "/auth/me", token=token)
+    if probe_status != 200:
+        record_fail(
+            "token_valid",
+            "critical",
+            f"ORCH_TOKEN rejected by /auth/me (HTTP {probe_status}); skipping features audit to avoid 401-noise findings",
+            {"http_status": probe_status, "hint": "rotate ORCH_TOKEN in scheduler.env"},
+        )
+        write_report(report_path, cycle_id)
+        return 0
+
     deleted_stale_projects = cleanup_stale_audit_projects(base_url, token)
     if deleted_stale_projects:
         record_pass(f"stale_audit_project_cleanup ({deleted_stale_projects})")

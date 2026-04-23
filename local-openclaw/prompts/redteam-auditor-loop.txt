@@ -39,6 +39,15 @@ Follow the four-phase workflow defined in your skill, in order. **Checkpoint rul
    **Phase 1 exit checkpoint (REQUIRED before any Fix work):**
    - Rewrite `audit-reports/${CYCLE_ID}/findings-before.json` with the full merged list (prep-level findings + your agent_bug / agent_recall / orch_ui discoveries). Each finding MUST have `id`, `category`, `severity`, `summary`, `evidence`, and an initial `status: "open"`.
    - Also copy it as the initial `audit-reports/${CYCLE_ID}/findings-after.json` with every finding still `status: "open"` — you will update statuses in Phase 2.
+   - Write `audit-reports/${CYCLE_ID}/source-status.json` so the operator can tell whether each source was actually scanned. The file MUST have one entry per agent-side source and use these exact statuses:
+     ```json
+     {
+       "agent_bug":    { "status": "clean|found|unavailable|skipped|error|not_run", "count": <int if found>, "notes": "<one short line>", "reason": "<required for unavailable/skipped/error>" },
+       "agent_recall": { ... },
+       "orch_ui":      { ... }
+     }
+     ```
+     Use `clean` only when you actually executed the scan and verified no hits. Use `unavailable` when preconditions fail (browser toolset missing, no engagement logs, etc.). Use `skipped` when you intentionally decided not to scan. Do NOT use `clean` as a fallback when you didn't actually scan — the Discord summary distinguishes these and "clean" would mislead the operator.
    - Write `local-openclaw/state/auditor-state.json` with `exit_status: "discover_complete"` so that even if the cycle is killed right now, the controller has real counts to report.
 
 2. **Fix** — implement fixes for every in-scope finding in a single coherent pass. Do not split the work by category. Group related file edits. **After EACH successful fix commit** update `findings-after.json` in place: set that finding's `status` to `"fixed"` and append the commit SHA. Do NOT batch these updates to the end of the phase.

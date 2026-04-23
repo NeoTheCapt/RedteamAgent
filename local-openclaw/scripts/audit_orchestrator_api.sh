@@ -254,6 +254,29 @@ if ! curl -fsSL "$ORCH_BASE_URL/healthz" >/dev/null 2>&1; then
     fi
 fi
 
+# --- preflight: verify ORCH_TOKEN is valid ---------------------------------
+# If it's stale (orchestrator restarted, session table wiped, token rotated,
+# etc.) every authed probe below will just re-emit 401 as a false "product
+# bug". Short-circuit with one sentinel finding so the operator knows to
+# rotate the token instead of chasing phantom API failures. Verified
+# necessary after cycle 20260423T023057Z produced 4 false 401 findings
+# because the token in scheduler.env had been rotated after the last cycle.
+
+auth_probe_code="$(_curl_authed_code "GET" "/auth/me")"
+if [[ "$auth_probe_code" != "200" ]]; then
+    if [[ -z "$_RESOLVED_TOKEN" ]]; then
+        reason="ORCH_TOKEN could not be resolved from env or scheduler.env"
+    else
+        reason="ORCH_TOKEN rejected by /auth/me (HTTP $auth_probe_code); probably stale after orchestrator restart"
+    fi
+    audit_append_finding "API-AUTH" "critical" "orch_api" \
+        "$reason" \
+        "{\"endpoint\": \"GET /auth/me\", \"http_code\": \"$auth_probe_code\", \"hint\": \"rotate ORCH_TOKEN in scheduler.env and re-run\"}"
+    audit_finalize_report
+    echo "[BLOCKED] $reason; aborting API audit to avoid 401-noise findings" >&2
+    exit 0
+fi
+
 # --- GET /auth/me -----------------------------------------------------------
 
 me_json="$(check_2xx "auth_me" "GET" "/auth/me" || true)"
