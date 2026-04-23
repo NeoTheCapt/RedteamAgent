@@ -4141,6 +4141,11 @@ def test_prepare_run_runtime_writes_workspace_env_with_crawler_and_agents_config
         headers={"Authorization": f"Bearer {token}"},
         json={
             "name": "ConfigInject",
+            "provider_id": "openai",
+            "model_id": "gpt-5.4",
+            "small_model_id": "gpt-5.4-mini",
+            "api_key": "***",
+            "base_url": "https://api.openai.com/v1",
             "env_json": '{"HTTP_PROXY":"http://proxy:8080"}',
             "crawler_json": '{"KATANA_CRAWL_DEPTH": 7, "KATANA_CONCURRENCY": 4}',
             "agents_json": '{"fuzzer": false, "recon-specialist": true}',
@@ -4161,6 +4166,11 @@ def test_prepare_run_runtime_writes_workspace_env_with_crawler_and_agents_config
         key, value = line.split("=", 1)
         parsed[key] = value
 
+    assert parsed.get("REDTEAM_OPENCODE_MODEL") == "openai/gpt-5.4"
+    assert parsed.get("REDTEAM_OPENCODE_SMALL_MODEL") == "openai/gpt-5.4-mini"
+    assert parsed.get("OPENAI_API_KEY") == "***"
+    assert parsed.get("OPENAI_BASE_URL") == "https://api.openai.com/v1"
+    assert parsed.get("OPENAI_MODEL") == "gpt-5.4"
     assert parsed.get("KATANA_CRAWL_DEPTH") == "7"
     assert parsed.get("KATANA_CONCURRENCY") == "4"
     assert "fuzzer" in parsed.get("REDTEAM_DISABLED_AGENTS", "").split(",")

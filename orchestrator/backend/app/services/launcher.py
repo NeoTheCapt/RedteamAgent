@@ -2796,6 +2796,46 @@ _CRAWLER_ALLOWED_KEYS = (
 )
 
 
+def _inject_model_provider_env(env: dict[str, str], project) -> None:
+    provider_id = project.provider_id.strip().lower()
+    model_id = project.model_id.strip()
+    small_model_id = project.small_model_id.strip()
+    api_key = project.api_key.strip()
+    base_url = project.base_url.strip()
+
+    if provider_id and model_id:
+        env["REDTEAM_OPENCODE_MODEL"] = f"{provider_id}/{model_id}"
+    elif model_id:
+        env["REDTEAM_OPENCODE_MODEL"] = model_id
+
+    if provider_id and small_model_id:
+        env["REDTEAM_OPENCODE_SMALL_MODEL"] = f"{provider_id}/{small_model_id}"
+    elif small_model_id:
+        env["REDTEAM_OPENCODE_SMALL_MODEL"] = small_model_id
+
+    if provider_id == "openai":
+        if api_key:
+            env["OPENAI_API_KEY"] = api_key
+        if base_url:
+            env["OPENAI_BASE_URL"] = base_url
+        if model_id:
+            env["OPENAI_MODEL"] = model_id
+    elif provider_id == "anthropic":
+        if api_key:
+            env["ANTHROPIC_API_KEY"] = api_key
+        if base_url:
+            env["ANTHROPIC_BASE_URL"] = base_url
+        if model_id:
+            env["ANTHROPIC_MODEL"] = model_id
+    elif provider_id in {"openrouter", "openai-compatible"}:
+        if api_key:
+            env["OPENAI_API_KEY"] = api_key
+        if base_url:
+            env["OPENAI_BASE_URL"] = base_url
+        if model_id:
+            env["OPENAI_MODEL"] = model_id
+
+
 def _render_workspace_env_file(project) -> str:
     """Render `<engagement_root>/workspace/.env` from project config.
 
@@ -2818,6 +2858,7 @@ def _render_workspace_env_file(project) -> str:
                     continue
                 payload[key] = str(value)
 
+    _inject_model_provider_env(payload, project)
     _inject_project_config_env(payload, project)
 
     for key in sorted(payload):
@@ -2885,43 +2926,7 @@ def _runtime_env(project: Project, run: Run, user: User) -> dict[str, str]:
             "ORCHESTRATOR_RUN_ID": str(run.id),
         }
     )
-    provider_id = project.provider_id.strip().lower()
-    model_id = project.model_id.strip()
-    small_model_id = project.small_model_id.strip()
-    api_key = project.api_key.strip()
-    base_url = project.base_url.strip()
-
-    if provider_id and model_id:
-        env["REDTEAM_OPENCODE_MODEL"] = f"{provider_id}/{model_id}"
-    elif model_id:
-        env["REDTEAM_OPENCODE_MODEL"] = model_id
-
-    if provider_id and small_model_id:
-        env["REDTEAM_OPENCODE_SMALL_MODEL"] = f"{provider_id}/{small_model_id}"
-    elif small_model_id:
-        env["REDTEAM_OPENCODE_SMALL_MODEL"] = small_model_id
-
-    if provider_id == "openai":
-        if api_key:
-            env["OPENAI_API_KEY"] = api_key
-        if base_url:
-            env["OPENAI_BASE_URL"] = base_url
-        if model_id:
-            env["OPENAI_MODEL"] = model_id
-    elif provider_id == "anthropic":
-        if api_key:
-            env["ANTHROPIC_API_KEY"] = api_key
-        if base_url:
-            env["ANTHROPIC_BASE_URL"] = base_url
-        if model_id:
-            env["ANTHROPIC_MODEL"] = model_id
-    elif provider_id in {"openrouter", "openai-compatible"}:
-        if api_key:
-            env["OPENAI_API_KEY"] = api_key
-        if base_url:
-            env["OPENAI_BASE_URL"] = base_url
-        if model_id:
-            env["OPENAI_MODEL"] = model_id
+    _inject_model_provider_env(env, project)
 
     if project.env_json.strip():
         try:
