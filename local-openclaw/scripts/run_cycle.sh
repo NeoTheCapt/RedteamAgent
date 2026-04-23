@@ -136,6 +136,14 @@ STATUS_LABEL = {
     "reclassified": "重新分类",
     "open":         "未修复",
 }
+REVERIFY_SCOPE_LABEL = {
+    "static_live":                "已静态验证",
+    "static_test":                "已单测覆盖",
+    "pending_restart":            "待后端重启",
+    "pending_new_run":            "待新运行",
+    "runtime_restart_passed":     "重启后通过",
+    "runtime_restart_still_failing": "重启后仍失败",
+}
 
 def load(path):
     p = Path(path)
@@ -408,7 +416,15 @@ if final:
             fid = f.get("id", "?")
             summary = (f.get("summary") or "").strip() or "(无摘要)"
             reason = (f.get("reason") or "").strip()
-            suffix = f"（原因：{reason}）" if reason else ""
+            parts = []
+            if key == "fixed":
+                scope = (f.get("reverify_scope") or "").strip()
+                scope_label = REVERIFY_SCOPE_LABEL.get(scope)
+                if scope_label:
+                    parts.append(f"[{scope_label}]")
+            if reason:
+                parts.append(f"（原因：{reason}）")
+            suffix = (" " + " ".join(parts)) if parts else ""
             body.append(f"- {fid}: {summary}{suffix}")
         return "\n".join(body)
 
@@ -437,8 +453,32 @@ if final:
         rerun_parts.append(f"fixed={fixed_count}")
     if regression_count is not None:
         rerun_parts.append(f"regressions={regression_count}")
-    if rerun_parts:
-        lines.append("复验阶段:\n- " + ", ".join(rerun_parts))
+
+    # Scope breakdown across fixed findings — honest "how many of these are
+    # actually verified this cycle" signal. Skips findings without the field
+    # so prior-cycle artifacts render unchanged.
+    scope_counts: dict[str, int] = {}
+    for f in buckets.get("fixed") or []:
+        scope = (f.get("reverify_scope") or "").strip()
+        if not scope:
+            continue
+        scope_counts[scope] = scope_counts.get(scope, 0) + 1
+    scope_parts = []
+    for key in (
+        "static_live", "static_test",
+        "pending_restart", "runtime_restart_passed", "runtime_restart_still_failing",
+        "pending_new_run",
+    ):
+        if scope_counts.get(key):
+            scope_parts.append(f"{REVERIFY_SCOPE_LABEL[key]}={scope_counts[key]}")
+
+    if rerun_parts or scope_parts:
+        reverify_lines = ["复验阶段:"]
+        if rerun_parts:
+            reverify_lines.append("- " + ", ".join(rerun_parts))
+        if scope_parts:
+            reverify_lines.append("- 验证范围: " + ", ".join(scope_parts))
+        lines.append("\n".join(reverify_lines))
 
 # --- 代码审查 (Phase 4): review of THIS cycle's commits (baseline_sha..HEAD) ---
 # Three possible states to disambiguate for the operator:
