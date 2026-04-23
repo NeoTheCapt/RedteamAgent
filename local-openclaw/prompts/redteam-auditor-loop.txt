@@ -15,7 +15,15 @@ The orchestrator-audit prep has already run and produced all inputs you need. Re
 
 ## What you must do
 
-Follow the four-phase workflow defined in your skill, in order. **Checkpoint rule (non-negotiable):** at the end of every phase — and after every successful fix — write the progress artifacts to disk. The cycle controller has a hard timeout (~20 min) and may terminate you mid-phase. Anything only in your working memory will be lost and will show up in the Discord summary as "0 findings".
+Follow the four-phase workflow defined in your skill, in order. **Incremental checkpoint rule (non-negotiable):** flush to disk AS YOU GO, not at phase boundaries. The cycle controller has a tool-call budget (~300 calls) and a wall-clock timeout, and will terminate you mid-phase if either limit hits. Anything only in your working memory at that moment is permanently lost and shows up in the Discord summary as "0 findings" / "未写".
+
+**Specifically you MUST write these files as soon as they have their first meaningful content, and keep them in sync after every change:**
+- `audit-reports/${CYCLE_ID}/source-status.json` — update one entry as soon as the corresponding scan finishes (whether found / clean / unavailable / skipped / error). Do NOT wait until all 6 sources are done.
+- `audit-reports/${CYCLE_ID}/findings-before.json` — append findings as you discover them. Re-sort / re-rank when the scan is complete, but the file should never be empty if you have findings in memory.
+- `audit-reports/${CYCLE_ID}/findings-after.json` — mirror of findings-before.json with `status` field; updated after each fix commit.
+- `local-openclaw/state/auditor-state.json` — update `exit_status` each phase transition (`discover_complete`, `reverify_complete`, `ok`).
+
+If you sense you're running low on budget (e.g. UI work is taking many tool calls), PAUSE and flush before doing another check.
 
 1. **Discover** — fold `audit-reports/${CYCLE_ID}/findings-before.json` into your working queue. Do NOT re-run the orchestrator audit scripts; prep already did that. You MUST still gather:
    - `agent_bug` and `agent_recall` findings from recent engagement logs

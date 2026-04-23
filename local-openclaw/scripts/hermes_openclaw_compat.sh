@@ -105,8 +105,19 @@ case "$SUBCOMMAND" in
     toolsets="${HERMES_TOOLSETS:-$default_toolsets}"
     source_tag="${HERMES_SOURCE_TAG:-scan-optimizer-compat}"
 
+    # Hermes chat defaults to --max-turns 90, which auditor cycles blow
+    # past during Phase 1 (browser navigation + DOM reads + screenshots
+    # easily consume 100+ tool calls before the first fix is committed).
+    # Verified necessary after cycle 20260423T043443Z was killed at
+    # ~9 min with 3 UI findings still in memory and not on disk.
+    case "$skill_name" in
+        redteam-auditor-hermes) default_max_turns=300 ;;
+        *)                      default_max_turns=90  ;;
+    esac
+    max_turns="${HERMES_MAX_TURNS:-$default_max_turns}"
+
     cd "$REPO_ROOT"
-    run_hermes_cli "$timeout_seconds" -s "$skill_name" chat -q "$transformed_message" -Q -t "$toolsets" --source "$source_tag"
+    run_hermes_cli "$timeout_seconds" -s "$skill_name" chat -q "$transformed_message" -Q -t "$toolsets" --source "$source_tag" --max-turns "$max_turns"
     ;;
 
   message)
