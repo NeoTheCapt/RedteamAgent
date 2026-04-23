@@ -1047,6 +1047,20 @@ def _load_running_queue_state(engagement_dir: Path | None) -> tuple[str, int, in
     return (current_phase, total_cases, pending_cases, processing_cases)
 
 
+_SLOT_SUFFIX_RE = re.compile(r":s\d+$")
+
+
+def _base_agent_name(raw: str) -> str:
+    """Strip the `:sN` slot suffix that parallel_dispatch.sh appends to
+    `assigned_agent`. The stall detector needs to compare processing-case
+    agent tags against bare runtime-agent names; without stripping, a
+    parallel dispatch like `source-analyzer:s0` / `:s1` never matches the
+    bare `source-analyzer` runtime agent and the run is mis-flagged as
+    `queue_stalled` (observed in runs #482, #483).
+    """
+    return _SLOT_SUFFIX_RE.sub("", raw) if raw else raw
+
+
 def _load_running_processing_agents(engagement_dir: Path | None) -> set[str]:
     if engagement_dir is None:
         return set()
@@ -1095,7 +1109,10 @@ def _stale_processing_agents(
     now = time.time()
     latest_consumed_at: dict[str, float] = {}
     for agent_name, consumed_at in rows:
-        if not agent_name or agent_name in active_runtime_agents:
+        # The assigned_agent column may carry a slot suffix (":s0", ":s1",
+        # ...) when parallel_dispatch.sh fetched the batch. The runtime
+        # active set uses bare names, so compare by base name.
+        if not agent_name or _base_agent_name(agent_name) in active_runtime_agents:
             continue
         parsed = _parse_runtime_activity_timestamp(consumed_at)
         if not _runtime_activity_candidate_is_valid(parsed):
@@ -1123,8 +1140,15 @@ def _recover_orphaned_processing_cases(run: Run, engagement_dir: Path | None) ->
     if not processing_agents:
         return (0, set())
 
+    # Compare BASE agent names (without `:sN` slot suffix) against the runtime
+    # active set; then map orphan base-names back to the slot-tagged raw values
+    # we need for the UPDATE WHERE-clause.
     active_runtime_agents = _active_runtime_agents(run)
-    orphaned_agents = processing_agents.difference(active_runtime_agents)
+    base_processing = {_base_agent_name(a) for a in processing_agents}
+    orphaned_bases = base_processing.difference(active_runtime_agents)
+    if not orphaned_bases:
+        return (0, set())
+    orphaned_agents = {a for a in processing_agents if _base_agent_name(a) in orphaned_bases}
     if not orphaned_agents:
         return (0, set())
 
@@ -1296,10 +1320,15 @@ def _running_container_stall_reason(run: Run) -> tuple[str, str, str] | None:
             "Pending queue items remained undispatched with no active runtime agent after dispatch grace period elapsed.",
         )
 
+    # `orphaned_fetch.agent` comes from a parallel_dispatch log line and is
+    # already a bare agent name (no ":sN"); normalize processing_agents to
+    # base names for the membership check so a fetch whose matching task
+    # hasn't dispatched gets detected even when cases.db rows carry slots.
+    base_processing_for_fetch = {_base_agent_name(a) for a in processing_agents}
     if (
         current_phase not in EARLY_PHASE_STALL_PHASES
         and orphaned_fetch is not None
-        and str(orphaned_fetch.get("agent") or "") in processing_agents
+        and str(orphaned_fetch.get("agent") or "") in base_processing_for_fetch
         and str(orphaned_fetch.get("agent") or "") not in active_runtime_agents
         and not auto_resume_guard_active
         and (time.time() - float(orphaned_fetch.get("timestamp") or 0.0)) >= PROCESSING_AGENT_MISMATCH_GRACE_SECONDS
@@ -1382,11 +1411,12 @@ def _running_container_stall_reason(run: Run) -> tuple[str, str, str] | None:
         if workflow_activity_at is not None and workflow_activity_at > mismatch_activity_at:
             mismatch_activity_at = workflow_activity_at
         mismatch_age = time.time() - mismatch_activity_at
+        base_processing = {_base_agent_name(a) for a in processing_agents}
         if (
             current_phase not in EARLY_PHASE_STALL_PHASES
             and processing_agents
             and mismatch_age >= PROCESSING_AGENT_MISMATCH_GRACE_SECONDS
-            and processing_agents.isdisjoint(active_runtime_agents)
+            and base_processing.isdisjoint(active_runtime_agents)
         ):
             assigned = ", ".join(sorted(processing_agents))
             if active_runtime_agents:
