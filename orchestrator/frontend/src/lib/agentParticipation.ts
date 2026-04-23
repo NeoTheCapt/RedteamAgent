@@ -13,6 +13,14 @@ export function summarizeAgentParticipation(
   summary: Pick<RunSummary, "overview" | "agents">,
   dispatches: Dispatch[],
 ): AgentParticipation {
+  // Unified source of agent concurrency counts. Priority (matches AgentsPanel):
+  //   1. Live running Dispatch rows (parallel_dispatch.sh path)
+  //   2. summary.agents[].parallel_count from cases.db assigned_agent
+  //   3. Fallback: 1 per active agent from summary.agents
+  // All three end up producing the same {agent_name: count} map, which is
+  // also exactly what Dashboard's KpiRow "Active Agents" now sums. So the
+  // number rendered as "Active Agents: N" and the sum of "×N" in the
+  // breakdown stay in agreement across every surface.
   const counts = new Map<string, number>();
 
   for (const dispatch of dispatches) {
@@ -22,8 +30,9 @@ export function summarizeAgentParticipation(
 
   if (counts.size === 0) {
     for (const agent of summary.agents) {
-      if (agent.status !== "active") continue;
-      counts.set(agent.agent_name, (counts.get(agent.agent_name) ?? 0) + 1);
+      if (agent.status !== "active" && agent.status !== "running") continue;
+      const fromBackend = agent.parallel_count ?? 0;
+      counts.set(agent.agent_name, fromBackend > 0 ? fromBackend : 1);
     }
   }
 

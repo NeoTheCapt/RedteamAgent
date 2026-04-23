@@ -692,11 +692,15 @@ def _build_phase_cards(scope: dict, events: list, agents: list[dict], run_status
         elif getattr(event, "event_type", "") == "phase.started":
             latest_summary.setdefault(phase, getattr(event, "summary", ""))
 
+    # Per-phase count is instance-level too (parallel_count-weighted), so
+    # it agrees with the Dashboard KPI and AgentsPanel totals.
     active_agents_by_phase: Counter = Counter()
     if not terminal:
         for agent in agents:
-            if agent["status"] == "active":
-                active_agents_by_phase[agent["phase"]] += 1
+            if agent["status"] != "active":
+                continue
+            weight = max(int(agent.get("parallel_count") or 0), 1)
+            active_agents_by_phase[agent["phase"]] += weight
 
     cards: list[dict] = []
     for phase in PHASE_ORDER:
@@ -1171,7 +1175,18 @@ def _summarize_existing_run(run: Run, project: Project, user: User) -> RunSummar
         ):
             run = db.set_run_updated_at(run.id, overview_updated_at)
     current = _current_activity(events, scope, processing_agents, run.status, str(run_metadata.get("stop_reason_text", "")))
-    active_agents = 0 if _is_terminal_run_status(run.status) else sum(1 for agent in agents if agent["status"] == "active")
+    # active_agents counts concurrent agent *instances*, not distinct agent
+    # types. For consistency with AgentsPanel's "×N parallel" display: when
+    # vulnerability-analyst has parallel_count=3, this returns 3 (not 1).
+    # Falls back to 1 per active agent when parallel_count is 0 (legacy rows).
+    if _is_terminal_run_status(run.status):
+        active_agents = 0
+    else:
+        active_agents = sum(
+            max(int(agent.get("parallel_count") or 0), 1)
+            for agent in agents
+            if agent.get("status") == "active"
+        )
     available_agents = len(agents)
     _sync_run_metadata_projection(
         run,
