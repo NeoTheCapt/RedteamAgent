@@ -21,6 +21,28 @@ class Settings:
     orchestrator_public_url: str = os.environ.get("ORCHESTRATOR_PUBLIC_URL", "http://127.0.0.1:18000")
     orchestrator_container_url: str = os.environ.get("ORCHESTRATOR_CONTAINER_URL", "http://host.docker.internal:18000")
     auto_launch_runs: bool = True
+    # Keepalive: auto-recreate a run when the listed targets have no active
+    # run. Intended for long-lived observation targets (OKX / local Juice
+    # Shop) so a stall-detector false positive doesn't leave the operator
+    # with a dead run until the next 30-min scheduled cycle.
+    #   REDTEAM_ORCHESTRATOR_KEEPALIVE_PROJECT_ID=19
+    #   REDTEAM_ORCHESTRATOR_KEEPALIVE_TARGETS=http://127.0.0.1:8000,https://www.okx.com
+    #   REDTEAM_ORCHESTRATOR_KEEPALIVE_INTERVAL_SECONDS=60
+    #   REDTEAM_ORCHESTRATOR_KEEPALIVE_GRACE_SECONDS=120   (don't replace runs
+    #     younger than this, even if already marked failed; avoids flapping
+    #     when a cycle intentionally stops its run mid-work)
+    keepalive_project_id: int = int(
+        os.environ.get("REDTEAM_ORCHESTRATOR_KEEPALIVE_PROJECT_ID", "0")
+    )
+    keepalive_targets: str = os.environ.get(
+        "REDTEAM_ORCHESTRATOR_KEEPALIVE_TARGETS", ""
+    )
+    keepalive_interval_seconds: int = int(
+        os.environ.get("REDTEAM_ORCHESTRATOR_KEEPALIVE_INTERVAL_SECONDS", "60")
+    )
+    keepalive_grace_seconds: int = int(
+        os.environ.get("REDTEAM_ORCHESTRATOR_KEEPALIVE_GRACE_SECONDS", "120")
+    )
 
 
 settings = Settings()
