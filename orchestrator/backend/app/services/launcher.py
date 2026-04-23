@@ -2696,12 +2696,21 @@ def _terminal_reason_from_artifacts(run: Run) -> tuple[bool, str, str, str]:
             init_only_exit=init_only_exit,
         ))
 
-    if init_only_exit or completion_reason:
+    if init_only_exit:
         return (succeeded, *_terminal_reason(
             succeeded=False,
             return_code=0,
             completion_reason=completion_reason,
             init_only_exit=init_only_exit,
+        ))
+    if completion_reason:
+        queue_only_incomplete = completion_reason.startswith("Queue still has")
+        return (succeeded, *_terminal_reason(
+            succeeded=False,
+            return_code=None if queue_only_incomplete else 0,
+            completion_reason=completion_reason,
+            init_only_exit=init_only_exit,
+            disappeared=queue_only_incomplete,
         ))
     return (succeeded, *_terminal_reason(
         succeeded=False,

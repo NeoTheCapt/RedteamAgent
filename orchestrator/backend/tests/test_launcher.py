@@ -5364,3 +5364,22 @@ def test_inject_crawler_value_coerced_to_string():
     _inject_project_config_env(env, p)
     assert env["KATANA_CONCURRENCY"] == "42"
     assert isinstance(env["KATANA_CONCURRENCY"], str)
+
+
+def test_terminal_reason_from_artifacts_treats_missing_container_queue_as_runtime_disappeared(monkeypatch):
+    from app.services import launcher
+
+    monkeypatch.setattr(launcher, "normalize_active_scope", lambda run: None)
+    monkeypatch.setattr(
+        launcher,
+        "engagement_completion_state",
+        lambda run: (False, "Queue still has pending=5 processing=3."),
+    )
+    monkeypatch.setattr(launcher, "_init_only_exit", lambda run: False)
+
+    succeeded, reason_code, reason_text, summary = launcher._terminal_reason_from_artifacts(SimpleNamespace())
+
+    assert succeeded is False
+    assert reason_code == "runtime_disappeared"
+    assert reason_text == "Runtime container disappeared unexpectedly."
+    assert summary == "Runtime container disappeared unexpectedly."
