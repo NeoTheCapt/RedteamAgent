@@ -93,7 +93,12 @@ If you sense you're running low on budget (e.g. UI work is taking many tool call
 
    After re-verification, update `auditor-state.json.exit_status` to `"reverify_complete"` and commit `findings-after.json` if it diverged from what the re-runs now say.
 
-4. **Unified Code Review** — final holistic review of the combined diff. ALWAYS write your conclusions to `audit-reports/${CYCLE_ID}/review.md` (even if the conclusion is "no issues"). The Discord summary will include this file. Then mark `auditor-state.json.exit_status` as `"ok"`.
+4. **Unified Code Review** — three artifacts required, in order:
+   1. `review.md` — classic diff-hygiene review PLUS per-finding 4-point match matrix (see skill Phase 4 § B): `fix_site_match`, `test_exercises_failure`, `commit_msg_finding_id`, `re_run_source`.
+   2. Cross-cycle regression check (§ C). Run `python3 local-openclaw/scripts/check_regression_against_prior_cycles.py <baseline_sha>`; any flagged deletions must be justified in `review.md` under `## Cross-cycle deletions` or reverted.
+   3. `adversarial-review.md` (§ D) — independent Q1/Q2/Q3 per finding, treating your Phase 2 reasoning as invisible. If this review disagrees with `review.md`, the adversarial verdict wins — reopen findings or add cleanup commits accordingly.
+
+   Any finding that still fails after cleanup MUST be reopened (status → open) with a documented reason so the next cycle takes it up. Then mark `auditor-state.json.exit_status` as `"ok"` (or `ok_no_fixes`).
 
 ## What you must NOT do
 

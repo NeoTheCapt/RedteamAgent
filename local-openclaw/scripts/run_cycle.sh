@@ -976,6 +976,55 @@ fi
 
 persist_cycle_state
 
+# F4 — Validate cycle artifacts before the Discord summary goes out.
+# The validator is a read-only schema check over findings-after.json,
+# source-status.json, and commit-message finding-id references. If it
+# finds violations (duplicate ids, missing screenshots, bad fingerprints,
+# commit msg references a non-existent FND-XXX, etc.) we annotate the
+# cycle status so the operator sees something is dirty — but we do NOT
+# abort, because the agent already produced the commits and rolling back
+# now would lose useful state.
+#
+# F2 — Cross-cycle regression delta: flag lines that this cycle's diff
+# removed when those same lines were added by recent audit commits. Catches
+# the 8aed200-style "rerender wipes prior rule" case.
+if [[ "${OPENCLAW_SKILL:-}" == "redteam-auditor-hermes" ]]; then
+  artifact_log="$cycle_dir/artifact-validation.log"
+  regression_log="$cycle_dir/cross-cycle-regression.log"
+
+  set +e
+  python3 "$ROOT_DIR/scripts/validate_cycle_artifacts.py" \
+      "$cycle_id" \
+      --baseline-sha "${before_commit:-}" \
+      2> "$artifact_log" >/dev/null
+  artifact_exit=$?
+
+  regression_exit=0
+  if [[ -n "${before_commit:-}" ]]; then
+    python3 "$ROOT_DIR/scripts/check_regression_against_prior_cycles.py" \
+        "$before_commit" \
+        --lookback 30 \
+        2> "$regression_log" >/dev/null
+    regression_exit=$?
+  fi
+  set -e
+
+  if [[ $artifact_exit -ne 0 ]]; then
+    log "artifact validation reported violations; see $artifact_log"
+  else
+    log "artifact validation passed"
+  fi
+  if [[ $regression_exit -ne 0 ]]; then
+    log "cross-cycle regression check flagged deleted prior-audit lines; see $regression_log"
+  fi
+
+  if [[ $artifact_exit -ne 0 || $regression_exit -ne 0 ]]; then
+    if [[ "$cycle_status" == "success" || "$cycle_status" == "success_with_openclaw_error" ]]; then
+      cycle_status="success_with_dirty_artifacts"
+    fi
+  fi
+fi
+
 send_cycle_summary
 update_local_benchmark_history || true
 
