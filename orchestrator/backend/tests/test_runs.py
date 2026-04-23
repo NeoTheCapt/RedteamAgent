@@ -116,6 +116,34 @@ def test_run_status_transitions_require_project_ownership():
     assert metadata["updated_at"] == completed.json()["updated_at"]
 
 
+def test_reconcile_run_status_honors_latest_stopped_status(monkeypatch, isolate_data_dir):
+    client = TestClient(app)
+    token = register_and_login(client, "alice")
+    project = create_project(client, token)
+
+    create_run = client.post(
+        f"/projects/{project['id']}/runs",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"target": "https://example.com"},
+    )
+    assert create_run.status_code == 201
+    run = create_run.json()
+    stale_running = db.update_run_status(run["id"], "running")
+    db.update_run_status(run["id"], "stopped")
+
+    monkeypatch.setattr("app.services.runs.normalize_active_scope", lambda _run: None)
+    monkeypatch.setattr("app.services.runs.locate_runtime_pid", lambda _run: 12345)
+
+    from app.services.runs import _reconcile_run_status
+
+    reconciled = _reconcile_run_status(stale_running)
+    assert reconciled.status == "stopped"
+    latest = db.get_run_by_id(run["id"])
+    assert latest is not None
+    assert latest.status == "stopped"
+
+
+
 def test_list_runs_keeps_running_container_alive_across_backend_restart(monkeypatch):
     client = TestClient(app)
     token = register_and_login(client, "alice")

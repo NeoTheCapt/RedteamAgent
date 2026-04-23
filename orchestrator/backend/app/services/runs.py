@@ -382,6 +382,13 @@ def _reattach_live_runtime_supervisor(
 
 
 def _reconcile_run_status(run: Run, project: Project | None = None, user: User | None = None) -> Run:
+    # Reconciliation can be called with a stale in-memory Run object (for example,
+    # a long-lived supervisor callback that captured the row before a user clicked
+    # STOP). Refresh from the DB first so a later terminal transition cannot be
+    # overwritten by stale runtime liveness checks.
+    latest = db.get_run_by_id(run.id)
+    if latest is not None:
+        run = latest
     # User-initiated stops must never be overwritten by reconciliation logic.
     if run.status == "stopped":
         return run
