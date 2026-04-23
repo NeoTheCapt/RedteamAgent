@@ -3507,6 +3507,19 @@ def _maybe_auto_resume_run(
     if reason_code not in _AUTO_RESUME_REASON_CODES:
         return False
 
+    # Critical check: if the run was already user-stopped (or otherwise
+    # terminal) in the DB, the supervisor thread is racing with the user's
+    # intent. Never auto-resume a user-stopped run. Without this guard, the
+    # supervisor sees its container go away after stop_run_runtime fires,
+    # classifies that as an "incomplete" exit, and calls auto-resume — which
+    # flips DB status back to running and launches a fresh container.
+    # Verified: cycle 20260423T114752Z and 4 prior cycles all recorded
+    # ui-07 STOP transition as failed because the API kept reporting
+    # running within 5-10s of the user clicking STOP.
+    latest = db.get_run_by_id(run.id)
+    if latest is not None and latest.status in {"stopped", "failed", "completed"}:
+        return False
+
     engagement_dir = _active_engagement_dir(run)
     if engagement_dir is None:
         return False
@@ -3740,6 +3753,12 @@ def _supervise_container(
             break
         if status == "exited":
             _drain_runtime_log_follower(log_follower)
+            # Honor user-initiated stop: if the DB already says stopped, the
+            # supervisor's job is done — don't overwrite with "failed".
+            latest = db.get_run_by_id(run.id)
+            if latest is not None and latest.status in {"stopped", "completed", "failed"}:
+                _close_log_streams(log_follower, log_handle)
+                return
             exit_code = _container_exit_code(container_name)
             phase, _ = _heartbeat_context(run)
             normalize_active_scope(run)
@@ -3773,6 +3792,11 @@ def _supervise_container(
             break
         if status is None:
             _drain_runtime_log_follower(log_follower)
+            # Same user-stop honor as the "exited" branch above.
+            latest = db.get_run_by_id(run.id)
+            if latest is not None and latest.status in {"stopped", "completed", "failed"}:
+                _close_log_streams(log_follower, log_handle)
+                return
             phase, _ = _heartbeat_context(run)
             succeeded, reason_code, reason_text, summary = _terminal_reason_from_artifacts(run)
             if not succeeded and _maybe_auto_resume_run(

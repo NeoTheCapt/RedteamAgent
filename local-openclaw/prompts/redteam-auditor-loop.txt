@@ -58,7 +58,16 @@ If you sense you're running low on budget (e.g. UI work is taking many tool call
      Use `clean` only when you actually executed the scan and verified no hits. Use `unavailable` when preconditions fail (browser toolset missing, no engagement logs, etc.). Use `skipped` when you intentionally decided not to scan. Do NOT use `clean` as a fallback when you didn't actually scan — the Discord summary distinguishes these and "clean" would mislead the operator.
    - Write `local-openclaw/state/auditor-state.json` with `exit_status: "discover_complete"` so that even if the cycle is killed right now, the controller has real counts to report.
 
-2. **Fix** — implement fixes for every in-scope finding in a single coherent pass. Do not split the work by category. Group related file edits. **After EACH successful fix commit** update `findings-after.json` in place: set that finding's `status` to `"fixed"` and append the commit SHA. Do NOT batch these updates to the end of the phase.
+2. **Fix** — implement fixes for every in-scope finding in a single coherent pass. Do not split the work by category. Group related file edits.
+
+   **Severity priority rule (non-negotiable):** sort all open findings by severity `critical > high > medium > low`, then tackle them in that order. You may NOT commit a fix for a `medium` finding while a `high` or `critical` finding is still `status: open`, even if the higher-severity one looks harder or requires backend investigation. If a `high`/`critical` finding cannot be fixed within this cycle, you MUST document the blocker in its `reason` field and mark it `deferred: true`; only then are lower-severity fixes permitted.
+
+   **Persistent-bug rule:** if a finding has the same `check_id` or the same category-and-summary signature as one that was `fixed` in a previous cycle (check `local-openclaw/audit-reports/*/findings-after.json` for the most recent 3 cycles, or grep `local-openclaw/state/auditor-state.json` history), the previous fix didn't actually work. Do NOT just reapply a cosmetic tweak to the same file. Instead:
+   - Bump the severity one level (medium → high, high → critical).
+   - In the finding's `evidence`, list every prior `commit` that claimed to fix it.
+   - Trace the root cause end-to-end before writing new code — what backend state is the UI reading? What stops that state from reflecting the fix? For STOP / run-status bugs specifically: check `_reconcile_run_status` flip-back, `stop_run_runtime` error handling, supervisor thread races.
+
+   **After EACH successful fix commit** update `findings-after.json` in place: set that finding's `status` to `"fixed"` and append the commit SHA. Do NOT batch these updates to the end of the phase.
 3. **Re-verify** — after all fixes land, run the relevant contract / unit / integration tests that cover the edited code. Re-run targeted portions of the orchestrator audit scripts if needed:
    - `bash local-openclaw/scripts/audit_orchestrator_api.sh ${CYCLE_ID}`
    - `bash local-openclaw/scripts/audit_orchestrator_logs.sh ${CYCLE_ID}`
