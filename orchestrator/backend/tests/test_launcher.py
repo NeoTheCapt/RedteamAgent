@@ -5366,7 +5366,22 @@ def test_inject_crawler_value_coerced_to_string():
     assert isinstance(env["KATANA_CONCURRENCY"], str)
 
 
-def test_terminal_reason_from_artifacts_treats_missing_container_queue_as_runtime_disappeared(monkeypatch):
+def test_terminal_reason_zero_exit_with_midqueue_reason_uses_generic_incomplete_stop():
+    from app.services import launcher
+
+    reason_code, reason_text, summary = launcher._terminal_reason(
+        succeeded=False,
+        return_code=0,
+        completion_reason="Queue still has pending=5 processing=3.",
+        init_only_exit=False,
+    )
+
+    assert reason_code == "incomplete_stop"
+    assert reason_text == "Runtime exited before engagement completed."
+    assert summary == "Runtime exited before engagement completed while unfinished queue work remained."
+
+
+def test_terminal_reason_from_artifacts_treats_midqueue_artifacts_as_incomplete_stop(monkeypatch):
     from app.services import launcher
 
     monkeypatch.setattr(launcher, "normalize_active_scope", lambda run: None)
@@ -5380,6 +5395,6 @@ def test_terminal_reason_from_artifacts_treats_missing_container_queue_as_runtim
     succeeded, reason_code, reason_text, summary = launcher._terminal_reason_from_artifacts(SimpleNamespace())
 
     assert succeeded is False
-    assert reason_code == "runtime_disappeared"
-    assert reason_text == "Runtime container disappeared unexpectedly."
-    assert summary == "Runtime container disappeared unexpectedly."
+    assert reason_code == "incomplete_stop"
+    assert reason_text == "Runtime exited before engagement completed."
+    assert summary == "Runtime exited before engagement completed while unfinished queue work remained."

@@ -2671,7 +2671,11 @@ def _terminal_reason(
     if disappeared:
         return ("runtime_disappeared", "Runtime container disappeared unexpectedly.", "Runtime container disappeared unexpectedly.")
     if return_code == 0 and completion_reason.startswith("Queue still has"):
-        return ("queue_incomplete", completion_reason, f"Runtime stopped before engagement completed: {completion_reason}")
+        return (
+            "incomplete_stop",
+            "Runtime exited before engagement completed.",
+            "Runtime exited before engagement completed while unfinished queue work remained.",
+        )
     if return_code == 0 and completion_reason == "Surface coverage is still unresolved.":
         return ("surface_coverage_incomplete", completion_reason, f"Runtime stopped before engagement completed: {completion_reason}")
     if return_code == 0 and completion_reason.startswith("Engagement status is"):
@@ -2704,13 +2708,11 @@ def _terminal_reason_from_artifacts(run: Run) -> tuple[bool, str, str, str]:
             init_only_exit=init_only_exit,
         ))
     if completion_reason:
-        queue_only_incomplete = completion_reason.startswith("Queue still has")
         return (succeeded, *_terminal_reason(
             succeeded=False,
-            return_code=None if queue_only_incomplete else 0,
+            return_code=0,
             completion_reason=completion_reason,
             init_only_exit=init_only_exit,
-            disappeared=queue_only_incomplete,
         ))
     return (succeeded, *_terminal_reason(
         succeeded=False,
