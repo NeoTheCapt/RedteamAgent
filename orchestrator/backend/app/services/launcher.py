@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import fnmatch
 import json
 import os
@@ -168,10 +169,13 @@ def _copy_sqlite_snapshot(path: Path, snapshot_dir: Path) -> Path:
 
 
 def _read_sqlite_snapshot(path: Path, reader, default):
+    # See note in run_summary._read_sqlite_snapshot — sqlite3.Connection's
+    # context manager does NOT close. Wrap every connect() with
+    # contextlib.closing to avoid fd leaks under Dashboard polling load.
     try:
         with tempfile.TemporaryDirectory(prefix="launcher-sqlite-") as temp_dir:
             snapshot_path = _copy_sqlite_snapshot(path, Path(temp_dir))
-            with _connect_sqlite_readonly(snapshot_path) as connection:
+            with contextlib.closing(_connect_sqlite_readonly(snapshot_path)) as connection:
                 return reader(connection)
     except (OSError, sqlite3.Error):
         return default
@@ -183,7 +187,7 @@ def _read_sqlite_with_fallback(path: Path, reader, default):
 
     for _ in range(5):
         try:
-            with sqlite3.connect(path, timeout=1.0) as connection:
+            with contextlib.closing(sqlite3.connect(path, timeout=1.0)) as connection:
                 connection.execute("PRAGMA busy_timeout = 1000")
                 return reader(connection)
         except sqlite3.OperationalError as exc:
@@ -194,7 +198,7 @@ def _read_sqlite_with_fallback(path: Path, reader, default):
                 return default
 
         try:
-            with _connect_sqlite_readonly(path) as connection:
+            with contextlib.closing(_connect_sqlite_readonly(path)) as connection:
                 return reader(connection)
         except sqlite3.OperationalError as exc:
             if not _is_sqlite_transient_error(exc) and not _is_sqlite_corruption_error(exc):
@@ -1125,7 +1129,7 @@ def _recover_orphaned_processing_cases(run: Run, engagement_dir: Path | None) ->
         return (0, set())
 
     try:
-        with sqlite3.connect(cases_db, timeout=5.0) as connection:
+        with contextlib.closing(sqlite3.connect(cases_db, timeout=5.0)) as connection:
             connection.execute("PRAGMA busy_timeout = 5000")
             column_rows = connection.execute("PRAGMA table_info(cases)").fetchall()
             column_names = {str(row[1]) for row in column_rows if len(row) > 1}
@@ -1734,7 +1738,7 @@ def _synthesize_completion_report(engagement_dir: Path, scope: dict[str, object]
     total_cases = 0
     if cases_db.exists():
         try:
-            with sqlite3.connect(cases_db) as connection:
+            with contextlib.closing(sqlite3.connect(cases_db)) as connection:
                 row = connection.execute("SELECT COUNT(*) FROM cases").fetchone()
             total_cases = int(row[0]) if row else 0
         except sqlite3.Error:
@@ -2094,7 +2098,7 @@ def _normalize_cases_db(path: Path, context: dict[str, str] | None) -> None:
     if context is None or not path.exists():
         return
     try:
-        with sqlite3.connect(path, timeout=1.0) as connection:
+        with contextlib.closing(sqlite3.connect(path, timeout=1.0)) as connection:
             connection.execute("PRAGMA busy_timeout = 1000")
             column_rows = connection.execute("PRAGMA table_info(cases)").fetchall()
             column_names = {str(row[1]) for row in column_rows}
