@@ -13,8 +13,17 @@ vi.mock("../components/shell/Sidebar", () => ({
   Sidebar: () => <div data-testid="sidebar" />,
 }));
 vi.mock("../components/shell/RunPanel", () => ({
-  RunPanel: ({ children, onStop }: { children: React.ReactNode; onStop?: () => void | Promise<void> }) => (
+  RunPanel: ({
+    children,
+    onStop,
+    run,
+  }: {
+    children: React.ReactNode;
+    onStop?: () => void | Promise<void>;
+    run: { status: string };
+  }) => (
     <div data-testid="run-panel">
+      <div data-testid="run-status">{run.status}</div>
       {onStop ? <button onClick={() => void onStop()}>STOP</button> : null}
       {children}
     </div>
@@ -197,7 +206,7 @@ describe("ShellPage — stale summary on run switch (Bug 1)", () => {
   it("refreshes projects after a stop request so the run state can transition promptly", async () => {
     const onRefreshProjects = vi.fn().mockResolvedValue(undefined);
     mockGetRunSummary.mockResolvedValue(mkSummary("http://run10.test"));
-    mockStopRun.mockResolvedValue(undefined);
+    mockStopRun.mockResolvedValue({ ...mkRun(10), status: "stopped", updated_at: "2026-04-17T00:05:00Z" });
 
     render(<ShellPage {...defaultProps({ onRefreshProjects })} />);
     act(() => setHash("/projects/1/runs/10/dashboard"));
@@ -205,6 +214,7 @@ describe("ShellPage — stale summary on run switch (Bug 1)", () => {
     await waitFor(() =>
       expect(screen.getByTestId("dashboard-tab")).toHaveTextContent("http://run10.test"),
     );
+    expect(screen.getByTestId("run-status")).toHaveTextContent("running");
 
     await act(async () => {
       screen.getByText("STOP").click();
@@ -212,6 +222,7 @@ describe("ShellPage — stale summary on run switch (Bug 1)", () => {
     });
 
     expect(mockStopRun).toHaveBeenCalledWith("tok", 1, 10);
+    expect(screen.getByTestId("run-status")).toHaveTextContent("stopped");
     expect(onRefreshProjects).toHaveBeenCalledTimes(1);
   });
 });

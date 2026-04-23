@@ -72,6 +72,7 @@ export function ShellPage(props: ShellPageProps) {
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [runOverrides, setRunOverrides] = useState<Record<string, Run>>({});
 
   useEffect(() => {
     const handler = () => setRoute(parseRoute(window.location.hash));
@@ -84,12 +85,14 @@ export function ShellPage(props: ShellPageProps) {
     const result: (Run & { __projectId: number })[] = [];
     for (const p of projects) {
       for (const r of runsByProject[p.id] ?? []) {
-        result.push({ ...r, __projectId: p.id });
+        const key = `${p.id}:${r.id}`;
+        const override = runOverrides[key];
+        result.push({ ...(override ?? r), __projectId: p.id });
       }
     }
     result.sort((a, b) => b.updated_at.localeCompare(a.updated_at));
     return result;
-  }, [projects, runsByProject]);
+  }, [projects, runOverrides, runsByProject]);
 
   const selected =
     route.kind === "run"
@@ -187,7 +190,9 @@ export function ShellPage(props: ShellPageProps) {
 
   async function handleStop(projectId: number, runId: number) {
     try {
-      await stopRun(token, projectId, runId);
+      const stopped = await stopRun(token, projectId, runId);
+      const key = `${projectId}:${runId}`;
+      setRunOverrides((current) => ({ ...current, [key]: stopped }));
       if (onRefreshProjects) {
         await onRefreshProjects();
       }
