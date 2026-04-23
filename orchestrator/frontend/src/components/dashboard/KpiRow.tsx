@@ -1,10 +1,12 @@
 import type { RunSummary } from "../../lib/api";
+import type { AgentParticipation } from "../../lib/agentParticipation";
 
 type KpiRowProps = {
   summary: RunSummary;
+  participation: AgentParticipation;
 };
 
-export function KpiRow({ summary }: KpiRowProps) {
+export function KpiRow({ summary, participation }: KpiRowProps) {
   const findings = summary.overview.findings_count;
   const casesDone = summary.cases.done + summary.cases.findings;
   const casesTotal = summary.cases.total;
@@ -34,7 +36,7 @@ export function KpiRow({ summary }: KpiRowProps) {
       <Kpi
         label="Active Agents"
         value={summary.overview.active_agents}
-        sub={`of ${summary.overview.available_agents}`}
+        sub={`of ${summary.overview.available_agents} · ${participation.text}`}
       />
     </div>
   );
