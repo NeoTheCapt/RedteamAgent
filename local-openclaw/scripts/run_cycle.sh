@@ -919,6 +919,78 @@ if [[ "$_restart_juice_shop" == "true" ]]; then
   # completes, its different ID will trigger fresh scoring automatically.
 fi
 
+# Post-cycle cleanup of analyzed failed runs.
+#
+# KEEP_TERMINAL_RUNS=1 during prep preserved failed runs' engagement dirs
+# so Hermes could read log.md / run.json in Phase 1. Once the cycle finishes
+# with status=success AND Hermes actually committed a fix derived from those
+# runs' evidence (new_commit set), the engagement dirs are redundant — the
+# analysis is permanent in audit-reports/<cycle_id>/ + the git commit.
+#
+# Delete only runs whose id appears in this cycle's findings-before.json
+# evidence (= Hermes saw them). If findings-before.json doesn't reference a
+# failed run id, leave it — Hermes hasn't captured it yet, next cycle must
+# still see it.
+if [[ "$cycle_status" == "success" && -n "$new_commit" ]]; then
+  audit_findings_before="$ROOT_DIR/audit-reports/$cycle_id/findings-before.json"
+  if [[ -f "$audit_findings_before" ]]; then
+    set +e
+    analyzed_run_ids="$(python3 - "$audit_findings_before" <<'PY' 2>/dev/null
+import json, re, sys
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception:
+    sys.exit(0)
+ids = set()
+for f in (d.get("findings") or []) + (d.get("deferred") or []):
+    # Search evidence fields for numeric run IDs the finding refers to.
+    ev = f.get("evidence") or {}
+    blob = json.dumps(ev) + " " + (f.get("summary") or "") + " " + json.dumps(f.get("_refs") or {})
+    # Common shapes we emit: "run.id": 482, "run_id": 482, "run-0482", "/runs/482"
+    for m in re.findall(r"(?:run[_-]?id\D{0,4}|runs?[\/-])(\d+)", blob):
+        ids.add(int(m))
+    # Also pick up bare integers labelled 'id' when evidence has a run dict
+    if isinstance(ev, dict):
+        rid = ev.get("run_id") or (ev.get("run") or {}).get("id") if isinstance(ev.get("run"), dict) else None
+        if isinstance(rid, int):
+            ids.add(rid)
+print(" ".join(str(i) for i in sorted(ids)))
+PY
+)"
+    set -e
+
+    if [[ -n "$analyzed_run_ids" ]]; then
+      # Only delete runs whose CURRENT orchestrator status is terminal — if a
+      # referenced run is somehow still running/queued, leave it alone.
+      token="${ORCH_TOKEN:-}"
+      if [[ -z "$token" ]]; then
+        token="$(grep -m1 '^ORCH_TOKEN=' "$STATE_DIR/scheduler.env" 2>/dev/null | cut -d= -f2- || true)"
+      fi
+      if [[ -n "$token" ]]; then
+        for rid in $analyzed_run_ids; do
+          status_json="$(curl -sS --max-time 5 -H "Authorization: Bearer $token" \
+              "$ORCH_BASE_URL/projects/$PROJECT_ID/runs" 2>/dev/null || echo '[]')"
+          rstatus="$(printf '%s' "$status_json" | jq -r --arg rid "$rid" '[.[] | select(.id == ($rid|tonumber))] | .[0].status // empty' 2>/dev/null)"
+          case "$rstatus" in
+            failed|failure|error|errored|stopped|cancelled|canceled|timeout)
+              log "post-cycle: deleting analyzed failed run $rid (status=$rstatus; evidence captured in audit-reports/$cycle_id/)"
+              curl -sS --max-time 5 -X DELETE -H "Authorization: Bearer $token" \
+                  "$ORCH_BASE_URL/projects/$PROJECT_ID/runs/$rid" >/dev/null 2>&1 || \
+                  log "warning: failed to delete run $rid"
+              ;;
+            "")
+              # Run no longer exists (already deleted) — nothing to do.
+              ;;
+            *)
+              log "post-cycle: skipping run $rid (status=$rstatus is not terminal)"
+              ;;
+          esac
+        done
+      fi
+    fi
+  fi
+fi
+
 log "cycle finished with status=$cycle_status report=$report_path"
 
 case "$cycle_status" in
