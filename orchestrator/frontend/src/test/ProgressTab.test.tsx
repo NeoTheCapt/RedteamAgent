@@ -91,13 +91,15 @@ describe("ProgressTab", () => {
   it("renders 5 phase columns", async () => {
     mockDispatches.mockResolvedValue([]);
     mockCases.mockResolvedValue([]);
-    render(<ProgressTab token="t" projectId={1} runId={2} currentPhase="consume" summary={mkSummary()} />);
+    const { container } = render(<ProgressTab token="t" projectId={1} runId={2} currentPhase="consume" summary={mkSummary()} />);
+    const board = container.querySelector(".progress");
+    expect(board).not.toBeNull();
     await waitFor(() => {
-      expect(screen.getByText("Recon")).toBeInTheDocument();
-      expect(screen.getByText("Collect")).toBeInTheDocument();
-      expect(screen.getByText("Consume-Test")).toBeInTheDocument();
-      expect(screen.getByText("Exploit")).toBeInTheDocument();
-      expect(screen.getByText("Report")).toBeInTheDocument();
+      expect(board?.querySelector('[data-phase="recon"] .kanban-col__name')).toHaveTextContent("Recon");
+      expect(board?.querySelector('[data-phase="collect"] .kanban-col__name')).toHaveTextContent("Collect");
+      expect(board?.querySelector('[data-phase="consume"] .kanban-col__name')).toHaveTextContent("Consume-Test");
+      expect(board?.querySelector('[data-phase="exploit"] .kanban-col__name')).toHaveTextContent("Exploit");
+      expect(board?.querySelector('[data-phase="report"] .kanban-col__name')).toHaveTextContent("Report");
     });
   });
 
@@ -110,6 +112,16 @@ describe("ProgressTab", () => {
 
     await waitFor(() => {
       expect(container.querySelector(".progress")).toHaveAttribute("data-phase-count", "5");
+    });
+  });
+
+  it("renders a compact overview card for each of the 5 phases", async () => {
+    mockDispatches.mockResolvedValue([]);
+    mockCases.mockResolvedValue([]);
+    render(<ProgressTab token="t" projectId={1} runId={2} currentPhase="consume" summary={mkSummary()} />);
+
+    await waitFor(() => {
+      expect(screen.getAllByTestId("progress-overview-card")).toHaveLength(5);
     });
   });
 
@@ -212,10 +224,10 @@ describe("ProgressTab", () => {
 
     await waitFor(() => {
       expect(screen.getByText("2 agents active")).toBeInTheDocument();
-      expect(screen.getByText(/2× vulnerability-analyst/)).toBeInTheDocument();
-      expect(screen.getByText("Recon target surface completed")).toBeInTheDocument();
-      expect(screen.getByText(/15 surface candidates recorded/)).toBeInTheDocument();
-      expect(screen.getByText(/Report path \/tmp\/engagement\/report.md/)).toBeInTheDocument();
+      expect(screen.getAllByText(/2× vulnerability-analyst/).length).toBeGreaterThan(0);
+      expect(screen.getAllByText("Recon target surface completed").length).toBeGreaterThan(0);
+      expect(screen.getAllByText(/15 surface candidates recorded/).length).toBeGreaterThan(0);
+      expect(screen.getAllByText(/Report path \/tmp\/engagement\/report.md/).length).toBeGreaterThan(0);
     });
   });
 });

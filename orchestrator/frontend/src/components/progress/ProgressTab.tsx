@@ -155,6 +155,29 @@ export function ProgressTab({ token, projectId, runId, currentPhase, summary }: 
           {participation.text} · full breakdown on the <strong>Dashboard</strong> tab
         </div>
       </div>
+      <div className="progress__overview" aria-label="Phase overview cards">
+        {CANONICAL_PHASES.map(({ phase, label }) => {
+          const phaseDispatches = dispatchesByPhase.get(phase) ?? [];
+          const colState = columnState(phase, currentPhase, phaseDispatches);
+          return (
+            <section
+              key={`overview-${phase}`}
+              className={`progress__overview-card progress__overview-card--${colState}`}
+              data-testid="progress-overview-card"
+            >
+              <div className="progress__overview-head">
+                <span className="progress__overview-name">{label}</span>
+                <span className="progress__overview-badge">{colState}</span>
+              </div>
+              <div className="progress__overview-body">
+                {phaseSummaryLines(phase, summary).map((line) => (
+                  <p key={`${phase}-${line}`} className="progress__overview-line">{line}</p>
+                ))}
+              </div>
+            </section>
+          );
+        })}
+      </div>
       <div className="progress" data-phase-count={CANONICAL_PHASES.length}>
         {CANONICAL_PHASES.map(({ phase, label }) => {
           const phaseDispatches = dispatchesByPhase.get(phase) ?? [];
