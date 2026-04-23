@@ -86,10 +86,49 @@ If you sense you're running low on budget (e.g. UI work is taking many tool call
    - Trace the root cause end-to-end before writing new code — what backend state is the UI reading? What stops that state from reflecting the fix? For STOP / run-status bugs specifically: check `_reconcile_run_status` flip-back, `stop_run_runtime` error handling, supervisor thread races.
 
    **After EACH successful fix commit** update `findings-after.json` in place: set that finding's `status` to `"fixed"` and append the commit SHA. Do NOT batch these updates to the end of the phase.
-3. **Re-verify** — after all fixes land, run the relevant contract / unit / integration tests that cover the edited code. Re-run targeted portions of the orchestrator audit scripts if needed:
+3. **Static Re-verify (+ bounded backend runtime re-verify)** — **honest scope:** Phase 2 commits land in the source tree but most of them do NOT take effect in the currently-running runtime. Do NOT claim a runtime-sensitive fix was "verified" when you only re-read a file or re-ran a static test against a stale uvicorn. Per-fix-type scope:
+
+   | Fix lives in… | Re-verify in this cycle? |
+   |---|---|
+   | `orchestrator/frontend/**` | ✅ yes — uvicorn serves `dist/` directly, cycle already ran `npm run build` |
+   | `orchestrator/backend/**.py` | ⚠ only after explicit uvicorn restart (see below) |
+   | `agent/**` (scripts, prompts, skills) | ❌ NO — existing engagement workspaces hold pre-cycle copies; only NEW runs would pick up changes, and auditor is forbidden from creating runs |
+   | Static artifacts (findings files, schemas, docs) | ✅ yes — files are read fresh |
+   | Unit tests added in Phase 2 | ✅ yes — tests run against edited source directly |
+
+   **Static re-verify (always run):**
    - `bash local-openclaw/scripts/audit_orchestrator_api.sh ${CYCLE_ID}`
    - `bash local-openclaw/scripts/audit_orchestrator_logs.sh ${CYCLE_ID}`
    - `python3 local-openclaw/scripts/audit_orchestrator_features.py ${CYCLE_ID}`
+   - Any unit tests the Phase 2 commits added (from their commit diff).
+   - Re-open the specific `ui-XX` browser check for every frontend finding and save a fresh screenshot — frontend is live-served, so this DOES count as verification.
+
+   Merge results into `findings-after.json`. Every fixed finding MUST carry a `reverify_scope` field with one of:
+   - `"static_live"` — effect is visible in the running system already (frontend, static file)
+   - `"static_test"` — covered by a green unit test, runtime effect not yet observable
+   - `"pending_restart"` — backend fix; scheduled for the bounded restart below
+   - `"pending_new_run"` — agent/** fix; cannot verify this cycle; relies on next cycle's natural `agent_bug` scan
+   - `"runtime_restart_passed"` / `"runtime_restart_still_failing"` — filled in after the bounded restart runs
+
+   **Bounded backend runtime re-verify — ONLY when this cycle's diff touched `orchestrator/backend/**/*.py`:**
+
+   ```bash
+   # ~2s API downtime; SQLite DB persists across restart.
+   bash orchestrator/stop.sh && bash orchestrator/run.sh
+   for i in $(seq 1 10); do
+     curl -fsS http://127.0.0.1:18000/healthz >/dev/null 2>&1 && break
+     sleep 1
+   done
+   bash local-openclaw/scripts/audit_orchestrator_api.sh ${CYCLE_ID}-reverify
+   bash local-openclaw/scripts/audit_orchestrator_logs.sh ${CYCLE_ID}-reverify
+   python3 local-openclaw/scripts/audit_orchestrator_features.py ${CYCLE_ID}-reverify
+   ```
+
+   For each finding previously tagged `pending_restart`, update `reverify_scope` to `runtime_restart_passed` (source now clean) or `runtime_restart_still_failing` (source still reports the same failure). A `runtime_restart_still_failing` finding MUST be reopened (`status: "open"`) — the fix did not actually work and the next cycle needs to take it up with elevated severity per the persistent-bug rule.
+
+   **Agent-code fixes:** mark `reverify_scope: "pending_new_run"` with `reason: "agent/ code only loads on new run creation; auditor cannot create runs"`. Status stays `fixed` ONLY IF Phase 2 added a unit test that passes against the edited source. Otherwise mark the finding `deferred` — do NOT leave a runtime-unverified agent fix as `fixed` without test coverage.
+
+   **Regression guard (unchanged):** if `regression_count > 0` (new findings surfaced in after that weren't in before), `git reset --hard $baseline_sha` and set `exit_status: "blocked_regression"`. Do NOT enter Phase 4 on a regressing diff.
 
    After re-verification, update `auditor-state.json.exit_status` to `"reverify_complete"` and commit `findings-after.json` if it diverged from what the re-runs now say.
 
