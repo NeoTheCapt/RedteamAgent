@@ -230,6 +230,13 @@ EOF
 }
 
 # Auto-migrate legacy dispatcher columns when resuming older cases.db snapshots.
+ensure_cases_column "method" "TEXT"
+ensure_cases_column "url" "TEXT"
+ensure_cases_column "url_path" "TEXT"
+ensure_cases_column "source" "TEXT"
+ensure_cases_column "query_params" "TEXT"
+ensure_cases_column "body_params" "TEXT"
+ensure_cases_column "assigned_agent" "TEXT"
 ensure_cases_column "consumed_at" "TEXT"
 sql "ALTER TABLE cases ADD COLUMN retry_count INTEGER DEFAULT 0;" 2>/dev/null || true
 
@@ -297,6 +304,13 @@ case "$ACTION" in
     ;;
 
   migrate)
+    ensure_cases_column "method" "TEXT"
+    ensure_cases_column "url" "TEXT"
+    ensure_cases_column "url_path" "TEXT"
+    ensure_cases_column "source" "TEXT"
+    ensure_cases_column "query_params" "TEXT"
+    ensure_cases_column "body_params" "TEXT"
+    ensure_cases_column "assigned_agent" "TEXT"
     ensure_cases_column "consumed_at" "TEXT"
     sql "ALTER TABLE cases ADD COLUMN retry_count INTEGER DEFAULT 0;" 2>/dev/null || true
     ;;
