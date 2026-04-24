@@ -22,22 +22,51 @@ TARGET_DEFAULT = "http://127.0.0.1:8000"
 
 
 def parse_metrics_from_context(context_path: Path) -> dict:
-    """Parse '## Local Challenge Score' section into key-value dict."""
+    """Parse '## Local Challenge Score' section into key-value dict.
+
+    Also captures the per-challenge name lists from the nested
+    '### Solved Challenges' / '### Unsolved Challenges' sub-sections so
+    history can answer "which challenges regressed from peak to now"
+    without the auditor re-scraping latest-context.md every time. Without
+    this, solved sets get overwritten every cycle (verified on cycle
+    20260424T160049Z, which obliterated the 15/111 peak's solved list
+    before any recall-analysis report could be written).
+    """
     lines = context_path.read_text(encoding='utf-8', errors='replace').splitlines()
-    inside = False
-    metrics = {}
+    section = None  # None | 'kv' | 'solved' | 'unsolved'
+    metrics: dict = {}
+    solved: list[str] = []
+    unsolved: list[str] = []
+
     for line in lines:
         if line.startswith('## Local Challenge Score'):
-            inside = True
+            section = 'kv'
             continue
-        if inside and line.startswith('## '):
+        if section is not None and line.startswith('## '):
+            # next top-level section ends our scope
             break
-        if inside and line.startswith('### '):
-            break
-        if inside and line.startswith('- '):
+        if section is not None and line.startswith('### '):
+            heading = line[4:].strip().lower()
+            if heading == 'solved challenges':
+                section = 'solved'
+            elif heading == 'unsolved challenges':
+                section = 'unsolved'
+            else:
+                section = 'kv'  # unknown sub-section; keep in kv mode (ignore rows)
+            continue
+        if section == 'kv' and line.startswith('- '):
             key, _, value = line[2:].partition(':')
             if key and value:
                 metrics[key.strip()] = value.strip()
+        elif section == 'solved' and line.startswith('- '):
+            solved.append(line[2:].strip())
+        elif section == 'unsolved' and line.startswith('- '):
+            unsolved.append(line[2:].strip())
+
+    if solved:
+        metrics['solved_challenge_names'] = solved
+    if unsolved:
+        metrics['unsolved_challenge_names'] = unsolved
     return metrics
 
 
