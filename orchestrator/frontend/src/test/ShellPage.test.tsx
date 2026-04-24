@@ -17,13 +17,15 @@ vi.mock("../components/shell/RunPanel", () => ({
     children,
     onStop,
     run,
+    stopRequestedAt,
   }: {
     children: React.ReactNode;
     onStop?: () => void | Promise<void>;
     run: { status: string };
+    stopRequestedAt?: number | null;
   }) => (
     <div data-testid="run-panel">
-      <div data-testid="run-status">{run.status}</div>
+      <div data-testid="run-status">{stopRequestedAt ? "STOPPING" : run.status}</div>
       {onStop ? <button onClick={() => void onStop()}>STOP</button> : null}
       {children}
     </div>
@@ -203,12 +205,13 @@ describe("ShellPage — stale summary on run switch (Bug 1)", () => {
     );
   });
 
-  it("refreshes projects after a stop request so the run state can transition promptly", async () => {
+  it("keeps STOPPING visible across refreshed run props after a stop request", async () => {
     const onRefreshProjects = vi.fn().mockResolvedValue(undefined);
     mockGetRunSummary.mockResolvedValue(mkSummary("http://run10.test"));
     mockStopRun.mockResolvedValue({ ...mkRun(10), status: "stopped", updated_at: "2026-04-17T00:05:00Z" });
 
-    render(<ShellPage {...defaultProps({ onRefreshProjects })} />);
+    const props = defaultProps({ onRefreshProjects });
+    const { rerender } = render(<ShellPage {...props} />);
     act(() => setHash("/projects/1/runs/10/dashboard"));
 
     await waitFor(() =>
@@ -222,7 +225,19 @@ describe("ShellPage — stale summary on run switch (Bug 1)", () => {
     });
 
     expect(mockStopRun).toHaveBeenCalledWith("tok", 1, 10);
-    expect(screen.getByTestId("run-status")).toHaveTextContent("stopped");
+    expect(screen.getByTestId("run-status")).toHaveTextContent("STOPPING");
     expect(onRefreshProjects).toHaveBeenCalledTimes(1);
+
+    rerender(
+      <ShellPage
+        {...props}
+        runsByProject={{
+          1: [{ ...mkRun(10), status: "stopped", updated_at: "2026-04-17T00:05:00Z" }],
+          2: [mkRun(20)],
+        }}
+      />,
+    );
+
+    expect(screen.getByTestId("run-status")).toHaveTextContent("STOPPING");
   });
 });

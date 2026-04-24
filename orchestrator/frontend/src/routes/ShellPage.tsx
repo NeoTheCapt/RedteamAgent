@@ -32,6 +32,8 @@ type DeleteTarget =
   | { kind: "project"; id: number; name: string }
   | { kind: "run"; projectId: number; runId: number; target: string };
 
+const STOPPING_RIBBON_MS = 10_000;
+
 type Route =
   | { kind: "home" }
   | { kind: "run"; projectId: number; runId: number; tab: TabId };
@@ -73,6 +75,7 @@ export function ShellPage(props: ShellPageProps) {
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [runOverrides, setRunOverrides] = useState<Record<string, Run>>({});
+  const [stopTransitions, setStopTransitions] = useState<Record<string, number>>({});
 
   useEffect(() => {
     const handler = () => setRoute(parseRoute(window.location.hash));
@@ -189,14 +192,29 @@ export function ShellPage(props: ShellPageProps) {
   }
 
   async function handleStop(projectId: number, runId: number) {
+    const key = `${projectId}:${runId}`;
+    const requestedAt = Date.now();
+    setStopTransitions((current) => ({ ...current, [key]: requestedAt }));
+    window.setTimeout(() => {
+      setStopTransitions((current) => {
+        if (current[key] !== requestedAt) return current;
+        const next = { ...current };
+        delete next[key];
+        return next;
+      });
+    }, STOPPING_RIBBON_MS);
     try {
       const stopped = await stopRun(token, projectId, runId);
-      const key = `${projectId}:${runId}`;
       setRunOverrides((current) => ({ ...current, [key]: stopped }));
       if (onRefreshProjects) {
         await onRefreshProjects();
       }
     } catch (err) {
+      setStopTransitions((current) => {
+        const next = { ...current };
+        delete next[key];
+        return next;
+      });
       console.warn("stop failed:", err);
     }
   }
@@ -277,6 +295,7 @@ export function ShellPage(props: ShellPageProps) {
             run={selected}
             runtimeLabel={runtimeLabel}
             currentPhase={summary?.overview.current_phase ?? null}
+            stopRequestedAt={stopTransitions[`${selected.__projectId}:${selected.id}`] ?? null}
             onStop={() => void handleStop(selected.__projectId, selected.id)}
           >
             {summaryError && summary && (

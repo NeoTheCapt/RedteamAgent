@@ -6,6 +6,7 @@ type RunPanelProps = {
   run: Run;
   runtimeLabel?: string;
   currentPhase?: string | null;
+  stopRequestedAt?: number | null;
   onStop?: () => void | Promise<void>;
   children: ReactNode;
 };
@@ -28,26 +29,34 @@ function badgeLabel(run: Run, currentPhase?: string | null): string | null {
   return normalizedStatus || null;
 }
 
-export function RunPanel({ run, runtimeLabel, currentPhase, onStop, children }: RunPanelProps) {
+export function RunPanel({
+  run,
+  runtimeLabel,
+  currentPhase,
+  stopRequestedAt = null,
+  onStop,
+  children,
+}: RunPanelProps) {
   const state = ribbonState(run);
   const [stopping, setStopping] = useState(false);
-  const [stopRequestedAt, setStopRequestedAt] = useState<number | null>(null);
-  const stopTransitioning = stopRequestedAt !== null;
+  const [localStopRequestedAt, setLocalStopRequestedAt] = useState<number | null>(null);
+  const effectiveStopRequestedAt = stopRequestedAt ?? localStopRequestedAt;
+  const stopTransitioning = effectiveStopRequestedAt !== null;
   const visualState = stopTransitioning ? "stopped" : state;
   const isRunning = state === "active" && !stopTransitioning;
   const label = stopTransitioning ? "STOPPING" : badgeLabel(run, currentPhase);
 
   useEffect(() => {
-    if (stopRequestedAt === null) return;
-    const remaining = Math.max(0, STOPPING_RIBBON_MS - (Date.now() - stopRequestedAt));
-    const timer = window.setTimeout(() => setStopRequestedAt(null), remaining);
+    if (localStopRequestedAt === null) return;
+    const remaining = Math.max(0, STOPPING_RIBBON_MS - (Date.now() - localStopRequestedAt));
+    const timer = window.setTimeout(() => setLocalStopRequestedAt(null), remaining);
     return () => window.clearTimeout(timer);
-  }, [stopRequestedAt]);
+  }, [localStopRequestedAt]);
 
   async function handleStopClick() {
     if (stopping || !onStop) return;
     setStopping(true);
-    setStopRequestedAt(Date.now());
+    setLocalStopRequestedAt(Date.now());
     try {
       await onStop();
     } finally {
