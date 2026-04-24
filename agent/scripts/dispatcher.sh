@@ -31,6 +31,16 @@ sql() {
   sqlite3 "$DB" ".timeout 5000" "$1"
 }
 
+ensure_cases_column() {
+  local name="$1"
+  local definition="$2"
+  local present
+  present="$(sql "SELECT COUNT(*) FROM pragma_table_info('cases') WHERE name='${name}';" 2>/dev/null || printf '0')"
+  if [[ "${present:-0}" != "1" ]]; then
+    sql "ALTER TABLE cases ADD COLUMN ${name} ${definition};" 2>/dev/null || true
+  fi
+}
+
 is_bookkeeping_suffix_token() {
   case "$1" in
     operator|recon-specialist|source-analyzer|vulnerability-analyst|exploit-developer|fuzzer|osint-analyst|report-writer|done|error|pending|processing|requeued|completed|skipped)
@@ -219,7 +229,8 @@ EOF
   esac
 }
 
-# Auto-migrate: add retry_count column if missing
+# Auto-migrate legacy dispatcher columns when resuming older cases.db snapshots.
+ensure_cases_column "consumed_at" "TEXT"
 sql "ALTER TABLE cases ADD COLUMN retry_count INTEGER DEFAULT 0;" 2>/dev/null || true
 
 case "$ACTION" in
@@ -286,6 +297,7 @@ case "$ACTION" in
     ;;
 
   migrate)
+    ensure_cases_column "consumed_at" "TEXT"
     sql "ALTER TABLE cases ADD COLUMN retry_count INTEGER DEFAULT 0;" 2>/dev/null || true
     ;;
 
