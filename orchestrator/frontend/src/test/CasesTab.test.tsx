@@ -92,6 +92,27 @@ describe("CasesTab", () => {
     });
   });
 
+  it("opens side panel when a focused row is activated with Enter", async () => {
+    const user = userEvent.setup();
+    mockList.mockResolvedValue([mkCase({ case_id: 9, path: "/api/keyboard" })]);
+    mockGet.mockResolvedValue(mkCase({ case_id: 9, path: "/api/keyboard" }));
+
+    render(<CasesTab token="t" projectId={1} runId={2} />);
+    await waitFor(() => screen.getByText("/api/keyboard"));
+
+    await user.tab();
+    await user.tab();
+    await user.tab();
+    await user.tab();
+    await user.tab();
+
+    const dataRow = screen.getAllByRole("row")[1];
+    await waitFor(() => expect(dataRow).toHaveFocus());
+
+    await user.keyboard("{Enter}");
+    await waitFor(() => expect(screen.getByLabelText(/^Case 9$/)).toBeInTheDocument());
+  });
+
   it("syncs filters to the URL hash", async () => {
     mockList.mockResolvedValue([]);
     render(<CasesTab token="t" projectId={1} runId={2} />);

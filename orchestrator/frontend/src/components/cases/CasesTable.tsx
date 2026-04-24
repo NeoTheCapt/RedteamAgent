@@ -1,3 +1,4 @@
+import { useRef } from "react";
 import type { Case } from "../../lib/api";
 import { formatDuration } from "../../lib/formatDuration";
 
@@ -19,6 +20,21 @@ function stateGlyph(state: string): string {
 }
 
 export function CasesTable({ cases, selectedId, onSelect }: CasesTableProps) {
+  const suppressClickCaseIdRef = useRef<number | null>(null);
+
+  function selectFromPointer(caseId: number) {
+    if (suppressClickCaseIdRef.current === caseId) {
+      suppressClickCaseIdRef.current = null;
+      return;
+    }
+    onSelect(caseId);
+  }
+
+  function selectFromKeyboard(caseId: number) {
+    suppressClickCaseIdRef.current = caseId;
+    onSelect(caseId);
+  }
+
   return (
     <div className="cases-table-wrap">
       <table className="cases-table" role="grid">
@@ -47,13 +63,13 @@ export function CasesTable({ cases, selectedId, onSelect }: CasesTableProps) {
                 key={c.case_id}
                 role="row"
                 className={`cases-table__row cases-table__row--${c.state} ${selected ? "cases-table__row--selected" : ""}`}
-                onClick={() => onSelect(c.case_id)}
+                onClick={() => selectFromPointer(c.case_id)}
                 tabIndex={0}
                 aria-selected={selected}
                 onKeyDown={(e) => {
                   if (e.key === "Enter" || e.key === " ") {
                     e.preventDefault();
-                    onSelect(c.case_id);
+                    selectFromKeyboard(c.case_id);
                   }
                 }}
               >
