@@ -109,7 +109,7 @@ fi
 
 ## Step 5: Resume Immediately From Real State
 
-Do NOT present a summary and stop. Read state, recover stale work, and continue from the correct phase in the SAME turn.
+Do NOT present a summary and stop. Read state, recover stale work, and continue from the correct phase in the SAME turn. If queue work still remains after any tool call, do NOT emit a wrap-up/status message; immediately make the next advancing tool call instead.
 
 Special-case report-phase resumes for long-lived observation targets: if `current_phase=report` and the recent log already shows the continuous-observation handoff markers above, that is **not** a request for more diagnostics. It is a direct instruction to run `"$SCRIPTS/finalize_engagement.sh" "$ENG_DIR"` immediately as the next action, with no intervening reads or summaries.
 

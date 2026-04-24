@@ -43,3 +43,15 @@ def test_rendered_operator_prompt_keeps_consume_test_serialized(tmp_path: Path) 
     assert "after each dispatched subagent returns" in rendered
     assert "consume-test dispatch is PARALLEL" not in rendered
     assert "parallel dispatch is the default" not in rendered
+
+
+def test_rendered_operator_prompt_bans_nonterminal_wrapup_turns(tmp_path: Path) -> None:
+    _render_repo(tmp_path)
+
+    rendered = (tmp_path / ".opencode" / "prompts" / "agents" / "operator.txt").read_text(encoding="utf-8")
+    resume_cmd = (AGENT_ROOT / ".opencode" / "commands" / "resume.md").read_text(encoding="utf-8")
+
+    expected_line = "If queue work still remains after any tool call, do NOT emit a wrap-up/status message; immediately make the next advancing tool call instead."
+
+    assert expected_line in rendered
+    assert expected_line in resume_cmd
