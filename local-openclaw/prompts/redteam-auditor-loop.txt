@@ -63,7 +63,7 @@ If you sense you're running low on budget (e.g. UI work is taking many tool call
    **Clean-cycle exit (REQUIRED when the codebase actually is clean):** if ALL of the following are true, set `auditor-state.json.exit_status` to `"ok_no_fixes"` and skip to Phase 4 (review) without any commits:
    - prep's `orch_api`, `orch_log`, `orch_feature` sources all have `fail_count == 0` AND no findings
    - `agent_bug` scan surfaced no runs with `status ∉ {queued,running,completed}` AND no tracebacks/runtime_errors in recent engagement logs
-   - `agent_recall` either matches the peak OR is already `deferred` with the standard "no fresh benchmark available" reason
+   - `agent_recall` matches the peak in `local-openclaw/state/benchmark-metrics-history.json` → `targets.<target>.peak.metrics.challenge_recall`. If current < peak it is NOT a clean cycle — see recall investigation rules below
    - all 12 `orch_ui` checks have `result: passed` with screenshot evidence
 
    You are NOT required to invent a finding just to produce a commit. A cycle that correctly identifies "nothing to fix" is a successful cycle. The Discord summary renders `exit_status: ok_no_fixes` differently from `success` so the operator knows the difference. **Do NOT** force a cosmetic commit (rename a variable, bump a test fixture, tweak a CSS color) just to avoid an `ok_no_fixes` result — that pollutes git history and masks the real signal that the codebase is stable.
@@ -77,6 +77,13 @@ If you sense you're running low on budget (e.g. UI work is taking many tool call
      - Finding is `orch_api` for a 401 on `/auth/me`. Evidence is `orchestrator/backend/app/services/runs.py`. A diff that re-renders prompt files is a mismatch.
    - If you genuinely cannot find the right file to touch, mark the finding `deferred` with `reason: "root cause not traced within this cycle's budget"`. Do NOT substitute a tangentially-related rewrite just to produce a commit.
    - Reference: cycle `20260423T134501Z` committed `8aed200` "rerender operator prompts" as the fix for FND-001 (a `queue_incomplete` classification bug in `launcher.py`). The commit touched zero orchestrator backend files and actively regressed prior parallel_dispatch rules. That is the anti-pattern this rule exists to prevent.
+
+   **Low recall is a bug — investigate and fix, do NOT default-defer:**
+   - The authoritative peak lives in `local-openclaw/state/benchmark-metrics-history.json` → `targets.<target>.peak.metrics.challenge_recall`. Do not scrape peak from `recall-analysis/*.md` or `latest-context.md` — those contain ephemeral scoring that has mis-led prior cycles (e.g. cycles citing peak 0.162 were all wrong; real history peak is 0.117).
+   - When current recall < peak recall, produce a commit-worthy fix in Phase 2. The fact that you cannot re-run the benchmark THIS cycle does not make this finding undiagnosable — it means you verify with `reverify_scope: pending_new_run` and let the next cycle's natural recall event confirm.
+   - Investigation must produce at least TWO of: (a) solved-challenge diff peak vs now from `recall-analysis/<latest>.md`, (b) `grep -rn "<regressed challenge>" agent/skills/` to map to owning skill + `git log -p` on that SKILL.md, (c) engagement `log.md` evidence that the right subagent/skill is or isn't being dispatched for the regressed category, (d) check for a prior audit commit that may have wiped a dispatch rule (F2 cross-cycle check).
+   - Commit targets: missing skill methodology step, regressed dispatch rule in `agent/.opencode/prompts/agents/operator.txt`, a bug in `scripts/append_surface_jsonl.sh` / `dispatcher.sh` / `case-dispatching/SKILL.md`, or a skill checklist gap for the regressed challenge class.
+   - Defer with reason "no fresh benchmark available" is NOT acceptable — you are not confirming the fix by re-running the benchmark; you are shipping a root-cause fix and the next cycle's natural scoring confirms.
 
    **Severity priority rule (non-negotiable):** sort all open findings by severity `critical > high > medium > low`, then tackle them in that order. You may NOT commit a fix for a `medium` finding while a `high` or `critical` finding is still `status: open`, even if the higher-severity one looks harder or requires backend investigation. If a `high`/`critical` finding cannot be fixed within this cycle, you MUST document the blocker in its `reason` field and mark it `deferred: true`; only then are lower-severity fixes permitted.
 

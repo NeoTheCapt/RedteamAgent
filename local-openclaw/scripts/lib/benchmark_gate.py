@@ -85,12 +85,48 @@ def mode_update_history(context_path: Path, history_path: Path, target: str,
     })
     records = records[-max_records:]
 
+    # Peak is maintained monotonically — once a recall value lands as the
+    # highest observed, we stick it in `peak` forever (until a higher one
+    # comes along). History is trimmed to the last N entries for size, so
+    # computing peak from the trimmed tail alone would silently drop the
+    # true peak as older entries rotate out. Prior behavior had NO peak
+    # field at all, which caused the auditor to invent peak values from
+    # scraped text across 8 different cycles (0.036 / 0.063 / 0.117 / 0.162
+    # reported for the SAME target).
+    def _recall_float(rec_or_metrics) -> float:
+        if rec_or_metrics is None:
+            return 0.0
+        m = rec_or_metrics if isinstance(rec_or_metrics, dict) and 'challenge_recall' in rec_or_metrics \
+            else (rec_or_metrics.get('metrics') or {} if isinstance(rec_or_metrics, dict) else {})
+        try:
+            return float(m.get('challenge_recall') or '0')
+        except (TypeError, ValueError):
+            return 0.0
+
+    # Current record is the last one just appended.
+    current_record = records[-1]
+    current_recall = _recall_float(current_record)
+
+    # Preserve existing peak if present; only overwrite when current beats it.
+    existing_peak = current.get('peak')
+    existing_peak_recall = _recall_float(existing_peak) if existing_peak else 0.0
+    if current_recall > existing_peak_recall:
+        peak_block = {
+            'cycle_id': current_record.get('cycle_id'),
+            'updated_at': current_record.get('updated_at'),
+            'metrics': current_record.get('metrics'),
+        }
+    else:
+        peak_block = existing_peak
+
     payload[target] = {
         'updated_at': records[-1]['updated_at'],
         'cycle_id': cycle_id,
         'last_metrics': metrics,
         'history': records,
     }
+    if peak_block is not None:
+        payload[target]['peak'] = peak_block
 
     history_path.write_text(
         json.dumps(history, indent=2, ensure_ascii=False) + '\n',

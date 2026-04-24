@@ -265,6 +265,47 @@ else:
             note_part = f"（{note}）" if note else ""
             phase1.append(f"  - {cid} {name}: {res_zh}{note_part}")
 
+# recall: 当前 / 峰值 / Δ — pulled from benchmark-metrics-history.json, which
+# benchmark_gate.py now stores with a sticky `peak` field so all cycles see
+# the same authoritative peak (prior behavior let Hermes scrape peak from
+# ephemeral scan-optimizer docs, yielding 4 different peak values for the
+# same target across 8 cycles).
+if isinstance(bench_doc, dict):
+    tgt = (bench_doc.get("targets") or {}).get(local_target) if local_target else None
+    if not tgt:
+        # Fall back to the first target if OPENCLAW_TARGET_LOCAL wasn't set.
+        tgts = bench_doc.get("targets") or {}
+        tgt = next(iter(tgts.values()), None) if tgts else None
+    if isinstance(tgt, dict):
+        last = tgt.get("last_metrics") or {}
+        peak = tgt.get("peak") or {}
+        def _num(s, kind=float):
+            try: return kind(s)
+            except (TypeError, ValueError): return None
+        cur_recall = _num(last.get("challenge_recall"))
+        cur_solved = _num(last.get("solved_challenges"), int)
+        cur_total  = _num(last.get("total_challenges"), int)
+        peak_metrics = peak.get("metrics") or {}
+        pk_recall = _num(peak_metrics.get("challenge_recall"))
+        pk_solved = _num(peak_metrics.get("solved_challenges"), int)
+        pk_total  = _num(peak_metrics.get("total_challenges"), int)
+        if cur_recall is not None or pk_recall is not None:
+            parts = []
+            if cur_recall is not None and cur_solved is not None and cur_total is not None:
+                parts.append(f"当前 {cur_solved}/{cur_total} ({cur_recall:.3f})")
+            elif cur_recall is not None:
+                parts.append(f"当前 {cur_recall:.3f}")
+            if pk_recall is not None and pk_solved is not None and pk_total is not None:
+                pcyc = peak.get("cycle_id") or "?"
+                parts.append(f"峰值 {pk_solved}/{pk_total} ({pk_recall:.3f}) @ {pcyc[:15]}")
+            elif pk_recall is not None:
+                parts.append(f"峰值 {pk_recall:.3f}")
+            if cur_recall is not None and pk_recall is not None:
+                delta = cur_recall - pk_recall
+                sign = "+" if delta >= 0 else ""
+                parts.append(f"Δ {sign}{delta:.3f}")
+            phase1.append("recall: " + "   ".join(parts))
+
 # 汇总: N 项（高×1, 中×2; Agent bug×2, Agent 召回×1）
 def _discovery_count(doc):
     if not doc:

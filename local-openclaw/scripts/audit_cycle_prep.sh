@@ -146,12 +146,16 @@ echo "[$(timestamp)] findings-before.json written: $total_findings total finding
 # ---------------------------------------------------------------------------
 PERSIST_FILE="$STATE_DIR/persistent-findings.json"
 if [[ -f "$PERSIST_FILE" ]]; then
-    python3 - "$AUDIT_DIR/findings-before.json" "$PERSIST_FILE" <<'PYEOF'
+    python3 - "$AUDIT_DIR/findings-before.json" "$PERSIST_FILE" "$ROOT_DIR/audit-reports" "$CYCLE_ID" <<'PYEOF'
 import json, sys
 from pathlib import Path
 
 findings_path = Path(sys.argv[1])
 persist_path  = Path(sys.argv[2])
+reports_root  = Path(sys.argv[3])
+current_cycle = sys.argv[4]
+STALENESS_LOOKBACK = 5  # if fingerprint was fixed in any of last N cycles, treat seed as stale
+
 try:
     base = json.loads(findings_path.read_text())
 except Exception:
@@ -165,9 +169,48 @@ persisted = persist.get("findings") or []
 if not persisted:
     sys.exit(0)
 
+# Staleness check: for each seed, look at the last N cycles' findings-after.json.
+# If the same fingerprint was marked `fixed` AND the fix commit is still in HEAD
+# history, the seed is stale — skip injection so we don't manufacture phantom
+# findings. Hermes will naturally re-detect the bug via prep's live scans if
+# it's actually still broken.
+def fingerprint_already_fixed(fp: str) -> tuple[bool, str]:
+    if not fp:
+        return (False, "")
+    cycle_dirs = sorted(
+        [p for p in reports_root.iterdir()
+         if p.is_dir() and p.name.startswith("2026")
+            and not p.name.endswith("-reverify")
+            and p.name != current_cycle],
+        reverse=True,
+    )[:STALENESS_LOOKBACK]
+    for cdir in cycle_dirs:
+        after_path = cdir / "findings-after.json"
+        if not after_path.exists():
+            continue
+        try:
+            doc = json.loads(after_path.read_text())
+        except Exception:
+            continue
+        for f in (doc.get("findings") or []) + (doc.get("deferred") or []):
+            if f.get("fingerprint") == fp and f.get("status") == "fixed":
+                return (True, f"{cdir.name}/{f.get('commit','?')}")
+    return (False, "")
+
 existing_ids = {f.get("id") for f in base.get("findings") or []}
 existing_ids.update(f.get("id") for f in base.get("deferred") or [])
-new_findings = [f for f in persisted if f.get("id") not in existing_ids]
+
+new_findings = []
+skipped_stale = []
+for seed in persisted:
+    if seed.get("id") in existing_ids:
+        continue
+    fp = seed.get("fingerprint")
+    is_stale, evidence = fingerprint_already_fixed(fp)
+    if is_stale:
+        skipped_stale.append((seed.get("id"), fp, evidence))
+        continue
+    new_findings.append(seed)
 
 if new_findings:
     base.setdefault("findings", []).extend(new_findings)
@@ -177,6 +220,118 @@ if new_findings:
     base["source_tags"] = sorted(sources)
     findings_path.write_text(json.dumps(base, indent=2) + "\n", encoding="utf-8")
     print(f"[merge_persistent] added {len(new_findings)} persistent finding(s) from {persist_path.name}")
+if skipped_stale:
+    for sid, sfp, ev in skipped_stale:
+        print(
+            f"[merge_persistent] SKIP stale seed {sid} (fingerprint {sfp}): "
+            f"already fixed in {ev}. Operator should remove from {persist_path.name}."
+        )
+PYEOF
+fi
+
+# ---------------------------------------------------------------------------
+# Step 4c: Persistent-bug rule enforcement.
+#
+# The skill says: "if a finding has the same fingerprint as one that was
+# `fixed` in a previous cycle, the previous fix didn't actually work. Bump
+# severity by one level. Evidence should list every prior commit that claimed
+# to fix it. Trace the root cause end-to-end, don't just reapply a cosmetic
+# tweak to the same file."
+#
+# Enforcement was purely a judgment call inside Hermes, which reliably
+# failed: cycles 210244Z / 224923Z each wrote a new launcher.py:2704 patch
+# against an already-fixed bug because they never saw the prior fix history.
+# This step makes enforcement deterministic by scanning recent cycles'
+# findings-after.json and mutating the current findings-before.json BEFORE
+# Hermes reads it: escalate severity, inject prior_fixed_commits list,
+# prepend a `PERSISTENT BUG:` line to the reason field.
+# ---------------------------------------------------------------------------
+if [[ -f "$AUDIT_DIR/findings-before.json" ]]; then
+    python3 - "$AUDIT_DIR/findings-before.json" "$ROOT_DIR/audit-reports" "$CYCLE_ID" <<'PYEOF'
+import json, sys
+from pathlib import Path
+
+findings_path = Path(sys.argv[1])
+reports_root  = Path(sys.argv[2])
+current_cycle = sys.argv[3]
+LOOKBACK = 5  # last 5 cycles is enough to catch recurring patterns without blowing the runtime
+
+try:
+    doc = json.loads(findings_path.read_text())
+except Exception:
+    sys.exit(0)
+
+# Build {fingerprint: [(cycle_id, commit_sha), ...]} over prior cycles.
+prior_fixed: dict[str, list[tuple[str, str]]] = {}
+cycle_dirs = sorted(
+    [p for p in reports_root.iterdir()
+     if p.is_dir() and p.name.startswith("2026") and not p.name.endswith("-reverify")
+        and p.name != current_cycle],
+    reverse=True,
+)[:LOOKBACK]
+for cdir in cycle_dirs:
+    after_path = cdir / "findings-after.json"
+    if not after_path.exists():
+        continue
+    try:
+        after = json.loads(after_path.read_text())
+    except Exception:
+        continue
+    for f in (after.get("findings") or []) + (after.get("deferred") or []):
+        if f.get("status") != "fixed":
+            continue
+        fp = f.get("fingerprint")
+        if not fp:
+            continue
+        sha = f.get("commit") or ""
+        prior_fixed.setdefault(fp, []).append((cdir.name, sha))
+
+if not prior_fixed:
+    sys.exit(0)
+
+SEV_ORDER = ["low", "medium", "high", "critical"]
+def bump(sev: str) -> str:
+    s = (sev or "").lower()
+    if s not in SEV_ORDER:
+        return "high"  # unknown → treat as high; persistent bugs are never low
+    idx = SEV_ORDER.index(s)
+    return SEV_ORDER[min(idx + 1, len(SEV_ORDER) - 1)]
+
+escalated = 0
+for f in (doc.get("findings") or []) + (doc.get("deferred") or []):
+    fp = f.get("fingerprint")
+    if not fp or fp not in prior_fixed:
+        continue
+    history = prior_fixed[fp]
+    # Don't double-escalate a finding that's already been marked persistent.
+    if f.get("persistent_bug"):
+        continue
+    orig_sev = f.get("severity")
+    new_sev = bump(orig_sev)
+    f["severity"] = new_sev
+    f["persistent_bug"] = True
+    f["prior_fixed_commits"] = [
+        {"cycle_id": cyc, "commit": sha} for cyc, sha in history
+    ]
+    # Prepend a clear directive to reason so Hermes sees it in Phase 1.
+    shas_str = ", ".join(sha[:7] if sha else "?" for _, sha in history)
+    banner = (
+        f"PERSISTENT BUG: fingerprint {fp} was marked `fixed` in "
+        f"{len(history)} prior cycle(s) by commit(s) [{shas_str}]. "
+        "The fix did NOT hold — do not re-patch the same file cosmetically; "
+        "trace root cause end-to-end (backend state flow, supervisor races, "
+        "stale bytecode, missing restart, seed staleness). If investigation "
+        "shows the code IS actually fixed and the finding is being re-injected "
+        "by a stale seed or cached artifact, mark it `reclassified` with the "
+        "specific stale-source reason. DO NOT make another same-site patch."
+    )
+    existing_reason = (f.get("reason") or "").strip()
+    f["reason"] = banner + (f"\n\nPrior reason: {existing_reason}" if existing_reason else "")
+    escalated += 1
+
+if escalated:
+    findings_path.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
+    print(f"[persistent-bug-rule] escalated {escalated} finding(s) based on prior-cycle fix history")
 PYEOF
 fi
 
