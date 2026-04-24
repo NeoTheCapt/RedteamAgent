@@ -1251,12 +1251,20 @@ def _running_container_stall_reason(run: Run) -> tuple[str, str, str] | None:
     current_phase, total_cases, pending_cases, processing_cases = _load_running_queue_state(engagement_dir)
 
     workflow_activity_at = _latest_running_workflow_activity_at(engagement_dir)
+    active_runtime_agents = _active_runtime_agents(run)
+    has_current_task = _run_metadata_has_current_task(run)
+    has_live_runtime_work_agent = _has_live_runtime_work_agent(
+        active_runtime_agents,
+        has_current_task=has_current_task,
+    )
     workflow_age = (time.time() - workflow_activity_at) if workflow_activity_at is not None else None
     if workflow_age is not None:
         if (
             current_phase not in EARLY_PHASE_STALL_PHASES
             and processing_cases > 0
             and workflow_age >= RUN_STALL_TIMEOUT_SECONDS
+            and not active_runtime_agents
+            and not has_current_task
         ):
             return (
                 current_phase,
@@ -1268,6 +1276,8 @@ def _running_container_stall_reason(run: Run) -> tuple[str, str, str] | None:
             and pending_cases > 0
             and processing_cases == 0
             and workflow_age >= RUN_STALL_TIMEOUT_SECONDS
+            and not active_runtime_agents
+            and not has_current_task
         ):
             return (
                 current_phase,
@@ -1278,12 +1288,6 @@ def _running_container_stall_reason(run: Run) -> tuple[str, str, str] | None:
     runtime_activity_at = _latest_running_runtime_activity_at(run)
     metadata_activity_at = _latest_runtime_metadata_activity_at(run)
     auto_resume_guard_active = _auto_resume_stall_guard_active(run)
-    active_runtime_agents = _active_runtime_agents(run)
-    has_current_task = _run_metadata_has_current_task(run)
-    has_live_runtime_work_agent = _has_live_runtime_work_agent(
-        active_runtime_agents,
-        has_current_task=has_current_task,
-    )
     processing_agents = _load_running_processing_agents(engagement_dir)
     opencode_logs_root = opencode_home_root_for(run) / "log"
     permission_log_paths = [process_log_path_for(run)]

@@ -424,12 +424,16 @@ def _reconcile_run_status(run: Run, project: Project | None = None, user: User |
             stop_run_runtime(failed)
             return failed
         workflow_activity_at = _latest_workflow_activity_at(run, scope_path)
+        active_runtime_agents = _active_runtime_agents(run)
+        has_current_task = _run_metadata_has_current_task(run)
         if workflow_activity_at is not None:
             workflow_age = _utc_now_naive() - workflow_activity_at
             if (
                 current_phase.replace("_", "-") not in EARLY_PHASE_STALL_PHASES
                 and processing_cases > 0
                 and workflow_age >= timedelta(seconds=RUN_STALL_TIMEOUT_SECONDS)
+                and not active_runtime_agents
+                and not has_current_task
             ):
                 failed = db.update_run_status(run.id, "failed")
                 _write_run_terminal_reason(
@@ -448,6 +452,8 @@ def _reconcile_run_status(run: Run, project: Project | None = None, user: User |
                 and pending_cases > 0
                 and processing_cases == 0
                 and workflow_age >= timedelta(seconds=RUN_STALL_TIMEOUT_SECONDS)
+                and not active_runtime_agents
+                and not has_current_task
             ):
                 failed = db.update_run_status(run.id, "failed")
                 _write_run_terminal_reason(
@@ -461,7 +467,6 @@ def _reconcile_run_status(run: Run, project: Project | None = None, user: User |
                 stop_run_runtime(failed)
                 return failed
 
-        active_runtime_agents = _active_runtime_agents(run)
         auto_resume_guard_active = _auto_resume_stall_guard_active(run)
         processing_agents = _load_processing_agents(scope_path)
         opencode_logs_root = opencode_home_root_for(run) / "log"
