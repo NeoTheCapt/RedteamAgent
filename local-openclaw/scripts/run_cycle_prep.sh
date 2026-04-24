@@ -150,29 +150,71 @@ verify_fixed_target_runs() {
     return "$needs_rebuild"
 }
 
+# Distinguish run-state drift (no active run, wrong active count) from
+# projection drift (summary/observed-path mismatch with DB). Only the
+# latter is fixable by restarting/rebuilding uvicorn — the former is fixed
+# by recover_abnormal_runs below (API call, no image rebuild needed).
+# Before this split, both classes triggered `run.sh --rebuild`, and every
+# time a target had no active run it rebuilt redteam-allinone (7.5 GB) for
+# nothing. Over ~2 weeks that garbage filled 160 GB of disk and took
+# OrbStack with it.
+has_projection_drift() {
+    refresh_runs_json || return 0  # no data → no drift claim
+    local okx_id local_id
+    okx_id="$(latest_run_id_for_target "$TARGET_OKX")"
+    local_id="$(latest_run_id_for_target "$TARGET_LOCAL")"
+    local okx_active local_active
+    okx_active="$(active_run_count_for_target "$TARGET_OKX")"
+    local_active="$(active_run_count_for_target "$TARGET_LOCAL")"
+    if (( okx_active > 0 )); then
+        verify_live_projection "$okx_id" "okx" || return 1
+    fi
+    if (( local_active > 0 )); then
+        verify_live_projection "$local_id" "local" || return 1
+    fi
+    return 0
+}
+
 if [[ "$REFRESH_ORCHESTRATOR" == "1" ]]; then
-    # Check if orchestrator is already healthy before restarting
-    if orchestrator_curl "$ORCH_BASE_URL/projects/$PROJECT_ID/runs" >/dev/null 2>&1 && verify_fixed_target_runs; then
+    # Only restart when orchestrator is unreachable OR a LIVE projection
+    # is genuinely drifted. Run-state anomalies (no run, wrong count) are
+    # deferred to recover_abnormal_runs so we don't pay for a rebuild when
+    # the real fix is a POST /runs API call.
+    if ! orchestrator_curl "$ORCH_BASE_URL/projects/$PROJECT_ID/runs" >/dev/null 2>&1; then
+        echo "[$(timestamp)] orchestrator unreachable; restarting..."
+        needs_restart=1
+    elif ! has_projection_drift; then
         echo "[$(timestamp)] orchestrator healthy and projections clean; skipping restart"
+        needs_restart=0
     else
-        echo "[$(timestamp)] orchestrator not responding or projection drift detected; restarting..."
+        echo "[$(timestamp)] projection drift detected; restarting..."
+        needs_restart=1
+    fi
+
+    if [[ "${needs_restart:-0}" == "1" ]]; then
         (
             cd "$REPO_DIR"
             ./orchestrator/stop.sh >/dev/null 2>&1 || true
             ./orchestrator/run.sh
         ) | tee "$LOGS_DIR/orchestrator-refresh.log"
 
-        if ! verify_fixed_target_runs; then
-            echo "[$(timestamp)] plain restart left summary/observed-path drift; rebuilding orchestrator..." | tee -a "$LOGS_DIR/orchestrator-refresh.log"
+        # Rebuild is now LAST RESORT — only when a plain restart can't bring
+        # the orchestrator back up AND projection is still drifted. Rebuilding
+        # agent/docker/redteam-allinone cannot fix uvicorn's in-memory state,
+        # and it never fixes "no run exists"; those were the two 90% cases
+        # that used to push us into the rebuild branch.
+        if ! orchestrator_curl "$ORCH_BASE_URL/healthz" >/dev/null 2>&1; then
+            echo "[$(timestamp)] orchestrator still unreachable after restart; rebuilding image as last resort..." | tee -a "$LOGS_DIR/orchestrator-refresh.log"
             (
                 cd "$REPO_DIR"
                 ./orchestrator/stop.sh >/dev/null 2>&1 || true
                 ./orchestrator/run.sh --rebuild
             ) | tee -a "$LOGS_DIR/orchestrator-refresh.log"
-
-            if ! verify_fixed_target_runs; then
-                echo "[$(timestamp)] fixed-target verification still reports anomalies after rebuild; continuing into recover_abnormal_runs instead of aborting prep" >&2
+            if ! orchestrator_curl "$ORCH_BASE_URL/healthz" >/dev/null 2>&1; then
+                echo "[$(timestamp)] orchestrator unreachable even after rebuild; continuing into recover_abnormal_runs but prep is degraded" >&2
             fi
+        elif has_projection_drift; then
+            echo "[$(timestamp)] projection still drifted after restart; leaving to recover_abnormal_runs (rebuild would not fix live projection drift)" >&2
         fi
     fi
 fi

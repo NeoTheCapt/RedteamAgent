@@ -1319,6 +1319,18 @@ PY
   fi
 fi
 
+# Layer 1 disk hygiene: each cycle's `run.sh --rebuild` (when prep detects
+# fixed-target drift) produces a new 7.5GB redteam-allinone image and turns
+# the old one into dangling layers. Without this prune, OrbStack's disk
+# filled to 160 GB of garbage over ~2 weeks and the daemon crashed, taking
+# down every audit cycle with it. Prune is idempotent: only touches dangling
+# layers + build cache beyond 2 GB; never removes a tagged image in use.
+if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+  pruned_images=$(docker image prune -f 2>/dev/null | awk '/Total reclaimed space/ {print}')
+  pruned_cache=$(docker builder prune -f --keep-storage 2GB 2>/dev/null | awk '/Total/ {print}')
+  log "docker prune: ${pruned_images:-nothing}${pruned_images:+ / }${pruned_cache:-no cache}"
+fi
+
 log "cycle finished with status=$cycle_status report=$report_path"
 
 case "$cycle_status" in
