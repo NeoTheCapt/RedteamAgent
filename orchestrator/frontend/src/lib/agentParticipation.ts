@@ -18,38 +18,51 @@ export type AgentCoverageSummary = {
   text: string;
 };
 
+function inferTrackedAgentCount(
+  agent: { agent_name: string; status: string; parallel_count?: number | null },
+  parallelByDispatch: Map<string, number>,
+): number {
+  const fromDispatches = parallelByDispatch.get(agent.agent_name) ?? 0;
+  const fromBackend = agent.parallel_count ?? 0;
+  const touchedRun = agent.status !== "idle" && agent.status !== "";
+  if (fromDispatches > 0) return fromDispatches;
+  if (fromBackend > 0) return fromBackend;
+  return touchedRun ? 1 : 0;
+}
+
 export function summarizeAgentParticipation(
   summary: Pick<RunSummary, "overview" | "agents">,
   dispatches: Dispatch[],
 ): AgentParticipation {
-  // Unified source of agent concurrency counts. Priority (matches AgentsPanel):
+  // Unified source of tracked participation. Priority (matches AgentsPanel as
+  // closely as possible):
   //   1. Live running Dispatch rows (parallel_dispatch.sh path)
   //   2. summary.agents[].parallel_count from cases.db assigned_agent
-  //   3. Fallback: 1 per active agent from summary.agents
-  // All three end up producing the same {agent_name: count} map, which is
-  // also exactly what Dashboard's KpiRow "Active Agents" now sums. So the
-  // number rendered as "Active Agents: N" and the sum of "×N" in the
-  // breakdown stay in agreement across every surface.
+  //   3. Fallback: 1 for any non-idle agent so completed/failed runs still
+  //      expose which agent types participated after active concurrency drops
+  //      back to zero.
+  // activeTotal still reflects live active concurrency; the breakdown text is
+  // intentionally historical so Dashboard/Progress keep the per-type context.
   const counts = new Map<string, number>();
+  const runningAgents = new Set<string>();
 
   for (const dispatch of dispatches) {
     if (dispatch.state !== "running") continue;
     counts.set(dispatch.agent, (counts.get(dispatch.agent) ?? 0) + 1);
+    runningAgents.add(dispatch.agent);
   }
 
-  if (counts.size === 0) {
-    for (const agent of summary.agents) {
-      if (agent.status !== "active" && agent.status !== "running") continue;
-      const fromBackend = agent.parallel_count ?? 0;
-      counts.set(agent.agent_name, fromBackend > 0 ? fromBackend : 1);
-    }
+  for (const agent of summary.agents) {
+    if (runningAgents.has(agent.agent_name)) continue;
+    const count = inferTrackedAgentCount(agent, new Map());
+    if (count > 0) counts.set(agent.agent_name, count);
   }
 
   const breakdown = Array.from(counts.entries())
     .map(([agent_name, count]) => ({ agent_name, count }))
     .sort((a, b) => (b.count - a.count) || a.agent_name.localeCompare(b.agent_name));
 
-  const activeTotal = breakdown.reduce((sum, item) => sum + item.count, 0) || summary.overview.active_agents;
+  const activeTotal = summary.overview.active_agents;
   const text = breakdown.length > 0
     ? breakdown.map((item) => `${item.count}× ${item.agent_name}`).join(", ")
     : "no active agents";
@@ -68,22 +81,10 @@ export function summarizeTrackedAgentCoverage(
   }
 
   const breakdown = summary.agents
-    .map((agent) => {
-      const isRunning = agent.status === "active" || agent.status === "running";
-      const fromDispatches = parallelByDispatch.get(agent.agent_name) ?? 0;
-      const fromBackend = agent.parallel_count ?? 0;
-      const count = fromDispatches > 0
-        ? fromDispatches
-        : fromBackend > 0
-          ? fromBackend
-          : isRunning
-            ? 1
-            : 0;
-      return {
-        agent_name: agent.agent_name,
-        count,
-      };
-    })
+    .map((agent) => ({
+      agent_name: agent.agent_name,
+      count: inferTrackedAgentCount(agent, parallelByDispatch),
+    }))
     .filter((item) => item.count > 0)
     .sort((a, b) => (b.count - a.count) || a.agent_name.localeCompare(b.agent_name));
 

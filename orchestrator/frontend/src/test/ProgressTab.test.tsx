@@ -270,4 +270,63 @@ describe("ProgressTab", () => {
       expect(meta).not.toHaveTextContent(/full breakdown on the Dashboard tab/i);
     });
   });
+
+  it("keeps completed agents in the progress breakdown after a run fails", async () => {
+    mockDispatches.mockResolvedValue([]);
+    mockCases.mockResolvedValue([]);
+    const base = mkSummary();
+
+    render(
+      <ProgressTab
+        token="t"
+        projectId={1}
+        runId={2}
+        currentPhase="recon"
+        summary={mkSummary({
+          target: {
+            ...base.target,
+            status: "failed",
+          },
+          overview: {
+            ...base.overview,
+            active_agents: 0,
+            current_phase: "recon",
+          },
+          agents: [
+            {
+              agent_name: "operator",
+              phase: "recon",
+              status: "completed",
+              task_name: "bash",
+              summary: "Shows dispatcher queue statistics completed",
+              updated_at: "2026-04-17 00:11:48",
+            },
+            {
+              agent_name: "recon-specialist",
+              phase: "recon",
+              status: "completed",
+              task_name: "recon-specialist",
+              summary: "Recon target completed",
+              updated_at: "2026-04-17 00:09:59",
+            },
+            {
+              agent_name: "source-analyzer",
+              phase: "recon",
+              status: "completed",
+              task_name: "source-analyzer",
+              summary: "Analyze source completed",
+              updated_at: "2026-04-17 00:11:02",
+            },
+          ],
+        })}
+      />,
+    );
+
+    await waitFor(() => {
+      const meta = screen.getByLabelText("Agent participation summary");
+      expect(meta).toHaveTextContent("0 agents active");
+      expect(meta).toHaveTextContent("3 agent types tracked");
+      expect(meta).toHaveTextContent("1× operator, 1× recon-specialist, 1× source-analyzer");
+    });
+  });
 });

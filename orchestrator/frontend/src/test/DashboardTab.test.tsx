@@ -127,4 +127,31 @@ describe("DashboardTab", () => {
       expect(screen.getByText(/of 5 · 2× vulnerability-analyst, 1× source-analyzer/)).toBeInTheDocument();
     });
   });
+
+  it("keeps the dashboard participation breakdown visible after agents complete", async () => {
+    mockDispatches.mockResolvedValue([]);
+
+    render(
+      <DashboardTab
+        token="t"
+        projectId={1}
+        runId={2}
+        summary={mkSummary({
+          overview: {
+            ...mkSummary().overview,
+            active_agents: 0,
+          },
+          agents: [
+            { agent_name: "operator", phase: "recon", status: "completed", task_name: "bash", summary: "Recon summary", updated_at: "2026-04-17 00:11:00" },
+            { agent_name: "recon-specialist", phase: "recon", status: "completed", task_name: "recon", summary: "Recon target completed", updated_at: "2026-04-17 00:10:00" },
+            { agent_name: "source-analyzer", phase: "recon", status: "completed", task_name: "source", summary: "Analyze source completed", updated_at: "2026-04-17 00:10:30" },
+          ],
+        })}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText(/of 5 · 1× operator, 1× recon-specialist, 1× source-analyzer/)).toBeInTheDocument();
+    });
+  });
 });
