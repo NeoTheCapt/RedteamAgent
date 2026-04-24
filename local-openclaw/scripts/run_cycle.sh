@@ -1171,12 +1171,31 @@ if [[ "${OPENCLAW_SKILL:-}" == "redteam-auditor-hermes" ]]; then
   artifact_exit=$?
 
   regression_exit=0
+  regression_json="$cycle_dir/cross-cycle-regression.json"
   if [[ -n "${before_commit:-}" ]]; then
     python3 "$ROOT_DIR/scripts/check_regression_against_prior_cycles.py" \
         "$before_commit" \
         --lookback 30 \
+        --json-out "$regression_json" \
         2> "$regression_log" >/dev/null
     regression_exit=$?
+  fi
+
+  # Revert cooling-off validator: when the cycle diff deletes lines that a
+  # prior `fix(audit-*)` commit added, every fixed finding in the cycle must
+  # carry concrete `evidence.regression_evidence` (recall drop cycle id,
+  # failing test output, log path:line, or cases.db outcome). Prose-only
+  # justifications in review.md's ## Cross-cycle deletions section are
+  # acknowledged but not sufficient — they allowed four consecutive flip-
+  # flops between parallel/serialized dispatch rules inside 21h.
+  revert_log="$cycle_dir/revert-evidence.log"
+  revert_exit=0
+  if [[ -n "${before_commit:-}" ]] && [[ -f "$regression_json" ]]; then
+    python3 "$ROOT_DIR/scripts/validate_revert_evidence.py" \
+        "$cycle_id" \
+        --baseline-sha "${before_commit:-}" \
+        2> "$revert_log" >/dev/null
+    revert_exit=$?
   fi
   set -e
 
@@ -1188,8 +1207,11 @@ if [[ "${OPENCLAW_SKILL:-}" == "redteam-auditor-hermes" ]]; then
   if [[ $regression_exit -ne 0 ]]; then
     log "cross-cycle regression check flagged deleted prior-audit lines; see $regression_log"
   fi
+  if [[ $revert_exit -ne 0 ]]; then
+    log "revert cooling-off: fixed findings lack concrete regression_evidence; see $revert_log"
+  fi
 
-  if [[ $artifact_exit -ne 0 || $regression_exit -ne 0 ]]; then
+  if [[ $artifact_exit -ne 0 || $regression_exit -ne 0 || $revert_exit -ne 0 ]]; then
     if [[ "$cycle_status" == "success" || "$cycle_status" == "success_with_openclaw_error" ]]; then
       cycle_status="success_with_dirty_artifacts"
     fi

@@ -31,6 +31,7 @@ Heuristic:
 from __future__ import annotations
 
 import argparse
+import json
 import subprocess
 import sys
 from collections import defaultdict
@@ -131,6 +132,9 @@ def main(argv: list[str]) -> int:
                         help="commit that was HEAD at the start of the cycle")
     parser.add_argument("--lookback", type=int, default=30,
                         help="how many commits before baseline to scan for prior audit fixes (default 30)")
+    parser.add_argument("--json-out", default=None,
+                        help="also write a structured JSON summary to this path (consumed by "
+                             "validate_revert_evidence.py to enforce the revert cooling-off rule)")
     args = parser.parse_args(argv)
 
     cycle_commits = commits_in_range(f"{args.baseline_sha}..HEAD")
@@ -161,6 +165,19 @@ def main(argv: list[str]) -> int:
             sha = prior_for_file.get(line)
             if sha:
                 regressions.append((fp, line, sha))
+
+    if args.json_out:
+        Path(args.json_out).write_text(
+            json.dumps({
+                "baseline_sha": args.baseline_sha,
+                "regressions": [
+                    {"file": fp, "line": line, "prior_commit": sha}
+                    for fp, line, sha in regressions
+                ],
+                "prior_commit_shas": sorted({sha for _, _, sha in regressions}),
+            }, indent=2) + "\n",
+            encoding="utf-8",
+        )
 
     if not regressions:
         print("[regression-check] no prior-audit lines removed by this cycle", file=sys.stderr)
