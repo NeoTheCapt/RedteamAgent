@@ -1211,7 +1211,12 @@ if [[ "${OPENCLAW_SKILL:-}" == "redteam-auditor-hermes" ]]; then
   artifact_exit=$?
 
   regression_exit=0
-  regression_json="$cycle_dir/cross-cycle-regression.json"
+  # Write to audit-reports dir (not logs) so validate_revert_evidence.py
+  # can find it. The two dirs had diverged; cycle 20260424T160049Z was the
+  # first to trip this mismatch — F2 wrote to logs/, the revert validator
+  # looked in audit-reports/, and every violation slipped through.
+  regression_json="$ROOT_DIR/audit-reports/$cycle_id/cross-cycle-regression.json"
+  mkdir -p "$(dirname "$regression_json")"
   if [[ -n "${before_commit:-}" ]]; then
     python3 "$ROOT_DIR/scripts/check_regression_against_prior_cycles.py" \
         "$before_commit" \
