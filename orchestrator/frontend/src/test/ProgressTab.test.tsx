@@ -230,4 +230,44 @@ describe("ProgressTab", () => {
       expect(screen.getAllByText(/Report path \/tmp\/engagement\/report.md/).length).toBeGreaterThan(0);
     });
   });
+
+  it("keeps the progress-tab participation breakdown visible even after active agents drop to zero", async () => {
+    mockDispatches.mockResolvedValue([]);
+    mockCases.mockResolvedValue([]);
+    const base = mkSummary();
+
+    render(
+      <ProgressTab
+        token="t"
+        projectId={1}
+        runId={2}
+        currentPhase="consume"
+        summary={mkSummary({
+          overview: {
+            ...base.overview,
+            active_agents: 0,
+          },
+          agents: [
+            {
+              agent_name: "vulnerability-analyst",
+              phase: "consume-test",
+              status: "idle",
+              task_name: "triage",
+              summary: "Test authenticated API batch",
+              updated_at: "2026-04-17 00:10:00",
+              parallel_count: 3,
+            },
+          ],
+        })}
+      />,
+    );
+
+    await waitFor(() => {
+      const meta = screen.getByLabelText("Agent participation summary");
+      expect(meta).toHaveTextContent("0 agents active");
+      expect(meta).toHaveTextContent("1 agent type tracked");
+      expect(meta).toHaveTextContent("3× vulnerability-analyst");
+      expect(meta).not.toHaveTextContent(/full breakdown on the Dashboard tab/i);
+    });
+  });
 });

@@ -2,7 +2,7 @@ import { useState, useMemo } from "react";
 import type { Case, Dispatch, RunSummary } from "../../lib/api";
 import { listDispatches, listCases } from "../../lib/api";
 import { useAutoRefresh } from "../../lib/useAutoRefresh";
-import { summarizeAgentParticipation } from "../../lib/agentParticipation";
+import { summarizeAgentParticipation, summarizeTrackedAgentCoverage } from "../../lib/agentParticipation";
 import { KanbanColumn } from "./KanbanColumn";
 import "./progress.css";
 
@@ -141,6 +141,11 @@ export function ProgressTab({ token, projectId, runId, currentPhase, summary }: 
     [summary, dispatches],
   );
 
+  const trackedCoverage = useMemo(
+    () => summarizeTrackedAgentCoverage(summary, dispatches),
+    [summary, dispatches],
+  );
+
   return (
     <div className="progress-wrap" data-testid="progress-tab">
       {error && (
@@ -152,7 +157,7 @@ export function ProgressTab({ token, projectId, runId, currentPhase, summary }: 
         <div className="progress__meta-label">Agent participation</div>
         <div className="progress__meta-value">{participation.activeTotal} agents active</div>
         <div className="progress__meta-sub">
-          {participation.text} · full breakdown on the <strong>Dashboard</strong> tab
+          {trackedCoverage.trackedAgents} agent type{trackedCoverage.trackedAgents === 1 ? "" : "s"} tracked · {trackedCoverage.text}
         </div>
       </div>
       <div className="progress__overview" aria-label="Phase overview cards">
