@@ -659,7 +659,32 @@ if p.exists():
     fi
   fi
 
-  if [[ "${OPENCLAW_SKILL:-}" == "redteam-auditor-hermes" ]]; then
+  # Infrastructure-down short-circuit body. Before this, a Docker-down
+  # cycle went silent (Hermes never ran, so extract_auditor_sections
+  # returned nothing, fallback was the blanket "未产出可解析的阶段性结果"
+  # line which tells the operator nothing about WHY). Now the summary
+  # calls out the infrastructure failure directly so recovery isn't gated
+  # on the operator digging through logs.
+  if [[ "$cycle_status" == "skipped_infrastructure_down" ]]; then
+    body=$(cat <<'INFRA'
+基础设施告警: Docker daemon 不可达
+
+本周期在前置检查阶段被中断 —— 未启动 Hermes 会话。
+影响：
+- 无法创建/恢复 orchestrator run
+- 所有依赖容器的审计源（agent_bug 引擎内日志、UI 检查、recall benchmark）此轮无数据
+- F2 / F4 / revert-evidence 校验此轮不运行
+
+立即检查：
+1. OrbStack 是否启动：orbctl status
+2. Docker socket 存在：ls /Users/cis/.orbstack/run/docker.sock
+3. 磁盘是否塞满：docker system df，df -h /
+4. 恢复后 launchd 下一轮（30min）会自动继续
+INFRA
+)
+  fi
+
+  if [[ -z "$body" ]] && [[ "${OPENCLAW_SKILL:-}" == "redteam-auditor-hermes" ]]; then
     body="$(extract_auditor_sections || true)"
   fi
 
@@ -811,6 +836,21 @@ tree_is_dirty() {
 if [[ -z "$OPENCLAW_BIN" ]]; then
   cycle_status="failed_preflight"
   log "openclaw binary not found in PATH"
+elif ! command -v docker >/dev/null 2>&1 || ! docker info >/dev/null 2>&1; then
+  # Infrastructure gate. Without Docker, the orchestrator cannot start
+  # containers, new runs cannot be created, and agent engagements cannot
+  # run. Five consecutive cycles on 2026-04-24 (11:05Z–14:25Z) all exited
+  # with `ok_no_fixes` despite OrbStack being stopped; auditor judged
+  # the empty UI + zero runs as "clean cycle" while the real story was
+  # total infrastructure outage. Short-circuit here so the operator
+  # sees a clear `skipped_infrastructure_down` signal in Discord instead
+  # of silent fake-green.
+  cycle_status="skipped_infrastructure_down"
+  log "docker daemon unreachable; skipping entire cycle (no Hermes session)"
+  docker_err="$(docker info 2>&1 | head -3 || true)"
+  if [[ -n "$docker_err" ]]; then
+    log "docker error: $docker_err"
+  fi
 elif [[ "${OPENCLAW_SKILL:-}" == "redteam-auditor-hermes" \
         && "${ALLOW_DIRTY_TREE:-0}" != "1" ]] && tree_is_dirty; then
   # Auditor isolation: refuse to start against a dirty working tree. Without
