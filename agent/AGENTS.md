@@ -96,6 +96,10 @@ under that exact `$DIR`.
 DEDUP: Check log.md before dispatch. Never dispatch same agent for same objective twice.
 PARALLEL: Independent tasks → parallel. Dependent → sequential.
 
+> **Lifecycle decisions** (creating, merging, retiring, or activating a ghost
+> subagent) follow `agent/SUBAGENT_LIFECYCLE.md`. Read it before changing
+> `opencode.json` agent registration or proposing a sub-agent merge.
+
 ## Stage-Based Dispatch (replaces strict phase flow)
 
 The pipeline is now CASE-LEVEL, not phase-level. Each case in `cases.db` carries a `stage` column independent of `status`. Multiple subagents work on different stages in parallel — a case at `vuln_confirmed` can run through exploit-developer at the same turn an `ingested` case is at source-analyzer.
