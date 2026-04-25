@@ -25,9 +25,6 @@ if [[ -z "$DB" || -z "$ACTION" ]]; then
   echo "  done <id_list> [--stage S]     Mark IDs as done; optional --stage advances pipeline"
   echo "  error <id_list>                Mark comma-separated IDs as error"
   echo "  set-stage <id_list> <stage>    Bulk update stage column (no status change)"
-  echo "  boost-priority <id_list> <delta>"
-  echo "                                 Adjust predicted_value column (signed int);"
-  echo "                                 + delta promotes case to front of next fetch"
   echo "  reset-stale <minutes>          Recover stuck processing cases"
   echo "  retry-errors [max_retries]     Retry error cases (default max: 2)"
   echo "  migrate                        Add missing schema columns (idempotent)"
@@ -235,7 +232,6 @@ ORDER BY
           OR lower(coalesce(nullif(url_path, ''), url)) LIKE '%filter%'
         THEN 25 ELSE 0
       END
-    + coalesce(predicted_value, 0) * 5
   ) DESC,
   id ASC
 EOF
@@ -270,16 +266,12 @@ ensure_cases_column "stage" "TEXT NOT NULL DEFAULT 'ingested'"
 sql "UPDATE cases SET stage='clean' WHERE status='done' AND (stage IS NULL OR stage='ingested' OR stage='');" 2>/dev/null || true
 sql "UPDATE cases SET stage='ingested' WHERE stage IS NULL OR stage='';" 2>/dev/null || true
 
-# Per-case priority hint (optional; used by fetch ordering). Higher = sooner;
-# negative deprioritizes (no `>0` clamp).
-ensure_cases_column "predicted_value" "INTEGER NOT NULL DEFAULT 0"
-
 # Verify migration outcome — surface failures instead of letting downstream
 # code SELECT against a non-existent column. We swallow ALTER TABLE errors
 # above (idempotent re-runs hit "duplicate column name" which is fine), but
 # the column MUST exist after the call; if it doesn't, the DB is corrupt
 # or the user's sqlite3 is too old, and we should fail loudly.
-for required_col in stage predicted_value; do
+for required_col in stage; do
   present="$(sql "SELECT COUNT(*) FROM pragma_table_info('cases') WHERE name='${required_col}';" 2>/dev/null || printf '0')"
   if [[ "${present:-0}" != "1" ]]; then
     echo "FATAL: cases.db missing required column '${required_col}' after migration; aborting." >&2
@@ -495,28 +487,6 @@ case "$ACTION" in
     ID_LIST="$(normalize_id_list "${SET_ARGS[@]}")"
     sql "UPDATE cases SET stage='${NEW_STAGE}' WHERE id IN (${ID_LIST});"
     echo "Set stage=${NEW_STAGE} for: ${ID_LIST}"
-    ;;
-
-  boost-priority)
-    shift 2
-    # Usage: boost-priority <id_list> <delta>
-    # delta is added to predicted_value (signed integer). Subagents emitting
-    # REQUEUE_CANDIDATE with strong signal can call this to push the case
-    # to the front of the next fetch. Operator can also use it to suppress
-    # noise (negative delta).
-    if (($# < 2)); then
-      echo "Usage: dispatcher.sh <db> boost-priority <id_list> <delta>" >&2
-      exit 1
-    fi
-    DELTA="${@: -1}"
-    if ! [[ "$DELTA" =~ ^-?[0-9]+$ ]]; then
-      echo "ERROR: delta must be a signed integer" >&2
-      exit 1
-    fi
-    BOOST_ARGS=("${@:1:$#-1}")
-    ID_LIST="$(normalize_id_list "${BOOST_ARGS[@]}")"
-    sql "UPDATE cases SET predicted_value = COALESCE(predicted_value, 0) + (${DELTA}) WHERE id IN (${ID_LIST});"
-    echo "Adjusted predicted_value by ${DELTA} for: ${ID_LIST}"
     ;;
 
   error)
