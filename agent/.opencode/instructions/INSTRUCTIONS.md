@@ -43,15 +43,20 @@ core network switch. Therefore:
 
 ## Methodology Phases
 
-Follow this general progression, but adapt based on findings. The operator may skip, repeat, or reorder phases as the engagement demands.
+`scope.json.current_phase` is now a *derived label* computed from the case-pipeline
+stage distribution (see `update_phase_from_stages.sh` and operator-core.md
+Stage-Based Dispatch). The five phases below are still useful as a high-level
+mental model for the engagement and as the labels for the OpenCode progress UI,
+but they do NOT gate work — multiple phases run concurrently because cases at
+different stages flow through their assigned subagents in parallel.
 
 | # | Phase | Objective |
 |---|---|---|
-| 1 | **Recon** | Passive/active reconnaissance. Identify tech stack, domains, entry points. Dispatch recon-specialist + source-analyzer in parallel. |
-| 2 | **Collect** | Import discovered endpoints into case queue (cases.db). Start Katana crawler. Show queue stats. This phase runs CONTINUOUSLY in background. |
-| 3 | **Consume & Test** | Main testing loop. Fetch cases from queue by type, dispatch to vulnerability-analyst (API/form) and source-analyzer (JS/CSS). Record findings. New endpoints flow back to queue. |
-| 4 | **Exploit** | For confirmed/high-confidence findings, dispatch exploit-developer (parallel for independent findings). |
-| 5 | **Report** | Generate structured report with all findings, evidence, coverage stats from cases.db. |
+| 1 | **Recon** | Passive/active reconnaissance. Identify tech stack, domains, entry points. Dispatch recon-specialist + source-analyzer in parallel. Re-dispatch on `.auth-respawn-required`. |
+| 2 | **Collect** | Import discovered endpoints into case queue (cases.db) at `stage=ingested`. Start Katana crawler. Runs CONTINUOUSLY in background. |
+| 3 | **Consume & Test** | Streaming dispatch loop. Fetch cases by `(stage, type)` via `fetch-by-stage <stage> <type> <limit> <agent>`: type=api/form/graphql/upload/websocket → vulnerability-analyst; type=javascript/page/stylesheet/data/unknown/api-spec → source-analyzer. Subagents emit `DONE STAGE=<stage>` to advance each case. Multiple `(stage, agent)` pairs may run in the SAME turn. |
+| 4 | **Exploit** | Continuous, not gated. exploit-developer is dispatched on `stage=vuln_confirmed` cases as they appear inside the Phase 3 loop. osint-analyst is triggered separately by `intel_changed_check.sh` writing `.osint-respawn-required`. Phase 4 as a label only marks "exploit-developer in flight"; chain hypotheses and full-findings reviews are ad-hoc dispatches done as residuals once active stages drain. |
+| 5 | **Report** | Generate structured report with all findings, evidence, coverage stats. End-of-cycle dispatch of report-writer; `compose_partial_report.sh` for interim snapshots without subagent cost. |
 
 ## Tool Conventions
 
