@@ -1,4 +1,6 @@
+import { useMemo, useState } from "react";
 import type { Dispatch, RunSummary } from "../../lib/api";
+import { formatDurationSince } from "../../lib/formatDuration";
 import "./agentsPanel.css";
 
 type AgentsPanelProps = {
@@ -14,6 +16,7 @@ type AgentRow = {
   summary: string;
   updated_at: string;
   parallel_count: number;
+  total_dispatches: number;
 };
 
 const STATUS_TONE: Record<string, { label: string; className: string }> = {
@@ -26,7 +29,31 @@ const STATUS_TONE: Record<string, { label: string; className: string }> = {
   error:     { label: "ERROR",     className: "agents-panel__row--failed" },
 };
 
+function dispatchStateClass(state: string): string {
+  if (state === "running" || state === "active") return "agents-panel__dispatch--active";
+  if (state === "done" || state === "completed") return "agents-panel__dispatch--done";
+  if (state === "failed" || state === "error")   return "agents-panel__dispatch--failed";
+  return "agents-panel__dispatch--idle";
+}
+
 export function AgentsPanel({ summary, dispatches }: AgentsPanelProps) {
+  // Per-agent dispatch history. Sorted most recent first so the freshly
+  // completed work is at the top when the row is expanded.
+  const dispatchesByAgent = useMemo(() => {
+    const m = new Map<string, Dispatch[]>();
+    for (const d of dispatches) {
+      const list = m.get(d.agent) ?? [];
+      list.push(d);
+      m.set(d.agent, list);
+    }
+    for (const list of m.values()) {
+      list.sort((a, b) => (b.started_at ?? 0) - (a.started_at ?? 0));
+    }
+    return m;
+  }, [dispatches]);
+
+  const [expandedAgent, setExpandedAgent] = useState<string | null>(null);
+
   // Parallel count comes from two sources, in priority order:
   //  1) Running Dispatch rows for this agent (parallel_dispatch.sh path —
   //     precise, one row per parallel batch)
@@ -57,6 +84,7 @@ export function AgentsPanel({ summary, dispatches }: AgentsPanelProps) {
       summary: a.summary,
       updated_at: a.updated_at,
       parallel_count: parallel,
+      total_dispatches: dispatchesByAgent.get(a.agent_name)?.length ?? 0,
     };
   });
 
@@ -91,22 +119,76 @@ export function AgentsPanel({ summary, dispatches }: AgentsPanelProps) {
               label: row.status.toUpperCase(),
               className: "agents-panel__row--idle",
             };
+            const expandable = row.total_dispatches > 0;
+            const isExpanded = expandable && expandedAgent === row.agent_name;
+            const agentDispatches = isExpanded
+              ? (dispatchesByAgent.get(row.agent_name) ?? [])
+              : [];
             return (
-              <li
-                key={row.agent_name}
-                className={`agents-panel__row ${tone.className}`}
-              >
-                <span className="agents-panel__dot" aria-hidden />
-                <span className="agents-panel__name">{row.agent_name}</span>
-                {row.parallel_count > 1 && (
-                  <span className="agents-panel__parallel">×{row.parallel_count}</span>
-                )}
-                <span className="agents-panel__phase">{row.phase || "—"}</span>
-                <span className="agents-panel__state">{tone.label}</span>
-                {row.summary && (
-                  <span className="agents-panel__summary" title={row.summary}>
-                    {row.summary}
+              <li key={row.agent_name} className="agents-panel__row-wrap">
+                <button
+                  type="button"
+                  className={`agents-panel__row ${tone.className} ${expandable ? "agents-panel__row--clickable" : ""}`}
+                  onClick={() => {
+                    if (!expandable) return;
+                    setExpandedAgent(isExpanded ? null : row.agent_name);
+                  }}
+                  aria-expanded={isExpanded}
+                  aria-disabled={!expandable}
+                  disabled={!expandable}
+                  data-testid="agents-panel-row"
+                >
+                  <span className="agents-panel__chevron" aria-hidden>
+                    {expandable ? (isExpanded ? "▾" : "▸") : ""}
                   </span>
+                  <span className="agents-panel__dot" aria-hidden />
+                  <span className="agents-panel__name">{row.agent_name}</span>
+                  {row.parallel_count > 1 && (
+                    <span className="agents-panel__parallel">×{row.parallel_count}</span>
+                  )}
+                  {row.total_dispatches > 0 && (
+                    <span className="agents-panel__total" title={`${row.total_dispatches} total dispatch${row.total_dispatches === 1 ? "" : "es"} over the run`}>
+                      {row.total_dispatches} total
+                    </span>
+                  )}
+                  <span className="agents-panel__phase">{row.phase || "—"}</span>
+                  <span className="agents-panel__state">{tone.label}</span>
+                  {row.summary && (
+                    <span className="agents-panel__summary" title={row.summary}>
+                      {row.summary}
+                    </span>
+                  )}
+                </button>
+                {isExpanded && (
+                  <ul className="agents-panel__dispatches" data-testid="agents-panel-dispatches">
+                    {agentDispatches.map((d) => {
+                      const duration = formatDurationSince(d.started_at, d.finished_at);
+                      return (
+                        <li
+                          key={d.id}
+                          className={`agents-panel__dispatch ${dispatchStateClass(d.state)}`}
+                          data-testid="agents-panel-dispatch"
+                        >
+                          <span className="agents-panel__dispatch-phase">{d.phase}</span>
+                          <span className="agents-panel__dispatch-slot">:{d.slot}</span>
+                          <span className="agents-panel__dispatch-state">{d.state.toUpperCase()}</span>
+                          {duration && (
+                            <span className="agents-panel__dispatch-duration">{duration}</span>
+                          )}
+                          {d.task && (
+                            <span className="agents-panel__dispatch-task" title={d.task}>
+                              {d.task}
+                            </span>
+                          )}
+                          {d.error && (
+                            <span className="agents-panel__dispatch-error" title={d.error}>
+                              error
+                            </span>
+                          )}
+                        </li>
+                      );
+                    })}
+                  </ul>
                 )}
               </li>
             );

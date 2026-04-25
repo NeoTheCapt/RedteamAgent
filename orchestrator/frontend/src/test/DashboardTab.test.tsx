@@ -154,4 +154,81 @@ describe("DashboardTab", () => {
       expect(screen.getByText(/of 5 · 1× operator, 1× recon-specialist, 1× source-analyzer/)).toBeInTheDocument();
     });
   });
+
+  it("shows lifetime dispatch total per agent (not just current parallel count)", async () => {
+    // 3 historical dispatches for vulnerability-analyst, all done. The
+    // current parallel_count is 0 (none running), but the lifetime total
+    // must be visible so the operator can tell "this agent ran 3 times".
+    mockDispatches.mockResolvedValue([
+      { id: "d1", phase: "consume", round: 0, agent: "vulnerability-analyst", slot: "s0", task: "first batch",  state: "done", started_at: 1000, finished_at: 1180, error: null },
+      { id: "d2", phase: "consume", round: 1, agent: "vulnerability-analyst", slot: "s0", task: "second batch", state: "done", started_at: 1200, finished_at: 1500, error: null },
+      { id: "d3", phase: "consume", round: 2, agent: "vulnerability-analyst", slot: "s0", task: "third batch",  state: "done", started_at: 1500, finished_at: 1700, error: null },
+    ]);
+
+    render(<DashboardTab token="t" projectId={1} runId={2} summary={mkSummary({
+      agents: [
+        { agent_name: "vulnerability-analyst", phase: "consume-test", status: "completed", task_name: "third batch", summary: "all done", updated_at: "2026-04-17 00:11:00" },
+      ],
+    })} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("3 total")).toBeInTheDocument();
+    });
+  });
+
+  it("expands an agent row to reveal its per-dispatch history", async () => {
+    const user = (await import("@testing-library/user-event")).default.setup();
+
+    mockDispatches.mockResolvedValue([
+      { id: "d1", phase: "consume", round: 0, agent: "vulnerability-analyst", slot: "s0", task: "first batch",  state: "done",   started_at: 1000, finished_at: 1180, error: null },
+      { id: "d2", phase: "consume", round: 1, agent: "vulnerability-analyst", slot: "s1", task: "second batch", state: "failed", started_at: 1200, finished_at: 1260, error: "timeout" },
+    ]);
+
+    render(<DashboardTab token="t" projectId={1} runId={2} summary={mkSummary({
+      agents: [
+        { agent_name: "vulnerability-analyst", phase: "consume-test", status: "completed", task_name: "second batch", summary: "", updated_at: "2026-04-17 00:11:00" },
+      ],
+    })} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("2 total")).toBeInTheDocument();
+    });
+
+    // Before expanding, the per-dispatch list is not rendered.
+    expect(screen.queryByTestId("agents-panel-dispatches")).toBeNull();
+
+    // Click the row → list appears with one entry per dispatch.
+    const row = screen.getAllByTestId("agents-panel-row")[0];
+    await user.click(row);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("agents-panel-dispatches")).toBeInTheDocument();
+      const items = screen.getAllByTestId("agents-panel-dispatch");
+      expect(items.length).toBe(2);
+      // First item (most recent first) is the failed batch, with task + error markers.
+      expect(items[0].textContent).toContain("second batch");
+      expect(items[0].textContent).toContain("FAILED");
+      expect(items[1].textContent).toContain("first batch");
+      expect(items[1].textContent).toContain("DONE");
+    });
+
+    // Click again → collapses.
+    await user.click(row);
+    await waitFor(() => {
+      expect(screen.queryByTestId("agents-panel-dispatches")).toBeNull();
+    });
+  });
+
+  it("does not enable expand for agents that never dispatched", async () => {
+    mockDispatches.mockResolvedValue([]);
+
+    render(<DashboardTab token="t" projectId={1} runId={2} summary={mkSummary({
+      agents: [
+        { agent_name: "fuzzer", phase: "consume-test", status: "idle", task_name: "", summary: "", updated_at: "" },
+      ],
+    })} />);
+
+    const row = screen.getByTestId("agents-panel-row");
+    expect(row).toHaveAttribute("disabled");
+  });
 });
