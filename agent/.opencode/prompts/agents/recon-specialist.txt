@@ -25,6 +25,10 @@ web-recon, port-scanning, directory-fuzzing, subdomain-enumeration
 3. TECHNOLOGY DETECTION: headers, HTML meta tags, JS includes, CMS detection, framework identification
 4. ENDPOINT DISCOVERY (surface-level): check /swagger, /api-docs, /graphql, note obvious links/forms, identify JS file URLs for source-analyzer. Do NOT perform deep JS analysis.
 5. DNS/SUBDOMAIN ENUM: `ffuf -u <target> -H "Host: FUZZ.<domain>" -w <wordlist> -fs <baseline-size>` — baseline first
+6. DEEP DIRECTORY / VHOST FUZZING: when the light pass (common.txt) has surfaced enough signal that an interesting prefix or vhost pattern warrants more depth, escalate to a larger wordlist:
+   - directories: `/usr/share/wordlists/dirb/big.txt` (~20k), `/usr/share/seclists/Discovery/Web-Content/raft-medium-directories.txt` (~30k), `raft-large-directories.txt` (~166k)
+   - vhosts: `/usr/share/seclists/Discovery/DNS/subdomains-top1million-110000.txt`
+   Use `-t 50` default; reduce to `-t 10` if rate-limited or 5xx-storming. Always `-o <file>.json -of json` for traceability. Bound: one large-wordlist run per high-signal target per recon dispatch — do NOT chain raft-large after raft-medium without operator instruction; record top hits and surface candidates instead, so the operator can re-dispatch if more depth is needed.
 
 === MANDATORY INFO-DISCLOSURE PROBES ===
 

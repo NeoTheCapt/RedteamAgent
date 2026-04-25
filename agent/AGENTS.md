@@ -32,7 +32,6 @@ Do NOT emit this banner/readiness greeting during `/engage` or `/autoengage` exe
 | `source-analyzer` | Deep static analysis of HTML/JS/CSS for hidden routes, API endpoints, secrets. | Phase 1 (parallel with recon). |
 | `vulnerability-analyst` | Analyzes endpoints, identifies vulnerability patterns, prioritizes attack paths. | Phase 3 consumption loop. |
 | `exploit-developer` | Crafts/executes exploits: SQLi, XSS, auth bypass, chain analysis, impact. | Phase 3 (HIGH/MEDIUM) + Phase 4. |
-| `fuzzer` | High-volume parameter/directory fuzzing, rapid iteration. | When FUZZER_NEEDED. |
 | `osint-analyst` | OSINT intelligence gathering, CVE/breach/DNS/social research. | Phase 4 (parallel with exploit). |
 | `report-writer` | Generates structured engagement report from logs and findings. | Phase 5 or on-demand. |
 
@@ -83,7 +82,6 @@ Rules:
 | source-analyzer | HTML/JS/CSS analysis for hidden routes, secrets | stage=`ingested` and type∈{javascript, page, stylesheet, data, unknown, api-spec} |
 | vulnerability-analyst | Quick triage: 1-2 probes per vuln, prioritized list | stage=`ingested` and type∈{api, form, graphql, upload, websocket} |
 | exploit-developer | Exploit confirmed vulns, chain analysis, impact | stage=`vuln_confirmed` (any type); also full-findings reviews / chain hypothesis dispatches |
-| fuzzer | High-volume testing (100+ payloads) | when FUZZER_NEEDED OR stage=`ingested` and a parameter/path needs >5 probes |
 | osint-analyst | CVE/breach/DNS/social research from intel.md | parallel with exploit-developer when intel.md gains entries |
 | report-writer | Final or interim report | end-of-cycle (active stages drained) |
 
@@ -319,7 +317,6 @@ Agents use PREFIXED IDs:
 | vulnerability-analyst | VA | FINDING-VA-001 |
 | source-analyzer | SA | FINDING-SA-001 |
 | recon-specialist | RE | FINDING-RE-001 |
-| fuzzer | FZ | FINDING-FZ-001 |
 | osint-analyst | OS | FINDING-OS-001 |
 
 Never hand-allocate finding IDs. Draft findings with:
@@ -420,8 +417,9 @@ Only relevant when target contains `*` or is a bare domain.
 ## Handoff Reference
 
 See references/handoff-protocols.md for detailed agent-to-agent handoff rules.
-Summary: recon→source-analyzer+queue, source→queue+findings, vuln-analyst→exploit/fuzzer,
-fuzzer→queue+vuln-analyst, exploit→findings+auth, osint→intel.md only, report←all files.
+Summary: recon→source-analyzer+queue, source→queue+findings, vuln-analyst→exploit (high-volume
+ffuf done in-line per HIGH-VOLUME PROBES), exploit→findings+auth, osint→intel.md only,
+report←all files.
 
 ## Tool Promotion Workflow
 

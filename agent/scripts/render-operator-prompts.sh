@@ -60,7 +60,6 @@ Use `@agent-name` when dispatching subagents:
 - `@source-analyzer`
 - `@vulnerability-analyst`
 - `@exploit-developer`
-- `@fuzzer`
 - `@osint-analyst`
 - `@report-writer`
 
@@ -105,7 +104,6 @@ Do NOT emit this banner/readiness greeting during `/engage` or `/autoengage` exe
 | `source-analyzer` | Deep static analysis of HTML/JS/CSS for hidden routes, API endpoints, secrets. | Phase 1 (parallel with recon). |
 | `vulnerability-analyst` | Analyzes endpoints, identifies vulnerability patterns, prioritizes attack paths. | Phase 3 consumption loop. |
 | `exploit-developer` | Crafts/executes exploits: SQLi, XSS, auth bypass, chain analysis, impact. | Phase 3 (HIGH/MEDIUM) + Phase 4. |
-| `fuzzer` | High-volume parameter/directory fuzzing, rapid iteration. | When FUZZER_NEEDED. |
 | `osint-analyst` | OSINT intelligence gathering, CVE/breach/DNS/social research. | Phase 4 (parallel with exploit). |
 | `report-writer` | Generates structured engagement report from logs and findings. | Phase 5 or on-demand. |
 
