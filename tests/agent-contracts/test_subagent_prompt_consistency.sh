@@ -34,6 +34,12 @@ set -euo pipefail
 #       but scored 0/111 because confirmed exploits were treated as report-only
 #       evidence instead of app solved-state triggers.
 #
+#   D7. AUTH ARTIFACT CONSUMPTION: exploit-developer must also say that recovered
+#       auth artifacts (admin session/JWT, reset token, security answers, successful
+#       registration) are not exhausted until the agent consumes them on one concrete
+#       privileged route/control, and must not end with "no multi-step attack path
+#       assessed" while that follow-up is still outstanding.
+#
 # Exit 0 = pass, 1 = violation, 2 = harness error. Run from repo root.
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -150,17 +156,20 @@ for agent in $SUBAGENTS_WITH_CASE_BATCHES; do
     fi
 done
 
-# --- D6: EXPLOIT CTF SOLVED-STATE ---
+# --- D6/D7: EXPLOIT CTF SOLVED-STATE + AUTH ARTIFACT CONSUMPTION ---
 # Confirmed exploit evidence should also trigger the lab app's own solved-state when
-# an exact canonical action is already known. This protects Juice Shop recall from
-# report-only exploit confirmations that never update /api/Challenges.
+# an exact canonical action is already known. Recovered auth artifacts must be consumed
+# on one concrete route/control before the branch can be closed.
 EXPLOIT_PROMPT="$PROMPTS_DIR/exploit-developer.txt"
 for required in \
     'canonical challenge-triggering action' \
     'Juice Shop-style recall scoring' \
-    "app's challenge state"; do
+    "app's challenge state" \
+    'admin JWT/session, password-reset token, recovered security answers, registration success' \
+    'no multi-step attack path assessed' \
+    'STAGE=vuln_confirmed'; do
     if ! /usr/bin/grep -qF "$required" "$EXPLOIT_PROMPT"; then
-        echo "[D6] exploit-developer: missing CTF solved-state guidance token: $required" >&2
+        echo "[D6/D7] exploit-developer: missing solved-state/auth-consumption guidance token: $required" >&2
         echo "      file: $EXPLOIT_PROMPT" >&2
         violations=$((violations + 1))
     fi
