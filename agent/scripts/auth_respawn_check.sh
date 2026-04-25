@@ -49,7 +49,15 @@ if (( current_count > prev_count )); then
     echo "auth-respawn flag written: $FLAG_FILE" >&2
 fi
 
-# Update state regardless (so we don't keep re-flagging the same delta).
-jq -n --argjson n "$current_count" \
+# Update state. NEVER lower last_validated_count: if the operator
+# manually removed a credential (current < previous), preserve the
+# high-water mark so the next genuine increase from the lower count
+# doesn't cause a phantom respawn for credentials we already saw.
+new_state_count=$prev_count
+if (( current_count > prev_count )); then
+    new_state_count=$current_count
+fi
+jq -n --argjson n "$new_state_count" \
+    --argjson cur "$current_count" \
     --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-    '{last_validated_count: $n, updated_at: $ts}' > "$STATE_FILE"
+    '{last_validated_count: $n, current_count_observed: $cur, updated_at: $ts}' > "$STATE_FILE"

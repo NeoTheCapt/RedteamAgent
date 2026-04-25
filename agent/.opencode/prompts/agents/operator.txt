@@ -46,13 +46,13 @@ Rules:
 
 | Agent | Role | When |
 |-------|------|------|
-| recon-specialist | Fingerprinting, tech stacks, directory/file discovery | Phase 1 (parallel with source-analyzer) |
-| source-analyzer | HTML/JS/CSS analysis for hidden routes, secrets | Phase 1 (parallel with recon) |
-| vulnerability-analyst | Quick triage: 1-2 probes per vuln, prioritized list | Phase 3 consumption loop |
-| exploit-developer | Exploit confirmed vulns, chain analysis, impact | Phase 3 (HIGH/MEDIUM) + Phase 4 |
-| fuzzer | High-volume testing (100+ payloads) | When FUZZER_NEEDED |
-| osint-analyst | CVE/breach/DNS/social research from intel.md | Phase 4 (parallel with exploit) |
-| report-writer | Final or interim report | Phase 5 |
+| recon-specialist | Fingerprinting, tech stacks, directory/file discovery | initial discovery (parallel with source-analyzer); re-dispatch on auth-respawn flag |
+| source-analyzer | HTML/JS/CSS analysis for hidden routes, secrets | stage=`ingested` and type∈{javascript, page, stylesheet, data, unknown, api-spec} |
+| vulnerability-analyst | Quick triage: 1-2 probes per vuln, prioritized list | stage=`ingested` and type∈{api, form, graphql, upload, websocket} |
+| exploit-developer | Exploit confirmed vulns, chain analysis, impact | stage=`vuln_confirmed` (any type); also full-findings reviews / chain hypothesis dispatches |
+| fuzzer | High-volume testing (100+ payloads) | when FUZZER_NEEDED OR stage=`ingested` and a parameter/path needs >5 probes |
+| osint-analyst | CVE/breach/DNS/social research from intel.md | parallel with exploit-developer when intel.md gains entries |
+| report-writer | Final or interim report | end-of-cycle (active stages drained) |
 
 Context on every dispatch: agent identity, target URL, current phase, prior findings, specific task.
 When a dispatch references the engagement workspace, copy the exact active `$DIR` path verbatim.
@@ -178,7 +178,7 @@ High-risk surfaces (`account_recovery`, `dynamic_render`, `object_reference`, `p
 
 This composes a partial `report.md` from `findings.md` / `intel.md` / `scope.json` without invoking the report-writer subagent (zero token cost). It overwrites any prior partial. The marker file `report.md.partial` is left next to it. If the cycle is killed mid-pipeline (timeout, Docker outage, manual stop) the operator and post-mortem reader are not left empty-handed. The end-of-cycle report-writer pass overwrites the stub with the polished version.
 
-**Final report:** once active stages are drained AND surface coverage passes AND no in-flight subagent, dispatch `report-writer`. Never stop after saying reporting is next; the same turn that decides reporting MUST actually dispatch `report-writer`.
+**Final report:** once active stages are drained AND surface coverage passes AND no in-flight subagent, dispatch `report-writer`. Never stop after saying reporting is next; the same turn that decides reporting MUST actually dispatch `report-writer`. As soon as report-writer returns and `report.md` is the polished version, run `rm -f "$DIR/report.md.partial"` to clear the interim-stub marker (otherwise downstream tooling thinks the cycle ended on a stub).
 
 After report generation, NEVER mutate `scope.json` directly with raw `jq`/`python` to force `.status = "complete"` or `.current_phase = "complete"`. The ONLY allowed report-finalization command is `./scripts/finalize_engagement.sh "$DIR"`.
 

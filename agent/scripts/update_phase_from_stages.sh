@@ -69,20 +69,49 @@ if [[ "$current" == "$derived" ]]; then
     exit 0
 fi
 
+# Phase ordinality (for monotonic phases_completed accumulation).
+# Only ADD predecessors when phase ADVANCES — if the derived phase
+# regresses (e.g. report -> exploit when a new vuln_confirmed lands
+# after report-writer ran), leave phases_completed alone so existing
+# entries don't lie about what's "complete". Code that consumes
+# phases_completed (finalize_engagement.sh) treats it as
+# "phases that have been entered at least once," which is correct
+# under monotonic-only updates.
+phase_index() {
+    case "$1" in
+        ""|recon) echo 0 ;;
+        collect) echo 1 ;;
+        consume_test) echo 2 ;;
+        exploit) echo 3 ;;
+        report) echo 4 ;;
+        complete) echo 5 ;;
+        *) echo -1 ;;
+    esac
+}
+current_idx=$(phase_index "$current")
+derived_idx=$(phase_index "$derived")
+
 tmp="$(mktemp "${TMPDIR:-/tmp}/scope-XXXXXX.json")"
-jq --arg phase "$derived" '
-    .current_phase = $phase
-    | .phases_completed = (
-        ((.phases_completed // []) +
-            (if $phase == "collect" then ["recon"]
-             elif $phase == "consume_test" then ["recon","collect"]
-             elif $phase == "exploit" then ["recon","collect","consume_test"]
-             elif $phase == "report" then ["recon","collect","consume_test","exploit"]
-             elif $phase == "complete" then ["recon","collect","consume_test","exploit","report"]
-             else [] end))
-        | unique
-      )
-' "$SCOPE_JSON" > "$tmp"
+if (( derived_idx > current_idx )); then
+    # Forward transition — backfill predecessors.
+    jq --arg phase "$derived" '
+        .current_phase = $phase
+        | .phases_completed = (
+            ((.phases_completed // []) +
+                (if $phase == "collect" then ["recon"]
+                 elif $phase == "consume_test" then ["recon","collect"]
+                 elif $phase == "exploit" then ["recon","collect","consume_test"]
+                 elif $phase == "report" then ["recon","collect","consume_test","exploit"]
+                 elif $phase == "complete" then ["recon","collect","consume_test","exploit","report"]
+                 else [] end))
+            | unique
+          )
+    ' "$SCOPE_JSON" > "$tmp"
+else
+    # Regression (e.g. new vuln_confirmed after report). Update
+    # current_phase only; preserve phases_completed.
+    jq --arg phase "$derived" '.current_phase = $phase' "$SCOPE_JSON" > "$tmp"
+fi
 
 mv "$tmp" "$SCOPE_JSON"
 echo "phase: $current -> $derived  (active=$ACTIVE processing=$PROCESSING vuln_confirmed=$VULN_CONFIRMED)" >&2

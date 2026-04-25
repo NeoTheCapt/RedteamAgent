@@ -234,9 +234,7 @@ ORDER BY
           OR lower(coalesce(nullif(url_path, ''), url)) LIKE '%filter%'
         THEN 25 ELSE 0
       END
-    + CASE WHEN coalesce(predicted_value, 0) > 0
-        THEN coalesce(predicted_value, 0) * 5 ELSE 0
-      END
+    + coalesce(predicted_value, 0) * 5
   ) DESC,
   id ASC
 EOF
@@ -271,8 +269,23 @@ ensure_cases_column "stage" "TEXT NOT NULL DEFAULT 'ingested'"
 sql "UPDATE cases SET stage='clean' WHERE status='done' AND (stage IS NULL OR stage='ingested' OR stage='');" 2>/dev/null || true
 sql "UPDATE cases SET stage='ingested' WHERE stage IS NULL OR stage='';" 2>/dev/null || true
 
-# Per-case priority hint (optional; used by fetch ordering). Higher = sooner.
+# Per-case priority hint (optional; used by fetch ordering). Higher = sooner;
+# negative deprioritizes (no `>0` clamp).
 ensure_cases_column "predicted_value" "INTEGER NOT NULL DEFAULT 0"
+
+# Verify migration outcome — surface failures instead of letting downstream
+# code SELECT against a non-existent column. We swallow ALTER TABLE errors
+# above (idempotent re-runs hit "duplicate column name" which is fine), but
+# the column MUST exist after the call; if it doesn't, the DB is corrupt
+# or the user's sqlite3 is too old, and we should fail loudly.
+for required_col in stage predicted_value; do
+  present="$(sql "SELECT COUNT(*) FROM pragma_table_info('cases') WHERE name='${required_col}';" 2>/dev/null || printf '0')"
+  if [[ "${present:-0}" != "1" ]]; then
+    echo "FATAL: cases.db missing required column '${required_col}' after migration; aborting." >&2
+    echo "       check sqlite3 version (need ≥3.35 for ALTER TABLE ... ADD COLUMN with DEFAULT)" >&2
+    exit 2
+  fi
+done
 
 _validate_stage() {
   case "$1" in
@@ -329,10 +342,14 @@ case "$ACTION" in
       exit 1
     fi
 
-    IN_FLIGHT_FOR_AGENT=$(sql "SELECT COUNT(*) FROM cases WHERE status='processing' AND assigned_agent='${AGENT}';")
+    # Per-(agent, type) in-flight guard so the same agent can be working
+    # on different types concurrently — supports the streaming-pipeline
+    # design where source-analyzer can be at ingested-javascript and
+    # ingested-page in the same operator turn.
+    IN_FLIGHT_FOR_AGENT=$(sql "SELECT COUNT(*) FROM cases WHERE status='processing' AND assigned_agent='${AGENT}' AND type='${TYPE}';")
     if [[ "${IN_FLIGHT_FOR_AGENT:-0}" =~ ^[0-9]+$ ]] && (( IN_FLIGHT_FOR_AGENT > 0 )); then
       echo "[]"
-      echo "Refusing fetch for ${AGENT}: ${IN_FLIGHT_FOR_AGENT} case(s) already processing" >&2
+      echo "Refusing fetch for ${AGENT} (type=${TYPE}): ${IN_FLIGHT_FOR_AGENT} case(s) already processing" >&2
       exit 0
     fi
 
@@ -377,10 +394,13 @@ case "$ACTION" in
       exit 1
     fi
 
-    IN_FLIGHT_FOR_AGENT=$(sql "SELECT COUNT(*) FROM cases WHERE status='processing' AND assigned_agent='${AGENT}';")
+    # Per-(agent, type, stage) in-flight guard. Lets the same agent run
+    # on different (stage, type) combos concurrently — exactly the
+    # cross-stage parallelism Rule 1 of operator-core.md promises.
+    IN_FLIGHT_FOR_AGENT=$(sql "SELECT COUNT(*) FROM cases WHERE status='processing' AND assigned_agent='${AGENT}' AND type='${TYPE}' AND stage='${STAGE_ESC}';")
     if [[ "${IN_FLIGHT_FOR_AGENT:-0}" =~ ^[0-9]+$ ]] && (( IN_FLIGHT_FOR_AGENT > 0 )); then
       echo "[]"
-      echo "Refusing fetch for ${AGENT}: ${IN_FLIGHT_FOR_AGENT} case(s) already processing" >&2
+      echo "Refusing fetch for ${AGENT} (stage=${STAGE} type=${TYPE}): ${IN_FLIGHT_FOR_AGENT} case(s) already processing" >&2
       exit 0
     fi
 
@@ -524,7 +544,10 @@ case "$ACTION" in
       exit 1
     fi
     BEFORE=$(sql "SELECT COUNT(*) FROM cases WHERE status='error' AND COALESCE(retry_count,0) < ${MAX_RETRIES};")
-    sql "UPDATE cases SET status='pending', assigned_agent=NULL, consumed_at=NULL WHERE status='error' AND COALESCE(retry_count,0) < ${MAX_RETRIES};"
+    # Reset stage to ingested when retrying error cases — they need to
+    # re-enter the active pipeline, not stay at 'errored' (which is
+    # outside the legacy fetch's stage filter).
+    sql "UPDATE cases SET status='pending', stage='ingested', assigned_agent=NULL, consumed_at=NULL WHERE status='error' AND COALESCE(retry_count,0) < ${MAX_RETRIES};"
     echo "Retried ${BEFORE} error case(s) (max retries: ${MAX_RETRIES})"
     ;;
 
@@ -560,7 +583,20 @@ case "$ACTION" in
 
       if ((${#REQUEUE_ID_ARGS[@]} > 0)); then
         ID_LIST="$(normalize_id_list "${REQUEUE_ID_ARGS[@]}")"
-        sql "UPDATE cases SET status='pending', assigned_agent=NULL, consumed_at=NULL WHERE id IN (${ID_LIST});"
+        # Stage handling: if the case is at a TERMINAL stage
+        # (clean / exploited / api_tested / errored) then requeue treats
+        # it as fresh work and resets stage to ingested. If the case is
+        # at an ACTIVE stage (ingested / source_analyzed / vuln_confirmed)
+        # we preserve the stage so the next subagent picks it up at the
+        # right point in the pipeline (e.g. a vuln_confirmed case
+        # requeued by exploit-developer should stay at vuln_confirmed).
+        sql "UPDATE cases SET
+                status='pending',
+                stage = CASE WHEN stage IN ('clean','exploited','api_tested','errored')
+                             THEN 'ingested' ELSE stage END,
+                assigned_agent=NULL,
+                consumed_at=NULL
+              WHERE id IN (${ID_LIST});"
         echo "Requeued existing: ${ID_LIST}"
         requeued_existing=1
       fi

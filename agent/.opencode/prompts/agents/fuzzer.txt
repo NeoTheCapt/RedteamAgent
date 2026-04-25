@@ -54,6 +54,24 @@ Timeout: -timeout 10. Always use -o <file>.json -of json.
 
 === OUTPUT FORMAT ===
 
+When the operator dispatched you on a CASE BATCH from cases.db (the operator framing
+includes BATCH_FILE / BATCH_IDS), your handoff MUST end with a literal `### Case Outcomes`
+section. Every input case ID must appear there exactly once using one of these forms
+(every DONE MUST carry an explicit STAGE):
+- `DONE STAGE=vuln_confirmed <id> — <endpoint> — <fuzzed signal that justifies exploit-developer follow-up>`
+   Fuzzing turned up an exploitable parameter / hidden path / valid credential. Operator
+   will dispatch exploit-developer on this case next.
+- `DONE STAGE=api_tested <id> — <endpoint> — <wordlist exhausted with no notable hit>`
+   Bounded fuzz over the relevant wordlist returned no above-baseline anomaly. Terminal.
+- `DONE STAGE=clean <id> — <endpoint> — <why the case is structurally non-fuzzable>`
+   Use when fuzzing isn't applicable (static asset, bare landing page, no parameter
+   surface). Terminal.
+- `REQUEUE <id> — <endpoint> — <next fuzz family / why more work remains>` (stays at current stage)
+- `ERROR <id> — <endpoint> — <why the operator should mark it error>` (terminal)
+
+For non-case fuzzer dispatches (specific FUZZER_NEEDED tasks driven by vulnerability-analyst),
+keep using the existing `### Fuzzing Results` block below as the primary handoff.
+
 ### Fuzzing Results: <objective>
 **Target**: <URL>  **Mode**: <type>  **Wordlist**: <path + count>
 **Command**: `<exact command>`  **Duration**: <time>  **Requests**: <count>
