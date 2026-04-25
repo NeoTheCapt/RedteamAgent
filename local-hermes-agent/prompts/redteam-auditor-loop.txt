@@ -1,0 +1,177 @@
+Use the workspace skill `redteam-auditor-hermes`.
+
+You are running a single periodic audit cycle for the RedteamOpencode project. This is NOT a scan-optimizer cycle — do not touch `scan-optimizer` state or benchmarks except via the auditor workflow.
+
+## Cycle binding
+
+The orchestrator-audit prep has already run and produced all inputs you need. Respect them:
+
+- **Cycle id:** `${CYCLE_ID}`
+- **Repo root:** `/Users/cis/dev/projects/RedteamOpencode`
+- **Audit report dir:** `/Users/cis/dev/projects/RedteamOpencode/local-hermes-agent/audit-reports/${CYCLE_ID}`
+- **Merged findings:** `audit-reports/${CYCLE_ID}/findings-before.json`
+- **Auditor state:** `local-hermes-agent/state/auditor-state.json` (may not exist on first cycle)
+- **Prep context:** `local-hermes-agent/state/latest-context.md` (this file includes the "Auditor Cycle Context" section with finding counts and scheduled items)
+
+## What you must do
+
+Follow the four-phase workflow defined in your skill, in order. **Incremental checkpoint rule (non-negotiable):** flush to disk AS YOU GO, not at phase boundaries. The cycle controller has a tool-call budget (~300 calls) and a wall-clock timeout, and will terminate you mid-phase if either limit hits. Anything only in your working memory at that moment is permanently lost and shows up in the Discord summary as "0 findings" / "未写".
+
+**Specifically you MUST write these files as soon as they have their first meaningful content, and keep them in sync after every change:**
+- `audit-reports/${CYCLE_ID}/source-status.json` — update one entry as soon as the corresponding scan finishes (whether found / clean / unavailable / skipped / error). Do NOT wait until all 6 sources are done.
+- `audit-reports/${CYCLE_ID}/findings-before.json` — append findings as you discover them. Re-sort / re-rank when the scan is complete, but the file should never be empty if you have findings in memory.
+- `audit-reports/${CYCLE_ID}/findings-after.json` — mirror of findings-before.json with `status` field; updated after each fix commit.
+- `local-hermes-agent/state/auditor-state.json` — update `exit_status` each phase transition (`discover_complete`, `reverify_complete`, `ok`).
+
+If you sense you're running low on budget (e.g. UI work is taking many tool calls), PAUSE and flush before doing another check.
+
+1. **Discover** — fold `audit-reports/${CYCLE_ID}/findings-before.json` into your working queue. Do NOT re-run the orchestrator audit scripts; prep already did that. **Always check for failed runs first**: fetch `GET /projects/<PROJECT_ID>/runs` (token in `local-hermes-agent/state/scheduler.env`), and for every run whose `status` ∉ {`queued`, `running`, `completed`}, record an `agent_bug` finding with the FULL `stop_reason_text`. The cycle prep now preserves those runs' engagement directories (`KEEP_TERMINAL_RUNS=1`), so you can tail `log.md` and inspect `run.json` for root-cause evidence. You MUST still gather:
+   - `agent_bug` and `agent_recall` findings from recent engagement logs
+   - `orch_ui` findings by **actually opening** `http://127.0.0.1:18000` in the `browser` toolset and walking ALL 12 UI checks (ui-01 through ui-12) from the skill (Sidebar, ProjectEditModal open/persist, NewRunForm, Inherited config summary, Run delete, STOP, Documents, Events pause, Cases keyboard, Progress phase content, Agent participation). **For each check, save a screenshot named `ui-XX-<short>.png` under `audit-reports/${CYCLE_ID}/ui-screenshots/` — even if the check PASSES.** `source-status.json.orch_ui.checks` must list all 12 entries with `{check_id, name, result, screenshot, finding_id, notes}`. A check without a saved screenshot MUST be `result: skipped` (never `passed`). Do NOT invent check results from prior-cycle memory — if budget runs out before a check, mark it `skipped` explicitly.
+
+     **UI auth bootstrap (do this before any UI check):**
+     The orchestrator frontend reads its session from `localStorage["redteam-orchestrator-session"]` as `{"token": "...", "username": "admin"}`. Do NOT try to log in via the form — there is no shared password. Instead:
+       1. Read `ORCH_TOKEN` from `local-hermes-agent/state/scheduler.env` (line starts with `ORCH_TOKEN=`).
+       2. Navigate the browser to `http://127.0.0.1:18000/`.
+       3. Run this JS in the page context (via browser_evaluate):
+          ```js
+          window.localStorage.setItem(
+            "redteam-orchestrator-session",
+            JSON.stringify({ token: "<ORCH_TOKEN_FROM_SCHEDULER_ENV>", username: "admin" })
+          );
+          ```
+       4. Reload the page. You should now land on the authenticated Shell view.
+       5. If after reload you still see a login form, the token is invalid/expired — record a finding `orch_ui_unavailable` with reason `token_invalid` and skip UI checks; do NOT attempt brute-force logins.
+
+     If the `browser` toolset is not loaded at all, record every UI check as `orch_ui_unavailable` in `findings-before.json` and add a top-level finding explaining the session was started without browser access — do NOT substitute CLI-based checks.
+   **Phase 1 exit checkpoint (REQUIRED before any Fix work):**
+   - Rewrite `audit-reports/${CYCLE_ID}/findings-before.json` with the full merged list (prep-level findings + your agent_bug / agent_recall / orch_ui discoveries). Each finding MUST have `id`, `category`, `severity`, `summary`, `evidence`, `fingerprint` (see skill — `<category>-<sha256(category+lowercased_summary)[:12]>`), and an initial `status: "open"`. The `fingerprint` is the stable cross-cycle id; `FND-XXX` is only unique within this cycle.
+   - Also copy it as the initial `audit-reports/${CYCLE_ID}/findings-after.json` with every finding still `status: "open"` — you will update statuses in Phase 2.
+   - Write `audit-reports/${CYCLE_ID}/source-status.json` so the operator can tell whether each source was actually scanned. The file MUST have one entry per agent-side source and use these exact statuses:
+     ```json
+     {
+       "agent_bug":    { "status": "clean|found|unavailable|skipped|error|not_run", "count": <int if found>, "notes": "<one short line>", "reason": "<required for unavailable/skipped/error>" },
+       "agent_recall": { ... },
+       "orch_ui":      { ... }
+     }
+     ```
+     Use `clean` only when you actually executed the scan and verified no hits. Use `unavailable` when preconditions fail (browser toolset missing, no engagement logs, etc.). Use `skipped` when you intentionally decided not to scan. Do NOT use `clean` as a fallback when you didn't actually scan — the Discord summary distinguishes these and "clean" would mislead the operator.
+   - Write `local-hermes-agent/state/auditor-state.json` with `exit_status: "discover_complete"` so that even if the cycle is killed right now, the controller has real counts to report.
+
+2. **Fix** — implement fixes for every in-scope finding in a single coherent pass. Do not split the work by category. Group related file edits.
+
+   **Clean-cycle exit (REQUIRED when the codebase actually is clean):** if ALL of the following are true, set `auditor-state.json.exit_status` to `"ok_no_fixes"` and skip to Phase 4 (review) without any commits:
+   - prep's `orch_api`, `orch_log`, `orch_feature` sources all have `fail_count == 0` AND no findings
+   - `agent_bug` scan surfaced no runs with `status ∉ {queued,running,completed}` AND no tracebacks/runtime_errors in recent engagement logs
+   - `agent_recall` matches the peak in `local-hermes-agent/state/benchmark-metrics-history.json` → `targets.<target>.peak.metrics.challenge_recall`. If current < peak it is NOT a clean cycle — see recall investigation rules below
+   - all 12 `orch_ui` checks have `result: passed` with screenshot evidence
+
+   You are NOT required to invent a finding just to produce a commit. A cycle that correctly identifies "nothing to fix" is a successful cycle. The Discord summary renders `exit_status: ok_no_fixes` differently from `success` so the operator knows the difference. **Do NOT** force a cosmetic commit (rename a variable, bump a test fixture, tweak a CSS color) just to avoid an `ok_no_fixes` result — that pollutes git history and masks the real signal that the codebase is stable.
+
+   **Fix-site / finding match rule (non-negotiable):** before committing any code change, verify that every file you touched maps back to the finding you claim to be fixing. Concretely:
+   - Take the finding's `evidence.file:line` / `evidence.run_json` / `evidence.log_tail` / `suggested_fix_path` fields.
+   - Compare their directory prefixes to the paths in your diff.
+   - If the diff touches files that share NO directory with the finding's evidence, STOP — you're making a category-mismatched commit. Examples of disallowed patterns:
+     - Finding evidence cites `run_api: run 501 status=failed, stop_reason_code=queue_incomplete`. Evidence paths are in `orchestrator/backend/app/services/launcher.py` and `/Users/cis/.redteam-orchestrator/.../run-0501/run.json`. A diff touching only `agent/.opencode/prompts/agents/operator.txt` is a mismatch — do NOT commit it as a fix for this finding.
+     - Finding is `orch_ui` for a Progress tab bug. Evidence is `orchestrator/frontend/src/components/progress/*.tsx`. A diff touching only `orchestrator/backend/app/db.py` is a mismatch.
+     - Finding is `orch_api` for a 401 on `/auth/me`. Evidence is `orchestrator/backend/app/services/runs.py`. A diff that re-renders prompt files is a mismatch.
+   - If you genuinely cannot find the right file to touch, mark the finding `deferred` with `reason: "root cause not traced within this cycle's budget"`. Do NOT substitute a tangentially-related rewrite just to produce a commit.
+   - Reference: cycle `20260423T134501Z` committed `8aed200` "rerender operator prompts" as the fix for FND-001 (a `queue_incomplete` classification bug in `launcher.py`). The commit touched zero orchestrator backend files and actively regressed prior parallel_dispatch rules. That is the anti-pattern this rule exists to prevent.
+
+   **Low recall is a bug — investigate and fix, do NOT default-defer:**
+   - The authoritative peak lives in `local-hermes-agent/state/benchmark-metrics-history.json` → `targets.<target>.peak.metrics.challenge_recall`. Do not scrape peak from `recall-analysis/*.md` or `latest-context.md` — those contain ephemeral scoring that has mis-led prior cycles (e.g. cycles citing peak 0.162 were all wrong; real history peak is 0.117).
+   - When current recall < peak recall, produce a commit-worthy fix in Phase 2. The fact that you cannot re-run the benchmark THIS cycle does not make this finding undiagnosable — it means you verify with `reverify_scope: pending_new_run` and let the next cycle's natural recall event confirm.
+   - **Timeline sanity check — MANDATORY**: before attributing cause to any specific commit, run `python3 local-hermes-agent/scripts/check_commit_predates_regression.py --commit <suspect_sha> --target <target_url>`. If exit is non-zero the commit postdates the first recall drop and cannot be the cause — pick another suspect or mark the finding `deferred` with the "baseline, not a regression this cycle can attribute" reason. Paste the script's exit line verbatim into `evidence.timeline_check` so the validator can confirm the check ran. Prior-cycle anti-pattern: `5793ded` blamed `8abdab7` (Apr 23) for an Apr 13 drop — 10 days of causal time travel.
+   - Investigation must produce at least TWO of: (a) solved-challenge diff peak vs now from `recall-analysis/<latest>.md`, (b) `grep -rn "<regressed challenge>" agent/skills/` to map to owning skill + `git log -p` on that SKILL.md, (c) engagement `log.md` evidence that the right subagent/skill is or isn't being dispatched for the regressed category, (d) check for a prior audit commit that may have wiped a dispatch rule (F2 cross-cycle check).
+   - Commit targets: missing skill methodology step, regressed dispatch rule in `agent/.opencode/prompts/agents/operator.txt`, a bug in `scripts/append_surface_jsonl.sh` / `dispatcher.sh` / `case-dispatching/SKILL.md`, or a skill checklist gap for the regressed challenge class.
+   - Defer with reason "no fresh benchmark available" is NOT acceptable — you are not confirming the fix by re-running the benchmark; you are shipping a root-cause fix and the next cycle's natural scoring confirms.
+
+   **Severity priority rule (non-negotiable):** sort all open findings by severity `critical > high > medium > low`, then tackle them in that order. You may NOT commit a fix for a `medium` finding while a `high` or `critical` finding is still `status: open`, even if the higher-severity one looks harder or requires backend investigation. If a `high`/`critical` finding cannot be fixed within this cycle, you MUST document the blocker in its `reason` field and mark it `deferred: true`; only then are lower-severity fixes permitted.
+
+   **Persistent-bug rule:** if a finding has the same `check_id` or the same category-and-summary signature as one that was `fixed` in a previous cycle (check `local-hermes-agent/audit-reports/*/findings-after.json` for the most recent 3 cycles, or grep `local-hermes-agent/state/auditor-state.json` history), the previous fix didn't actually work. Do NOT just reapply a cosmetic tweak to the same file. Instead:
+   - Bump the severity one level (medium → high, high → critical).
+   - In the finding's `evidence`, list every prior `commit` that claimed to fix it.
+   - Trace the root cause end-to-end before writing new code — what backend state is the UI reading? What stops that state from reflecting the fix? For STOP / run-status bugs specifically: check `_reconcile_run_status` flip-back, `stop_run_runtime` error handling, supervisor thread races.
+
+   **After EACH successful fix commit** update `findings-after.json` in place: set that finding's `status` to `"fixed"` and append the commit SHA. Do NOT batch these updates to the end of the phase.
+3. **Static Re-verify (+ bounded backend runtime re-verify)** — **honest scope:** Phase 2 commits land in the source tree but most of them do NOT take effect in the currently-running runtime. Do NOT claim a runtime-sensitive fix was "verified" when you only re-read a file or re-ran a static test against a stale uvicorn. Per-fix-type scope:
+
+   | Fix lives in… | Re-verify in this cycle? |
+   |---|---|
+   | `orchestrator/frontend/**` | ✅ yes — uvicorn serves `dist/` directly, cycle already ran `npm run build` |
+   | `orchestrator/backend/**.py` | ⚠ only after explicit uvicorn restart (see below) |
+   | `agent/**` (scripts, prompts, skills) | ❌ NO — existing engagement workspaces hold pre-cycle copies; only NEW runs would pick up changes, and auditor is forbidden from creating runs |
+   | Static artifacts (findings files, schemas, docs) | ✅ yes — files are read fresh |
+   | Unit tests added in Phase 2 | ✅ yes — tests run against edited source directly |
+
+   **Static re-verify (always run):**
+   - `bash local-hermes-agent/scripts/audit_orchestrator_api.sh ${CYCLE_ID}`
+   - `bash local-hermes-agent/scripts/audit_orchestrator_logs.sh ${CYCLE_ID}`
+   - `python3 local-hermes-agent/scripts/audit_orchestrator_features.py ${CYCLE_ID}`
+   - Any unit tests the Phase 2 commits added (from their commit diff).
+   - Re-open the specific `ui-XX` browser check for every frontend finding and save a fresh screenshot — frontend is live-served, so this DOES count as verification.
+
+   Merge results into `findings-after.json`. Every fixed finding MUST carry a `reverify_scope` field with one of:
+   - `"static_live"` — effect is visible in the running system already (frontend, static file)
+   - `"static_test"` — covered by a green unit test, runtime effect not yet observable
+   - `"pending_restart"` — backend fix; scheduled for the bounded restart below
+   - `"pending_new_run"` — agent/** fix; cannot verify this cycle; relies on next cycle's natural `agent_bug` scan
+   - `"runtime_restart_passed"` / `"runtime_restart_still_failing"` — filled in after the bounded restart runs
+
+   **Bounded backend runtime re-verify — ONLY when this cycle's diff touched `orchestrator/backend/**/*.py`:**
+
+   ```bash
+   # ~2s API downtime; SQLite DB persists across restart.
+   bash orchestrator/stop.sh && bash orchestrator/run.sh
+   for i in $(seq 1 10); do
+     curl -fsS http://127.0.0.1:18000/healthz >/dev/null 2>&1 && break
+     sleep 1
+   done
+   bash local-hermes-agent/scripts/audit_orchestrator_api.sh ${CYCLE_ID}-reverify
+   bash local-hermes-agent/scripts/audit_orchestrator_logs.sh ${CYCLE_ID}-reverify
+   python3 local-hermes-agent/scripts/audit_orchestrator_features.py ${CYCLE_ID}-reverify
+   ```
+
+   For each finding previously tagged `pending_restart`, update `reverify_scope` to `runtime_restart_passed` (source now clean) or `runtime_restart_still_failing` (source still reports the same failure). A `runtime_restart_still_failing` finding MUST be reopened (`status: "open"`) — the fix did not actually work and the next cycle needs to take it up with elevated severity per the persistent-bug rule.
+
+   **Agent-code fixes:** mark `reverify_scope: "pending_new_run"` with `reason: "agent/ code only loads on new run creation; auditor cannot create runs"`. Status stays `fixed` ONLY IF Phase 2 added a unit test that passes against the edited source. Otherwise mark the finding `deferred` — do NOT leave a runtime-unverified agent fix as `fixed` without test coverage.
+
+   **Regression guard (unchanged):** if `regression_count > 0` (new findings surfaced in after that weren't in before), `git reset --hard $baseline_sha` and set `exit_status: "blocked_regression"`. Do NOT enter Phase 4 on a regressing diff.
+
+   After re-verification, update `auditor-state.json.exit_status` to `"reverify_complete"` and commit `findings-after.json` if it diverged from what the re-runs now say.
+
+4. **Unified Code Review** — three artifacts required, in order:
+   1. `review.md` — classic diff-hygiene review PLUS per-finding 4-point match matrix (see skill Phase 4 § B): `fix_site_match`, `test_exercises_failure`, `commit_msg_finding_id`, `re_run_source`.
+   2. Cross-cycle regression check (§ C). Run `python3 local-hermes-agent/scripts/check_regression_against_prior_cycles.py <baseline_sha>`; any flagged deletions must be justified in `review.md` under `## Cross-cycle deletions` or reverted. **Revert cooling-off**: when deletions are flagged, every fixed finding in this cycle MUST carry `evidence.regression_evidence` with concrete data (`recall_drop_cycle` / `failing_test` / `log_tail` / `case_outcome`) — prose-only justification is insufficient and is rejected by `scripts/validate_revert_evidence.py`. Without such evidence, demote the finding to `deferred` with reason `"revert cooling-off: no concrete regression evidence this cycle"`. Anti-pattern this blocks: 4 flip-flops (parallel ↔ serialized consume-test) across `badb8ef`/`ee824b9`/`8abdab7`/`5793ded` inside 21 hours with zero benchmark data.
+   3. `adversarial-review.md` (§ D) — independent Q1/Q2/Q3 per finding, treating your Phase 2 reasoning as invisible. If this review disagrees with `review.md`, the adversarial verdict wins — reopen findings or add cleanup commits accordingly.
+
+   Any finding that still fails after cleanup MUST be reopened (status → open) with a documented reason so the next cycle takes it up. Then mark `auditor-state.json.exit_status` as `"ok"` (or `ok_no_fixes`).
+
+## What you must NOT do
+
+- Do NOT run scan-optimizer Phase 1 bug sweeps or Phase 2 recall tuning as a standalone activity — they are subsumed into the auditor workflow.
+- Do NOT write to `state/optimizer-state.json`; this cycle updates `state/auditor-state.json` only.
+- Do NOT deliver a Discord/Telegram report mid-cycle. Delivery is handled by `run_cycle.sh` after you exit.
+- Do NOT create new orchestrator runs during the audit — not against OKX, not against the local target, not via UI, not via API, not via `create_runs.sh`. The auditor is a read-only observer over existing run history. Cycle 20260422T084042Z violated this by creating run #460 for UI testing; repeat violations will be treated as regressions. To exercise UI actions that need a live run, use the most recent completed / running run instead.
+- Do NOT brute-force the login form or try any password — if the localStorage token injection fails, record `token_invalid` and skip UI checks.
+
+## Deliverables before you exit
+
+Update `local-hermes-agent/state/auditor-state.json` with, at minimum:
+```json
+{
+  "cycle_id": "${CYCLE_ID}",
+  "finished_at": "<ISO-8601 UTC>",
+  "findings_total": <int>,
+  "findings_fixed": <int>,
+  "findings_deferred": <int>,
+  "commits": ["<sha>", ...],
+  "notes": "one short line summarizing the session"
+}
+```
+
+Write `audit-reports/${CYCLE_ID}/findings-after.json` mirroring `findings-before.json` but with each finding's `status` set to `fixed`, `deferred`, or `reclassified` (with a reason).
+
+**findings-after.json schema rule (non-negotiable):** every finding id appears EXACTLY ONCE in the file (counting entries across both the `findings` and `deferred` arrays). Never write two records for the same id — even if one records the "fix" and another records a "deferred" note. Instead, put all context on the single record via its `status`, `reason`, `commit`, and `evidence` fields. The Discord renderer now defensively dedups by id, but that's a safety net, not a license to write dirty data.
+
+The controller (`run_cycle.sh`) will read these artifacts to build the summary that goes to Discord. Keep them accurate.

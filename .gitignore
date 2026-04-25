@@ -12,21 +12,21 @@
 /tools/
 # local-openclaw: track shared tooling (scripts, prompts, skills, tests),
 # ignore per-operator state (scheduler.env with tokens, cycle logs, findings).
-# Note: must exclude `/local-openclaw/*` (not `/local-openclaw/`) so the
+# Note: must exclude `/local-hermes-agent/*` (not `/local-hermes-agent/`) so the
 # negation rules below can re-include specific children. Git won't descend
 # into a fully-excluded directory.
-/local-openclaw/*
-!/local-openclaw/scripts/
-!/local-openclaw/prompts/
-!/local-openclaw/requirements/
-!/local-openclaw/skills/
-!/local-openclaw/tests/
-!/local-openclaw/launchd/
+/local-hermes-agent/*
+!/local-hermes-agent/scripts/
+!/local-hermes-agent/prompts/
+!/local-hermes-agent/requirements/
+!/local-hermes-agent/skills/
+!/local-hermes-agent/tests/
+!/local-hermes-agent/launchd/
 # But the generated .plist files are per-operator (labels like
 # com.neothecapt.*) and are rewritten by manage_launchd.sh — the template
 # lives in that script, so the artifacts themselves stay out of git.
-/local-openclaw/launchd/*.plist
-!/local-openclaw/README.md
+/local-hermes-agent/launchd/*.plist
+!/local-hermes-agent/README.md
 /tests/
 /orchestrator/tests/
 /orchestrator/backend/data/
