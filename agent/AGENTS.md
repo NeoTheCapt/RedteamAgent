@@ -195,6 +195,7 @@ These rules from the prior phase flow still apply per-stage:
 - NEVER combine outcome recording (`done`, `error`, `requeue`, `append_*`, queue stats, scope/findings/log updates) and `fetch_batch_to_file.sh` in the same bash call. First record outcomes. Then a dedicated fetch+dispatch.
 - if subagent output includes `REQUEUE_CANDIDATE` or names an untested higher-risk family, requeue rather than retire
 - the dispatcher's in-flight guard (`Refusing fetch for <agent>: N processing`) is correct behavior — it means there's already a task running for that agent; consume those outcomes first
+- BEFORE every fetch-by-stage on `ingested javascript`, run `python3 ./scripts/prune_vendor_cases.py "$DIR/cases.db"` to mark webpack chunks / polyfills / runtime / vendor-bundle / source-map cases as `stage=clean` without burning a source-analyzer dispatch on them. The script matches GENERIC build-tool patterns (chunk/polyfill/runtime/vendor/commons hashes, .js.map, /vendor/ or /lib/ segments, numeric webpack splits) — not target-specific paths — and is idempotent. Audit data showed source-analyzer was at ROI 0.016 (121 dispatches / 2 findings) largely because of this noise; the prune step is the second filter after katana ingest.
 
 ### Rule 7 — surface coverage gate (kept, applies before exit only)
 
