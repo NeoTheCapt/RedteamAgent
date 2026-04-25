@@ -40,6 +40,12 @@ set -euo pipefail
 #       privileged route/control, and must not end with "no multi-step attack path
 #       assessed" while that follow-up is still outstanding.
 #
+#   D8. EXACT ROUTE FOLLOW-UP DEDUPE: operator + source-analyzer must agree that
+#       once an exact browser-flow follow-up for a concrete route is already preserved,
+#       later sibling carriers collapse into that same route should be retired instead
+#       of requeueing another duplicate live-route task. Drift here caused repeated
+#       privacy-security requeues in the 2026-04-25 recall audit.
+#
 # Exit 0 = pass, 1 = violation, 2 = harness error. Run from repo root.
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -175,11 +181,35 @@ for required in \
     fi
 done
 
+# --- D8: EXACT ROUTE FOLLOW-UP DEDUPE ---
+OPERATOR_PROMPT="$PROMPTS_DIR/operator.txt"
+SOURCE_PROMPT="$PROMPTS_DIR/source-analyzer.txt"
+
+for required in \
+    'dispatch one bounded live route execution for that exact route before fetching another same-family surface/page batch' \
+    'treat later sibling carriers as duplicates to retire'; do
+    if ! /usr/bin/grep -qF "$required" "$OPERATOR_PROMPT"; then
+        echo "[D8] operator: missing exact-route dedupe guidance token: $required" >&2
+        echo "      file: $OPERATOR_PROMPT" >&2
+        violations=$((violations + 1))
+    fi
+done
+
+for required in \
+    'do not keep multiple sibling carriers pending for the same exact route' \
+    'Requeue only one representative queue row per exact route/workflow until that live follow-up runs'; do
+    if ! /usr/bin/grep -qF "$required" "$SOURCE_PROMPT"; then
+        echo "[D8] source-analyzer: missing exact-route dedupe guidance token: $required" >&2
+        echo "      file: $SOURCE_PROMPT" >&2
+        violations=$((violations + 1))
+    fi
+done
+
 if [[ $violations -gt 0 ]]; then
     echo "" >&2
     echo "FAIL: $violations consistency violation(s) across sub-agent prompts" >&2
     exit 1
 fi
 
-echo "OK: SUBAGENT BOUNDARY, FINDING IDs, and CASE BATCH framing consistent across all sub-agent prompts"
+echo "OK: SUBAGENT BOUNDARY, FINDING IDs, CASE BATCH framing, and exact-route dedupe guidance consistent across prompts"
 exit 0
