@@ -83,64 +83,131 @@ under that exact `$DIR`.
 DEDUP: Check log.md before dispatch. Never dispatch same agent for same objective twice.
 PARALLEL: Independent tasks → parallel. Dependent → sequential.
 
-## Phase Flow
+## Stage-Based Dispatch (replaces strict phase flow)
 
-1. **RECON** → dispatch recon-specialist + source-analyzer in parallel. During `/engage` handoff, the SAME assistant turn that appends the recon-start log entry must also launch both recon tasks (or record an explicit stop reason). Do not stop after todowrite, file reads, or the recon-start log entry.
-2. **COLLECT** → import endpoints (`recon_ingest.sh`), start Katana, show stats
-3. **CONSUME & TEST** → dispatcher loop: reset-stale → stats → fetch → dispatch → done → requeue → repeat. Exit only when pending=0 AND processing=0.
-   Dispatch rule is strict:
-   - every non-empty fetched batch MUST be followed by exactly one matching subagent task in the same loop pass
-   - `api`, `graphql`, `form`, `upload`, and `websocket` batches MUST dispatch `vulnerability-analyst`
-   - `api-spec`, `page`, `data`, `javascript`, `stylesheet`, and `unknown` batches MUST dispatch `source-analyzer`
-   - consume-test dispatch is SERIALIZED: fetch and dispatch exactly one non-empty batch at a time, wait for that subagent result, record its `### Case Outcomes`, then fetch the next batch
-   - a consume-test subagent handoff is not complete unless it includes a literal `### Case Outcomes` section that accounts for every fetched case ID exactly once with `DONE`, `REQUEUE`, or `ERROR`; if that section is missing or incomplete, immediately request a corrected handoff before touching queue state
-   - do NOT launch overlapping `task` calls inside the same consume-test pass, even when multiple fetched batch files are non-empty
-   - never leave fetched cases in `processing` without a dispatched subagent task
-   - after each dispatched subagent returns, immediately consume its `### Case Outcomes` and run the required `done` / `requeue` updates before the next fetch cycle
-   - once outcome recording starts for a consume-test batch, that SAME turn must either (a) finish the queue updates and immediately perform the next fetch+dispatch step, or (b) run the stop/completion checks and emit an explicit stop reason; never end on commentary-only text such as `[operator] Continuing consume_test.` while queue work remains
-   - if coverage-expanding source batches remain pending (`api-spec`, `javascript`, `unknown`, or a clearly seed-like `page` such as the root/bootstrap page), do NOT keep chaining vulnerability-analyst batches indefinitely; after any completed API-family batch, the next queue selection SHOULD attempt one of those `source-analyzer` batches before taking another API-family batch
-   - do NOT let generic low-yield `page`, `stylesheet`, or `data` backlog (for example redirects, media-heavy pages, or static assets) starve high-signal API-family work once coverage-expanding source batches have already been drained
-   - when benchmark quality is failing/regressing or surface coverage is unresolved, prefer draining one coverage-expanding `source-analyzer` batch before returning to another API-family batch so bundle-derived routes/surfaces can materialize into follow-up cases; once only generic low-yield source backlog remains, switch back to API-family testing instead of looping on more page churn
-   - when concrete `operator-surface-coverage` follow-up cases exist, treat them as higher-signal than generic route/help/locale backlog. Pull one surfaced exact route/workflow follow-up (especially `dynamic_render`, `auth_entry`, `privileged_write`, `file_handling`, or a consumer of a disclosed workflow primitive) before returning to low-yield static/page churn
-   - if subagent output includes `REQUEUE_CANDIDATE` or clearly says an endpoint still has an untested higher-risk family, do NOT mark that case exhausted; requeue the same case (or a narrowed sibling follow-up) before the next fetch
-   - outcome-recording bash blocks may do `done` / `requeue` / stats updates, but MUST NOT also prefetch the next non-empty batch unless that SAME assistant turn will immediately launch the matching subagent task
-   - do NOT hide the next non-empty fetch inside a "record outcomes" bash command and then leave the turn on commentary, a fresh `step_start`, or any other non-dispatch state; fetched cases may not sit in `processing` waiting for a later response
-   - NEVER combine outcome recording (`done`, `error`, `requeue`, `append_*`, queue stats, scope/findings/log updates) and `fetch_batch_to_file.sh` in the same bash/tool call. First record outcomes. Then do a dedicated fetch+dispatch step.
-   - ALWAYS fetch via `./scripts/fetch_batch_to_file.sh "$DIR/cases.db" <type> <limit> <agent> "$BATCH_FILE"`; it writes the full JSON batch to disk and prints only compact `BATCH_*` metadata for the model
-   - NEVER `cat "$BATCH_FILE"`, print raw fetched JSON, or paste full batch payloads back into the model context; dispatch from the saved file path instead
-   - treat the fetch output as a dispatch contract: if `BATCH_COUNT > 0`, the very next advancing action MUST be the matching `task(...)` call for that same `BATCH_AGENT`/`BATCH_FILE`; do not insert reads, grep, todo updates, queue summaries, or any other tool call in between
-   - use the emitted `BATCH_FILE`, `BATCH_TYPE`, `BATCH_AGENT`, `BATCH_IDS`, and `BATCH_PATHS` directly when framing the dispatch; do not reopen the batch file just to decide whether to dispatch
-   - if you are not ready to launch the matching subagent immediately, do NOT fetch yet
-   - immediately after a non-empty fetch, the SAME turn MUST launch the matching subagent task before any extra reads, summaries, todo updates, stop checks, or additional bash/tool calls
-   - if a tool result ends with `BATCH_COUNT > 0`, that assistant turn is not complete until the matching `task(...)` call has been issued; a fetch result alone never counts as progress
-   Before leaving Test phase, run `./scripts/reconcile_surface_coverage.sh "$DIR" --ingest-followups` and then `./scripts/check_surface_coverage.sh "$DIR"`.
-   `reconcile_surface_coverage.sh` auto-promotes already-validated surfaces to `covered`/`not_applicable` and can enqueue concrete follow-up cases for unresolved, requestable surfaces. If it adds follow-up cases, stay in consume-test and work that queue before checking coverage again.
-   If coverage still fails, do not advance. In that SAME turn, either mark the surface with `./scripts/append_surface.sh "$DIR" <surface_type> <target> <source> <rationale> [evidence_ref] covered|not_applicable|deferred` (status last) using existing evidence or dispatch exactly one bounded surface-coverage follow-up batch. Do NOT grep the scripts directory and then idle.
-   Reuse existing evidence before issuing new probes. Any ad-hoc in-scope HTTP validation MUST stay bounded: use at most 1-2 representative probes per surface, prefer already-queued endpoints/artifacts, and every `run_tool curl` command MUST include both `--connect-timeout 5` and `--max-time 20` (or stricter). Never launch long multi-endpoint bundles, unbounded loops, or background probes during surface-coverage follow-up.
-   High-risk surfaces `account_recovery`, `dynamic_render`, `object_reference`, and `privileged_write`
-   may NOT remain `deferred` when moving to Exploit/Report. They must be `covered` or `not_applicable`.
-   A `dynamic_render` surface is NOT covered by static artifact review alone. If route capture proves the exact route exists or loads a route-specific module/screen, schedule one bounded live route execution against that same path with `./scripts/browser_flow.py --url "<exact-route-url>" --output-dir "$DIR/scans/browser-flow/<slug>" [--cookies-from-auth "$DIR/auth.json"]` and, when existing evidence already shows a concrete control/form, run one matching page action via a small `--steps-file` JSON before marking the surface exhausted. When exact CSS selectors are unknown, prefer the browser-flow text helpers (`click_text`, `type_by_label`, `type_by_placeholder`, `submit_first_form`) keyed off visible labels/placeholders/button text instead of stalling on selector hunting. If saved browser-flow evidence shows that an exact write-capable workflow already submitted successfully (redirect after submit, success snackbar/toast, confirmation dialog, created record, or another distinct post-submit state), do NOT treat the surface or branch as exhausted yet: dispatch one bounded exploit follow-up on that same exact workflow — first a duplicate/second submission replay, then one evidence-grounded empty/boundary/forged/unauthorized variant when the visible controls or auth context make it meaningful. If a text-helper step fails on an evidenced modal/dialog/geo gate, inspect the saved DOM once for a concrete selector/id/aria-label and immediately run one selector-aware retry (`wait_for_selector` + `click` on that exact selector) before treating the route as blocked or emitting `runtime_error`.
-4. **EXPLOIT** → dispatch osint-analyst + exploit-developer in parallel. After osint: read intel.md, HIGH value → findings.md + exploit 2nd round.
-   Exploit entry rule is strict: the SAME turn that decides exploit has started must launch both the osint-analyst task and at least one bounded exploit-developer task. Do NOT stop after only `Exploit start`, only OSINT triage, or only a todo/log update. If OSINT returns first and no exploit-developer task is running yet, dispatch the missing exploit-developer task before ending the turn.
-   Treat exposed `file_handling` artifacts (public backups, vaults, dumps, config exports, archives, encoded notes) as real exploit branches, not passive evidence. If findings/surfaces already contain such an artifact, the first exploit-developer round should include one bounded offline artifact-triage/cracking step against the saved local file before exploit can be considered drained.
-   Exploit-phase exit rule is strict: once queue stats are pending=0 and processing=0, collection health passes, surface coverage passes, and all active exploit tasks have returned with no new concrete branch to pursue, do NOT idle in exploit. In that same turn, append a concise phase-transition log entry, mark `exploit` complete in `scope.json`, switch `current_phase` to `report`, update the todo list, and dispatch `report-writer` immediately.
-5. **REPORT** → dispatch report-writer
-   Never stop after saying reporting is next. The same assistant turn that decides reporting should begin MUST actually dispatch `report-writer`.
-   After report generation, NEVER mutate `scope.json` directly with raw `jq`/`python` to force `.status = "complete"` or `.current_phase = "complete"`.
-   The ONLY allowed report-finalization command is `./scripts/finalize_engagement.sh "$DIR"`.
-   For continuous-observation targets, `report-writer` should stop after writing `report.md` and hand control back. The operator MUST run `./scripts/finalize_engagement.sh "$DIR"` itself as the final blocking action so the runtime stays attached to the observation hold.
-   If that command enters or reports a continuous observation hold / does not exit normally, the run remains active in `report`; do NOT append `stop_reason=completed`, do NOT write a fallback completion log entry, do NOT translate the hold into `stop_reason=runtime_error`, and do NOT run any secondary command that marks the engagement complete.
+The pipeline is now CASE-LEVEL, not phase-level. Each case in `cases.db` carries a `stage` column independent of `status`. Multiple subagents work on different stages in parallel — a case at `vuln_confirmed` can run through exploit-developer at the same turn an `ingested` case is at source-analyzer.
+
+### The pipeline
+
+```
+                       ┌──→ source_analyzed ──┐
+ingested ─→ (analyze) ─┤                      ├─→ api_tested (clean)
+                       └──→ vuln_confirmed ───┴─→ exploited (finding)
+                                                   ↓ feedback loop
+recon-specialist re-dispatch on auth foothold     intel.md + auth.json
+```
+
+| Stage | Set by | Next dispatch |
+|---|---|---|
+| `ingested` | producers (recon-specialist, source-analyzer ingest, katana, source) | type=javascript/page/stylesheet/data/unknown/api-spec → source-analyzer; type=api/form/graphql/upload/websocket → vulnerability-analyst |
+| `source_analyzed` | source-analyzer (after analyzing a JS/page/data/unknown) | if that source produced an `api`/`form` follow-up case, the new case starts at `ingested`; THIS case is terminal as far as testing pipeline goes (mark `STAGE=clean` to retire) UNLESS the source itself contained a directly testable surface (in which case the source-analyzer marks `STAGE=vuln_confirmed`) |
+| `vuln_confirmed` | source-analyzer (rare) or vulnerability-analyst (main) | exploit-developer |
+| `api_tested` | vulnerability-analyst (when no vuln found) | terminal — case retires |
+| `exploited` | exploit-developer (after writing a finding) | terminal |
+| `clean` | any subagent (no further work needed) | terminal |
+| `errored` | dispatcher `error` action or subagent ERROR outcome | terminal (until `retry-errors`) |
+
+### Rule 1 — dispatch is per-stage and CONCURRENT across stages
+
+In a single operator turn, you may issue MULTIPLE fetch+task pairs IF AND ONLY IF each pair is for a DIFFERENT (stage, agent) combination. Concrete:
+- ✅ same turn: fetch-by-stage `ingested api 5 vulnerability-analyst` + task; fetch-by-stage `vuln_confirmed api 3 exploit-developer` + task; fetch-by-stage `ingested javascript 5 source-analyzer` + task
+- ❌ same turn: two `ingested api` fetches (same stage+type) — second one will be empty (in-flight guard)
+- ❌ same turn: outcome-recording for a previously-dispatched batch + a new fetch — first record outcomes, then dedicated fetch+dispatch
+
+Each fetch must still be paired with the matching `task(...)` in the SAME turn before the turn ends. The dispatcher's in-flight guard (refuses fetch when assigned_agent already has processing rows) prevents double-dispatching the same agent. Cross-stage parallelism is the design intent.
+
+### Rule 2 — stage transitions are explicit, recorded by subagent
+
+Every subagent's `### Case Outcomes` section MUST include a stage marker per case using one of:
+
+```
+DONE STAGE=source_analyzed   case=NN  (advance to next pipeline stage; status will flip back to pending for the next subagent)
+DONE STAGE=vuln_confirmed    case=NN  (caller must dispatch exploit-developer for this case next)
+DONE STAGE=api_tested        case=NN  (vulnerability-analyst found nothing; terminal)
+DONE STAGE=exploited         case=NN  (exploit-developer wrote a finding; terminal)
+DONE STAGE=clean             case=NN  (no further work; terminal)
+REQUEUE                      case=NN  (back to current stage with reason — for stuck/partial work)
+ERROR                        case=NN  (irrecoverable; terminal until retry-errors)
+```
+
+The operator translates these into `dispatcher.sh ... done <id> --stage <stage>` calls. Without an explicit STAGE marker, treat as legacy `done` (stage unchanged) and log a contract warning — eventually subagents must always emit STAGE.
+
+### Rule 3 — phases are now derived labels
+
+`scope.json.current_phase` and `phases_completed` are still maintained for backward compatibility, but their values are computed from stage stats, not gates:
+
+| Derived `current_phase` | Trigger |
+|---|---|
+| `recon` | recon-specialist still in flight on initial discovery |
+| `collect` | katana / source-analyzer still ingesting; cases.db growing |
+| `consume_test` | majority of active cases are in `ingested` or `source_analyzed` |
+| `exploit` | any case at `vuln_confirmed` or any exploit-developer in flight |
+| `report` | report-writer running, no other in-flight subagent |
+
+Update happens via `./scripts/update_phase_from_stages.sh "$DIR"` (computes the label from stage counts; idempotent). Never `jq`-mutate `scope.json` directly to fake a transition.
+
+### Rule 4 — initial fan-out (replaces the old "RECON → COLLECT → CONSUME_TEST" sequencing)
+
+`/engage` handoff still launches recon-specialist + source-analyzer in parallel. Once cases start landing in `ingested`, the operator can ALREADY begin dispatching by stage even while recon-specialist is still running. There is no longer a "wait for recon to finish before testing" gate.
+
+The same turn that appends the engagement-start log entry MUST do at least one of:
+- launch recon-specialist (if not yet running) AND source-analyzer
+- OR if recon is already running and `cases.db` has ≥ N ingested cases, dispatch the first stage-aware fetch+task batch
+
+### Rule 5 — stop condition (replaces "pending=0 AND processing=0")
+
+Exit allowed only when ALL of the following hold:
+- `dispatcher.sh stats-by-stage` shows zero cases in active stages: `ingested`, `source_analyzed`, `vuln_confirmed`
+- zero cases in `processing` status (no in-flight subagent batch)
+- `check_collection_health.sh` passes
+- `check_surface_coverage.sh` passes
+- recon-specialist has returned at least once (no still-in-flight initial recon)
+
+Cases at `api_tested`, `clean`, `exploited`, `errored` do NOT block exit (they're terminal). This replaces the old "pending=0 AND processing=0" rule which required draining all cases through one big consume_test pass.
+
+### Rule 6 — operational hygiene (kept from the old flow)
+
+These rules from the prior phase flow still apply per-stage:
+
+- ALWAYS fetch via `./scripts/fetch_batch_to_file.sh "$DIR/cases.db" --stage <stage> <type> <limit> <agent> "$BATCH_FILE"`; it writes the full JSON batch to disk and prints only compact `BATCH_*` metadata
+- NEVER `cat "$BATCH_FILE"`, print raw fetched JSON, or paste full batch payloads back into the model
+- if `BATCH_COUNT > 0`, the very next advancing action MUST be the matching `task(...)` call for that same `BATCH_AGENT`/`BATCH_FILE`
+- if you are not ready to launch the matching subagent immediately, do NOT fetch yet
+- a subagent handoff is not complete unless the `### Case Outcomes` section accounts for every fetched case ID exactly once with `DONE STAGE=<stage>` / `REQUEUE` / `ERROR`
+- NEVER combine outcome recording (`done`, `error`, `requeue`, `append_*`, queue stats, scope/findings/log updates) and `fetch_batch_to_file.sh` in the same bash call. First record outcomes. Then a dedicated fetch+dispatch.
+- if subagent output includes `REQUEUE_CANDIDATE` or names an untested higher-risk family, requeue rather than retire
+- the dispatcher's in-flight guard (`Refusing fetch for <agent>: N processing`) is correct behavior — it means there's already a task running for that agent; consume those outcomes first
+
+### Rule 7 — surface coverage gate (kept, applies before exit only)
+
+Before declaring the cycle complete, run `./scripts/reconcile_surface_coverage.sh "$DIR" --ingest-followups` and then `./scripts/check_surface_coverage.sh "$DIR"`. If `reconcile_surface_coverage.sh` adds follow-up cases (which land at stage `ingested`), stay in the loop and process them.
+
+If coverage still fails, mark the surface with `./scripts/append_surface.sh "$DIR" <surface_type> <target> <source> <rationale> [evidence_ref] covered|not_applicable|deferred` using existing evidence, OR dispatch exactly one bounded surface-coverage follow-up batch.
+
+Reuse existing evidence before issuing new probes. Any ad-hoc in-scope HTTP validation MUST stay bounded: at most 1-2 representative probes per surface; every `run_tool curl` MUST include `--connect-timeout 5` and `--max-time 20`. Never launch long multi-endpoint bundles, unbounded loops, or background probes.
+
+High-risk surfaces (`account_recovery`, `dynamic_render`, `object_reference`, `privileged_write`) may NOT remain `deferred` when moving to Report. They must be `covered` or `not_applicable`. A `dynamic_render` surface is NOT covered by static artifact review alone — schedule one bounded live route execution against that same path with `./scripts/browser_flow.py`. Use text-helpers (`click_text`, `type_by_label`, `type_by_placeholder`, `submit_first_form`) keyed off visible labels/placeholders/button text instead of stalling on selector hunting. If saved browser-flow evidence shows an exact write-capable workflow already submitted successfully, dispatch one bounded exploit follow-up: first a duplicate/second submission replay, then one evidence-grounded empty/boundary/forged/unauthorized variant when the visible controls or auth context make it meaningful. If a text-helper step fails on an evidenced modal/dialog/geo gate, inspect the saved DOM once for a concrete selector/id/aria-label and run one selector-aware retry before emitting `runtime_error`.
+
+### Rule 8 — Report
+
+Once active stages are drained AND surface coverage passes AND no in-flight subagent: dispatch `report-writer`. Never stop after saying reporting is next; the same turn that decides reporting MUST actually dispatch `report-writer`.
+
+After report generation, NEVER mutate `scope.json` directly with raw `jq`/`python` to force `.status = "complete"` or `.current_phase = "complete"`. The ONLY allowed report-finalization command is `./scripts/finalize_engagement.sh "$DIR"`.
+
+For continuous-observation targets, `report-writer` stops after writing `report.md`; the operator MUST run `./scripts/finalize_engagement.sh "$DIR"` itself as the final blocking action. If that command enters/reports a continuous observation hold or does not exit normally, the run remains active in `report`; do NOT append `stop_reason=completed`, do NOT override `scope.json` afterward.
 
 ## Stop Conditions
 
 Do NOT stop because one batch completed or because you can summarize partial progress.
 Before any final stop/completion message:
-- run `./scripts/dispatcher.sh "$DIR/cases.db" stats`
-- if pending > 0 or processing > 0, continue the loop and do NOT stop
+- run `./scripts/dispatcher.sh "$DIR/cases.db" stats-by-stage`
+- if cases at active stages (`ingested`, `source_analyzed`, `vuln_confirmed`) > 0, continue the loop and do NOT stop
+- if any case is in `processing` status (in-flight subagent), wait for the outcome before stopping
 - if `./scripts/check_collection_health.sh "$DIR"` fails, do NOT stop
 - if `./scripts/check_surface_coverage.sh "$DIR"` fails, do NOT stop
 - if `./scripts/finalize_engagement.sh "$DIR"` entered a continuous observation hold or did not exit normally, do NOT emit `completed`, do NOT try to override `scope.json` afterward, and do NOT write a `Run stop` fallback for that hold
 - assistant turn boundary, context bloat, or token budget pressure by themselves are NOT valid stop reasons; shrink context with targeted reads and keep advancing
+- cases at terminal stages (`api_tested`, `clean`, `exploited`, `errored`) do NOT block exit — they're done. Only the active-stage tally matters.
 
 If you must stop because of a real blocker, write an explicit log entry first:
 `./scripts/append_log_entry.sh "$DIR" operator "Run stop" "stop_reason=<code>" "<human-readable reason>"`

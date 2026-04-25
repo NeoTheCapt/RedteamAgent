@@ -16,14 +16,28 @@ if [[ -z "$DB" || -z "$ACTION" ]]; then
   echo "Usage: $0 <db_path> <action> [args...]"
   echo ""
   echo "Actions:"
-  echo "  stats                          Show queue statistics"
-  echo "  fetch <type> <limit> <agent>   Atomic consume batch (JSON output)"
-  echo "  done <id_list>                 Mark comma-separated IDs as done"
+  echo "  stats                          Show queue statistics (by status/type)"
+  echo "  stats-by-stage                 Show queue statistics by (stage, type)"
+  echo "  fetch <type> <limit> <agent>   Legacy: fetch by type, sets status=processing"
+  echo "  fetch-by-stage <stage> <type> <limit> <agent>"
+  echo "                                 Stage-aware fetch (preferred); cases must"
+  echo "                                 be at <stage> AND of <type>; sets status=processing"
+  echo "  done <id_list> [--stage S]     Mark IDs as done; optional --stage advances pipeline"
   echo "  error <id_list>                Mark comma-separated IDs as error"
+  echo "  set-stage <id_list> <stage>    Bulk update stage column (no status change)"
   echo "  reset-stale <minutes>          Recover stuck processing cases"
   echo "  retry-errors [max_retries]     Retry error cases (default max: 2)"
-  echo "  migrate                        Add retry_count column if missing"
+  echo "  migrate                        Add missing schema columns (idempotent)"
   echo "  requeue [id_list ...] [reason] Requeue existing case IDs or read JSON lines from stdin"
+  echo ""
+  echo "Stage values (pipeline state machine):"
+  echo "  ingested         freshly discovered, needs first-pass triage"
+  echo "  source_analyzed  source-analyzer ran (may set vuln_candidate)"
+  echo "  api_tested       vulnerability-analyst ran, no vuln found"
+  echo "  vuln_confirmed   exploitable; ready for exploit-developer"
+  echo "  exploited        finding written end-to-end"
+  echo "  clean            tested, no vuln, terminal"
+  echo "  errored          terminal failure (use 'error' action)"
   exit 1
 fi
 
@@ -240,6 +254,30 @@ ensure_cases_column "assigned_agent" "TEXT"
 ensure_cases_column "consumed_at" "TEXT"
 sql "ALTER TABLE cases ADD COLUMN retry_count INTEGER DEFAULT 0;" 2>/dev/null || true
 
+# Pipeline stage column (added 2026-04-25). Lets cases progress through
+# discrete pipeline stages independently of the legacy phase flag, so
+# multiple subagents can work on different cases in different stages
+# concurrently. Backfill existing rows: anything that was ever 'done' is
+# treated as 'clean' (already terminal, won't be re-dispatched);
+# everything else (pending/processing/error) starts at 'ingested' so the
+# new pipeline picks it up.
+ensure_cases_column "stage" "TEXT NOT NULL DEFAULT 'ingested'"
+sql "UPDATE cases SET stage='clean' WHERE status='done' AND (stage IS NULL OR stage='ingested' OR stage='');" 2>/dev/null || true
+sql "UPDATE cases SET stage='ingested' WHERE stage IS NULL OR stage='';" 2>/dev/null || true
+
+# Per-case priority hint (optional; used by fetch ordering). Higher = sooner.
+ensure_cases_column "predicted_value" "INTEGER NOT NULL DEFAULT 0"
+
+_validate_stage() {
+  case "$1" in
+    ingested|source_analyzed|api_tested|vuln_confirmed|exploited|clean|errored)
+      return 0 ;;
+    *)
+      echo "ERROR: invalid stage '$1' (allowed: ingested|source_analyzed|api_tested|vuln_confirmed|exploited|clean|errored)" >&2
+      return 1 ;;
+  esac
+}
+
 case "$ACTION" in
   stats)
     echo "--- Queue Statistics ---"
@@ -249,6 +287,26 @@ case "$ACTION" in
     sql "SELECT status, COUNT(*) as count FROM cases GROUP BY status ORDER BY status;"
     echo ""
     sql "SELECT 'TOTAL', COUNT(*) FROM cases;"
+    ;;
+
+  stats-by-stage)
+    echo "--- Queue Statistics by Stage ---"
+    sql "SELECT stage, type, COUNT(*) as count FROM cases GROUP BY stage, type ORDER BY stage, type;"
+    echo ""
+    echo "--- Stage Summary ---"
+    sql "SELECT stage, COUNT(*) as count FROM cases GROUP BY stage ORDER BY stage;"
+    echo ""
+    echo "--- Active vs Terminal ---"
+    sql "
+      SELECT 'active (ingested|source_analyzed|vuln_confirmed)' as bucket, COUNT(*)
+        FROM cases WHERE stage IN ('ingested','source_analyzed','vuln_confirmed')
+      UNION ALL
+      SELECT 'in-flight (processing)', COUNT(*) FROM cases WHERE status='processing'
+      UNION ALL
+      SELECT 'terminal (clean|exploited|errored|api_tested)', COUNT(*)
+        FROM cases WHERE stage IN ('clean','exploited','errored','api_tested')
+      UNION ALL
+      SELECT 'TOTAL', COUNT(*) FROM cases;"
     ;;
 
   fetch)
@@ -274,6 +332,12 @@ case "$ACTION" in
 
     ORDER_CLAUSE="$(fetch_priority_order_clause "$TYPE")"
 
+    # Legacy fetch: pulls 'pending' cases regardless of stage. Kept for
+    # backward compatibility; new code should use fetch-by-stage to gate
+    # per pipeline stage. The legacy path defaults to ingested-stage
+    # cases so it doesn't accidentally re-dispatch already-processed
+    # work that's at a later stage (e.g. vuln_confirmed shouldn't be
+    # eligible for source-analyzer just because it's pending again).
     sqlite3 "$DB" ".timeout 5000" -json "
       UPDATE cases
       SET status = 'processing',
@@ -282,6 +346,53 @@ case "$ACTION" in
       WHERE id IN (
         SELECT id FROM cases
         WHERE status = 'pending' AND type = '${TYPE}'
+              AND stage IN ('ingested', 'source_analyzed', 'vuln_confirmed')
+        ${ORDER_CLAUSE}
+        LIMIT ${LIMIT}
+      )
+      RETURNING *;
+    "
+    ;;
+
+  fetch-by-stage)
+    STAGE="${3:?Missing stage argument}"
+    TYPE="${4:?Missing type argument}"
+    LIMIT="${5:?Missing limit argument}"
+    AGENT="${6:?Missing agent argument}"
+
+    if ! _validate_stage "$STAGE"; then
+      exit 1
+    fi
+    TYPE="${TYPE//\'/\'\'}"
+    AGENT="${AGENT//\'/\'\'}"
+    STAGE_ESC="${STAGE//\'/\'\'}"
+    if ! [[ "$LIMIT" =~ ^[0-9]+$ ]]; then
+      echo "ERROR: limit must be a positive integer" >&2
+      exit 1
+    fi
+
+    IN_FLIGHT_FOR_AGENT=$(sql "SELECT COUNT(*) FROM cases WHERE status='processing' AND assigned_agent='${AGENT}';")
+    if [[ "${IN_FLIGHT_FOR_AGENT:-0}" =~ ^[0-9]+$ ]] && (( IN_FLIGHT_FOR_AGENT > 0 )); then
+      echo "[]"
+      echo "Refusing fetch for ${AGENT}: ${IN_FLIGHT_FOR_AGENT} case(s) already processing" >&2
+      exit 0
+    fi
+
+    ORDER_CLAUSE="$(fetch_priority_order_clause "$TYPE")"
+
+    # Stage-aware fetch: cases must be at the requested stage AND of the
+    # requested type AND status=pending. Sets status=processing and
+    # assigned_agent. Stage column is NOT changed here — stage transition
+    # is the subagent's responsibility (via 'done --stage' or
+    # 'set-stage') so the operator can audit transitions explicitly.
+    sqlite3 "$DB" ".timeout 5000" -json "
+      UPDATE cases
+      SET status = 'processing',
+          assigned_agent = '${AGENT}',
+          consumed_at = datetime('now')
+      WHERE id IN (
+        SELECT id FROM cases
+        WHERE status = 'pending' AND type = '${TYPE}' AND stage = '${STAGE_ESC}'
         ${ORDER_CLAUSE}
         LIMIT ${LIMIT}
       )
@@ -291,15 +402,78 @@ case "$ACTION" in
 
   done)
     shift 2
-    ID_LIST="$(normalize_id_list "$@")"
-    sql "UPDATE cases SET status='done' WHERE id IN (${ID_LIST});"
-    echo "Marked done: ${ID_LIST}"
+    # Optional `--stage <stage>` flag: advance pipeline at the same time.
+    # Without --stage, status flips to 'done' but stage is unchanged
+    # (legacy behaviour). With --stage, stage column is updated atomically
+    # and status flips to 'pending' if the new stage is non-terminal so
+    # the next subagent can pick it up; status flips to 'done' if the new
+    # stage is terminal (clean / exploited / errored).
+    NEW_STAGE=""
+    DONE_ARGS=()
+    while (($#)); do
+      case "$1" in
+        --stage)
+          NEW_STAGE="${2:?Missing stage value after --stage}"
+          shift 2
+          ;;
+        *)
+          DONE_ARGS+=("$1")
+          shift
+          ;;
+      esac
+    done
+
+    if [[ -n "$NEW_STAGE" ]]; then
+      if ! _validate_stage "$NEW_STAGE"; then
+        exit 1
+      fi
+    fi
+
+    if ((${#DONE_ARGS[@]} == 0)); then
+      echo "ERROR: done requires at least one numeric ID" >&2
+      exit 1
+    fi
+    ID_LIST="$(normalize_id_list "${DONE_ARGS[@]}")"
+    if [[ -n "$NEW_STAGE" ]]; then
+      case "$NEW_STAGE" in
+        clean|exploited|errored)
+          # Terminal: status=done, stage=<terminal>
+          sql "UPDATE cases SET status='done', stage='${NEW_STAGE}' WHERE id IN (${ID_LIST});"
+          echo "Marked done (stage=${NEW_STAGE}, terminal): ${ID_LIST}"
+          ;;
+        *)
+          # Non-terminal stage advance: set stage and clear processing so
+          # the next subagent can fetch by the new stage.
+          sql "UPDATE cases SET status='pending', stage='${NEW_STAGE}', assigned_agent=NULL, consumed_at=NULL WHERE id IN (${ID_LIST});"
+          echo "Advanced stage=${NEW_STAGE} (re-pending for next stage): ${ID_LIST}"
+          ;;
+      esac
+    else
+      sql "UPDATE cases SET status='done' WHERE id IN (${ID_LIST});"
+      echo "Marked done: ${ID_LIST}"
+    fi
+    ;;
+
+  set-stage)
+    shift 2
+    if (($# < 2)); then
+      echo "Usage: dispatcher.sh <db> set-stage <id_list> <stage>" >&2
+      exit 1
+    fi
+    NEW_STAGE="${@: -1}"
+    if ! _validate_stage "$NEW_STAGE"; then
+      exit 1
+    fi
+    SET_ARGS=("${@:1:$#-1}")
+    ID_LIST="$(normalize_id_list "${SET_ARGS[@]}")"
+    sql "UPDATE cases SET stage='${NEW_STAGE}' WHERE id IN (${ID_LIST});"
+    echo "Set stage=${NEW_STAGE} for: ${ID_LIST}"
     ;;
 
   error)
     shift 2
     ID_LIST="$(normalize_id_list "$@")"
-    sql "UPDATE cases SET status='error', retry_count = COALESCE(retry_count,0) + 1 WHERE id IN (${ID_LIST});"
+    sql "UPDATE cases SET status='error', stage='errored', retry_count = COALESCE(retry_count,0) + 1 WHERE id IN (${ID_LIST});"
     echo "Marked error: ${ID_LIST}"
     ;;
 

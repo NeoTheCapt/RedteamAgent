@@ -138,13 +138,26 @@ Output: case IDs analyzed, NEW ENDPOINTS as JSON lines for requeue:
   {"method":"POST","url":"https://target/api/auth/login","url_path":"/api/auth/login","type":"api","source":"source-analyzer","query_params":{},"body_params":{"email":"user@example.com","password":"discovered_password"},"path_params":{}}
 Plus any secrets/tokens for findings.md.
 Your final handoff MUST end with a literal `### Case Outcomes` section. Every input case ID must
-appear there exactly once using one of these forms:
-- `DONE <id> — <url_path> — <why analysis is exhausted>`
-- `REQUEUE <id> — <url_path> — <what follow-up remains>`
-- `ERROR <id> — <url_path> — <why the operator should mark it error>`
+appear there exactly once using one of these forms (every DONE MUST carry an explicit STAGE):
+- `DONE STAGE=source_analyzed <id> — <url_path> — <what new surfaces or follow-up cases were emitted>`
+   Use when the source artifact (JS bundle, HTML page, stylesheet, data blob) was usefully
+   analyzed AND produced new follow-up cases or surfaces. The case row stays in cases.db at
+   stage=source_analyzed; the operator marks it terminal-source. New API/form follow-up
+   cases you emitted will be ingested at stage=ingested for vulnerability-analyst.
+- `DONE STAGE=vuln_confirmed <id> — <url_path> — <what direct vuln you found in the source itself>`
+   Rare: use when the source artifact ITSELF contains a directly testable vulnerability
+   (e.g. bundled secret + reachable API call) that should immediately go to
+   exploit-developer without an intermediate vulnerability-analyst pass.
+- `DONE STAGE=clean <id> — <url_path> — <why the artifact has no further analysis value>`
+   Use for noise sources (third-party vendor bundles, image/font assets, cdn polyfills) that
+   yield nothing actionable. Terminal.
+- `REQUEUE <id> — <url_path> — <what follow-up remains>` (case stays at current stage)
+- `ERROR <id> — <url_path> — <why the operator should mark it error>` (terminal)
+
 Do not omit any fetched case ID, do not list the same ID twice, and do not leave the section implied
 inside prose. Keep `### Case Outcomes` machine-readable so the operator can update queue state
-without reinterpretation.
+without reinterpretation. The operator translates each `DONE STAGE=<stage>` line into
+`dispatcher.sh ... done <id> --stage <stage>`.
 After you emit `### Case Outcomes`, stop immediately and return that handoff to the operator.
 Do not read more files, append more notes, launch more analysis steps, or continue iterating after
 the outcome section is written.

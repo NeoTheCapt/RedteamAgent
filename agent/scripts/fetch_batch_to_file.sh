@@ -4,11 +4,26 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DISPATCHER="$SCRIPT_DIR/dispatcher.sh"
 
-DB_PATH="${1:?usage: fetch_batch_to_file.sh <db_path> <type> <limit> <agent> <out_file>}"
-BATCH_TYPE="${2:?usage: fetch_batch_to_file.sh <db_path> <type> <limit> <agent> <out_file>}"
-BATCH_LIMIT="${3:?usage: fetch_batch_to_file.sh <db_path> <type> <limit> <agent> <out_file>}"
-BATCH_AGENT="${4:?usage: fetch_batch_to_file.sh <db_path> <type> <limit> <agent> <out_file>}"
-OUT_FILE_RAW="${5:?usage: fetch_batch_to_file.sh <db_path> <type> <limit> <agent> <out_file>}"
+# Two invocation forms (positional, backward compatible):
+#   legacy: fetch_batch_to_file.sh <db> <type> <limit> <agent> <out_file>
+#   stage:  fetch_batch_to_file.sh <db> --stage <stage> <type> <limit> <agent> <out_file>
+#
+# The legacy form keeps working unchanged for existing callers. The stage
+# form gates fetch on a specific pipeline stage so multiple subagents can
+# work on different stages of the same case-type concurrently.
+DB_PATH="${1:?usage: fetch_batch_to_file.sh <db_path> [--stage <stage>] <type> <limit> <agent> <out_file>}"
+shift
+
+BATCH_STAGE=""
+if [[ "${1:-}" == "--stage" ]]; then
+    BATCH_STAGE="${2:?--stage requires a value}"
+    shift 2
+fi
+
+BATCH_TYPE="${1:?usage: fetch_batch_to_file.sh <db_path> [--stage <stage>] <type> <limit> <agent> <out_file>}"
+BATCH_LIMIT="${2:?usage: fetch_batch_to_file.sh <db_path> [--stage <stage>] <type> <limit> <agent> <out_file>}"
+BATCH_AGENT="${3:?usage: fetch_batch_to_file.sh <db_path> [--stage <stage>] <type> <limit> <agent> <out_file>}"
+OUT_FILE_RAW="${4:?usage: fetch_batch_to_file.sh <db_path> [--stage <stage>] <type> <limit> <agent> <out_file>}"
 
 if [[ ! -f "$DB_PATH" ]]; then
     echo "database not found: $DB_PATH" >&2
@@ -27,7 +42,11 @@ OUT_FILE="$(cd "$(dirname "$OUT_FILE")" && pwd)/$(basename "$OUT_FILE")"
 stderr_file="$(mktemp "${TMPDIR:-/tmp}/fetch-batch-stderr.XXXXXX")"
 trap 'rm -f "$stderr_file"' EXIT
 
-"$DISPATCHER" "$DB_PATH" fetch "$BATCH_TYPE" "$BATCH_LIMIT" "$BATCH_AGENT" >"$OUT_FILE" 2>"$stderr_file"
+if [[ -n "$BATCH_STAGE" ]]; then
+    "$DISPATCHER" "$DB_PATH" fetch-by-stage "$BATCH_STAGE" "$BATCH_TYPE" "$BATCH_LIMIT" "$BATCH_AGENT" >"$OUT_FILE" 2>"$stderr_file"
+else
+    "$DISPATCHER" "$DB_PATH" fetch "$BATCH_TYPE" "$BATCH_LIMIT" "$BATCH_AGENT" >"$OUT_FILE" 2>"$stderr_file"
+fi
 
 # sqlite3 -json UPDATE ... RETURNING emits an empty file (not "[]") when no rows
 # match. Treat that as a valid empty batch so the operator can continue scanning
@@ -54,6 +73,7 @@ fi
 printf 'BATCH_FILE=%s\n' "$OUT_FILE"
 printf 'BATCH_TYPE=%s\n' "$BATCH_TYPE"
 printf 'BATCH_AGENT=%s\n' "$BATCH_AGENT"
+printf 'BATCH_STAGE=%s\n' "$BATCH_STAGE"
 printf 'BATCH_COUNT=%s\n' "$batch_count"
 printf 'BATCH_IDS=%s\n' "$batch_ids"
 printf 'BATCH_PATHS=%s\n' "$batch_paths"
