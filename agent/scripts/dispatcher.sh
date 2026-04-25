@@ -38,6 +38,7 @@ if [[ -z "$DB" || -z "$ACTION" ]]; then
   echo "  source_analyzed  source-analyzer ran (may set vuln_candidate)"
   echo "  api_tested       vulnerability-analyst ran, no vuln found"
   echo "  vuln_confirmed   exploitable; ready for exploit-developer"
+  echo "  fuzz_pending     vulnerability-analyst escalated to deep fuzz; routes to fuzzer"
   echo "  exploited        finding written end-to-end"
   echo "  clean            tested, no vuln, terminal"
   echo "  errored          terminal failure (use 'error' action)"
@@ -289,10 +290,10 @@ done
 
 _validate_stage() {
   case "$1" in
-    ingested|source_analyzed|api_tested|vuln_confirmed|exploited|clean|errored)
+    ingested|source_analyzed|api_tested|vuln_confirmed|fuzz_pending|exploited|clean|errored)
       return 0 ;;
     *)
-      echo "ERROR: invalid stage '$1' (allowed: ingested|source_analyzed|api_tested|vuln_confirmed|exploited|clean|errored)" >&2
+      echo "ERROR: invalid stage '$1' (allowed: ingested|source_analyzed|api_tested|vuln_confirmed|fuzz_pending|exploited|clean|errored)" >&2
       return 1 ;;
   esac
 }
@@ -317,8 +318,8 @@ case "$ACTION" in
     echo ""
     echo "--- Active vs Terminal ---"
     sql "
-      SELECT 'active (ingested|source_analyzed|vuln_confirmed)' as bucket, COUNT(*)
-        FROM cases WHERE stage IN ('ingested','source_analyzed','vuln_confirmed')
+      SELECT 'active (ingested|source_analyzed|vuln_confirmed|fuzz_pending)' as bucket, COUNT(*)
+        FROM cases WHERE stage IN ('ingested','source_analyzed','vuln_confirmed','fuzz_pending')
       UNION ALL
       SELECT 'in-flight (processing)', COUNT(*) FROM cases WHERE status='processing'
       UNION ALL
@@ -369,7 +370,7 @@ case "$ACTION" in
       WHERE id IN (
         SELECT id FROM cases
         WHERE status = 'pending' AND type = '${TYPE}'
-              AND stage IN ('ingested', 'source_analyzed', 'vuln_confirmed')
+              AND stage IN ('ingested', 'source_analyzed', 'vuln_confirmed', 'fuzz_pending')
         ${ORDER_CLAUSE}
         LIMIT ${LIMIT}
       )

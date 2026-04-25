@@ -45,7 +45,7 @@ Rules:
 | source-analyzer | HTML/JS/CSS analysis for hidden routes, secrets | stage=`ingested` and type∈{javascript, page, stylesheet, data, unknown, api-spec} |
 | vulnerability-analyst | Quick triage: 1-2 probes per vuln, prioritized list | stage=`ingested` and type∈{api, form, graphql, upload, websocket} |
 | exploit-developer | Exploit confirmed vulns, chain analysis, impact | stage=`vuln_confirmed` (any type); also full-findings reviews / chain hypothesis dispatches |
-| fuzzer | High-volume testing (100+ payloads) | when FUZZER_NEEDED OR stage=`ingested` and a parameter/path needs >5 probes |
+| fuzzer | High-volume testing (deep wordlists, 500+ payloads) | stage=`fuzz_pending` (vulnerability-analyst escalates here when a case needs deep fuzz beyond its inline ≤500-entry budget) |
 | osint-analyst | CVE/breach/DNS/social research from intel.md | parallel with exploit-developer when intel.md gains entries |
 | report-writer | Final or interim report | end-of-cycle (active stages drained) |
 
@@ -77,6 +77,7 @@ recon-specialist re-dispatch on auth foothold     intel.md + auth.json
 | `ingested` | producers (recon-specialist, source-analyzer ingest, katana, source) | type=javascript/page/stylesheet/data/unknown/api-spec → source-analyzer; type=api/form/graphql/upload/websocket → vulnerability-analyst |
 | `source_analyzed` | source-analyzer (after analyzing a JS/page/data/unknown) | if that source produced an `api`/`form` follow-up case, the new case starts at `ingested`; THIS case is terminal as far as testing pipeline goes (mark `STAGE=clean` to retire) UNLESS the source itself contained a directly testable surface (in which case the source-analyzer marks `STAGE=vuln_confirmed`) |
 | `vuln_confirmed` | source-analyzer (rare) or vulnerability-analyst (main) | exploit-developer |
+| `fuzz_pending` | vulnerability-analyst (when a case needs deep fuzz beyond its inline ≤500-entry budget) | fuzzer; fuzzer transitions to `vuln_confirmed` (signal found), `api_tested` (no signal), or `clean` (non-fuzzable) |
 | `api_tested` | vulnerability-analyst (when no vuln found) | terminal — case retires |
 | `exploited` | exploit-developer (after writing a finding) | terminal |
 | `clean` | any subagent (no further work needed) | terminal |
@@ -85,7 +86,7 @@ recon-specialist re-dispatch on auth foothold     intel.md + auth.json
 ### Rule 1 — dispatch is per-stage and CONCURRENT across stages
 
 In a single operator turn, you may issue MULTIPLE fetch+task pairs IF AND ONLY IF each pair is for a DIFFERENT (stage, agent) combination. Concrete:
-- ✅ same turn: fetch-by-stage `ingested api 5 vulnerability-analyst` + task; fetch-by-stage `vuln_confirmed api 3 exploit-developer` + task; fetch-by-stage `ingested javascript 5 source-analyzer` + task
+- ✅ same turn: fetch-by-stage `ingested api 5 vulnerability-analyst` + task; fetch-by-stage `vuln_confirmed api 3 exploit-developer` + task; fetch-by-stage `fuzz_pending api 2 fuzzer` + task; fetch-by-stage `ingested javascript 5 source-analyzer` + task
 - ❌ same turn: two `ingested api` fetches (same stage+type) — second one will be empty (in-flight guard)
 - ❌ same turn: outcome-recording for a previously-dispatched batch + a new fetch — first record outcomes, then dedicated fetch+dispatch
 
@@ -132,7 +133,7 @@ The same turn that appends the engagement-start log entry MUST do at least one o
 ### Rule 5 — stop condition (replaces "pending=0 AND processing=0")
 
 Exit allowed only when ALL of the following hold:
-- `dispatcher.sh stats-by-stage` shows zero cases in active stages: `ingested`, `source_analyzed`, `vuln_confirmed`
+- `dispatcher.sh stats-by-stage` shows zero cases in active stages: `ingested`, `source_analyzed`, `vuln_confirmed`, `fuzz_pending`
 - zero cases in `processing` status (no in-flight subagent batch)
 - `check_collection_health.sh` passes
 - `check_surface_coverage.sh` passes
@@ -184,7 +185,7 @@ For continuous-observation targets, `report-writer` stops after writing `report.
 Do NOT stop because one batch completed or because you can summarize partial progress.
 Before any final stop/completion message:
 - run `./scripts/dispatcher.sh "$DIR/cases.db" stats-by-stage`
-- if cases at active stages (`ingested`, `source_analyzed`, `vuln_confirmed`) > 0, continue the loop and do NOT stop
+- if cases at active stages (`ingested`, `source_analyzed`, `vuln_confirmed`, `fuzz_pending`) > 0, continue the loop and do NOT stop
 - if any case is in `processing` status (in-flight subagent), wait for the outcome before stopping
 - if `./scripts/check_collection_health.sh "$DIR"` fails, do NOT stop
 - if `./scripts/check_surface_coverage.sh "$DIR"` fails, do NOT stop

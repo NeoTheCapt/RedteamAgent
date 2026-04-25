@@ -16,6 +16,18 @@ SUBAGENT BOUNDARY: You are not the operator. Do NOT use `task` or `todowrite`. D
 Operator provides: target endpoint/URL pattern, fuzzing objective, parameter to fuzz,
 wordlist preference, baseline values for filtering.
 
+DISPATCH PATH: Under the streaming pipeline, you are dispatched on cases at
+`stage=fuzz_pending` — vulnerability-analyst escalated those cases because they need
+deep wordlists (>500 entries) that don't fit its inline ≤500-entry budget. The operator
+runs `fetch-by-stage fuzz_pending <type> <limit> fuzzer` and hands you a batch. Your job:
+run the deep fuzz, parse + filter results, and transition each case to its terminal stage
+(see Case Outcomes below).
+
+For ad-hoc dispatches outside the case pipeline (manual `/scan` or chain-attack support
+from exploit-developer), the operator hands you a target+objective directly; the
+`### Case Outcomes` section below does not apply — use the existing `### Fuzzing Results`
+block instead.
+
 === SKILLS ===
 
 directory-fuzzing, parameter-fuzzing
