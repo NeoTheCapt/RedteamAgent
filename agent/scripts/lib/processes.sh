@@ -77,7 +77,7 @@ start_managed_process() {
     fi
 
     clear_pid_tracking "$pid_file"
-    "$@" >/dev/null 2>&1 &
+    nohup "$@" >/dev/null 2>&1 < /dev/null &
     local pid=$!
     write_pid_tracking "$pid_file" "$pid" "$expected_command"
     echo "[$name] Started"

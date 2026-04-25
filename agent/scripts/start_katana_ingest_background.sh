@@ -38,9 +38,9 @@ fi
 clear_pid_tracking "$PID_FILE"
 
 if [[ ${#EXTRA_FLAGS[@]} -gt 0 ]]; then
-    ./scripts/katana_ingest.sh "$ENGAGEMENT_DIR" "${EXTRA_FLAGS[@]}" > "$ENGAGEMENT_DIR/scans/katana_ingest.log" 2>&1 < /dev/null &
+    nohup ./scripts/katana_ingest.sh "$ENGAGEMENT_DIR" "${EXTRA_FLAGS[@]}" > "$ENGAGEMENT_DIR/scans/katana_ingest.log" 2>&1 < /dev/null &
 else
-    ./scripts/katana_ingest.sh "$ENGAGEMENT_DIR" > "$ENGAGEMENT_DIR/scans/katana_ingest.log" 2>&1 < /dev/null &
+    nohup ./scripts/katana_ingest.sh "$ENGAGEMENT_DIR" > "$ENGAGEMENT_DIR/scans/katana_ingest.log" 2>&1 < /dev/null &
 fi
 katana_ingest_pid=$!
 write_pid_tracking "$PID_FILE" "$katana_ingest_pid" "katana_ingest.sh"
