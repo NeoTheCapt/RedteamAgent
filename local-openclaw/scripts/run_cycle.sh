@@ -1292,11 +1292,11 @@ if [[ "${OPENCLAW_SKILL:-}" == "redteam-auditor-hermes" ]]; then
   # #678..#709 and the okx target was effectively never running. Skill
   # rule was added but Hermes may cache stale skill text; this validator
   # is the controller-side enforcement.
-  okx_stops_log="$cycle_dir/no-okx-stops.log"
-  okx_stops_exit=0
-  python3 "$ROOT_DIR/scripts/validate_no_okx_stops.py" "$cycle_id" \
-      2> "$okx_stops_log" >/dev/null
-  okx_stops_exit=$?
+  steady_state_log="$cycle_dir/steady-state-runs.log"
+  steady_state_exit=0
+  python3 "$ROOT_DIR/scripts/validate_steady_state_runs.py" "$cycle_id" \
+      2> "$steady_state_log" >/dev/null
+  steady_state_exit=$?
   set -e
 
   if [[ $artifact_exit -ne 0 ]]; then
@@ -1310,11 +1310,11 @@ if [[ "${OPENCLAW_SKILL:-}" == "redteam-auditor-hermes" ]]; then
   if [[ $revert_exit -ne 0 ]]; then
     log "revert cooling-off: fixed findings lack concrete regression_evidence; see $revert_log"
   fi
-  if [[ $okx_stops_exit -ne 0 ]]; then
-    log "no-okx-stops: production target run was stopped by ui-07; see $okx_stops_log"
+  if [[ $steady_state_exit -ne 0 ]]; then
+    log "steady-state: a fixed target has zero running runs at cycle end; see $steady_state_log"
   fi
 
-  if [[ $artifact_exit -ne 0 || $regression_exit -ne 0 || $revert_exit -ne 0 || $okx_stops_exit -ne 0 ]]; then
+  if [[ $artifact_exit -ne 0 || $regression_exit -ne 0 || $revert_exit -ne 0 || $steady_state_exit -ne 0 ]]; then
     if [[ "$cycle_status" == "success" || "$cycle_status" == "success_with_openclaw_error" ]]; then
       cycle_status="success_with_dirty_artifacts"
     fi
