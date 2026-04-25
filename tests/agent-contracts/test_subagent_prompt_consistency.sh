@@ -18,6 +18,16 @@ set -euo pipefail
 #       get appended under the wrong agent — observed pattern in 2026-04-25
 #       audit.
 #
+#   D5. CASE BATCH framing: the canonical sentence
+#         "the operator framing includes BATCH_FILE / BATCH_IDS"
+#       must appear in every case-batch sub-agent's prompt so the agent
+#       knows where to read its inputs. fetch_batch_to_file.sh emits 9
+#       BATCH_* keys and FILE+IDS are how the agent locates its case set.
+#       Drift observed in 2026-04-25 audit: exploit-developer + fuzzer had
+#       the canonical sentence; source-analyzer + vulnerability-analyst
+#       had only the bare "Every input case ID" requirement, leaving the
+#       framing-key contract implicit.
+#
 # Exit 0 = pass, 1 = violation, 2 = harness error. Run from repo root.
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -109,11 +119,36 @@ for agent in $SUBAGENTS_WITH_FINDINGS; do
     done
 done
 
+# --- D5: CASE BATCH framing ---
+# Every case-batch sub-agent must point to the operator framing that wraps the
+# dispatch — specifically the BATCH_FILE (path to the JSON batch on disk) and
+# BATCH_IDS (comma-separated case IDs) keys emitted by fetch_batch_to_file.sh.
+# We check for the canonical inline substring `BATCH_FILE / BATCH_IDS` on any
+# single line; the surrounding sentence ("the operator framing includes ...")
+# can wrap freely without breaking the check. This applies to source-analyzer
+# / vulnerability-analyst / exploit-developer / fuzzer — the four agents that
+# consume `fetch-by-stage` batches. recon-specialist, osint-analyst, and
+# report-writer don't take case batches.
+CANONICAL_BATCH_FRAMING='BATCH_FILE / BATCH_IDS'
+
+SUBAGENTS_WITH_CASE_BATCHES="source-analyzer vulnerability-analyst exploit-developer fuzzer"
+
+for agent in $SUBAGENTS_WITH_CASE_BATCHES; do
+    file="$PROMPTS_DIR/$agent.txt"
+    [[ ! -f "$file" ]] && continue  # already flagged by D1
+    if ! /usr/bin/grep -qF "$CANONICAL_BATCH_FRAMING" "$file"; then
+        echo "[D5] $agent: missing canonical CASE BATCH framing token" >&2
+        echo "      file: $file" >&2
+        echo "      expected substring: $CANONICAL_BATCH_FRAMING" >&2
+        violations=$((violations + 1))
+    fi
+done
+
 if [[ $violations -gt 0 ]]; then
     echo "" >&2
     echo "FAIL: $violations consistency violation(s) across sub-agent prompts" >&2
     exit 1
 fi
 
-echo "OK: SUBAGENT BOUNDARY and FINDING IDs blocks consistent across all sub-agent prompts"
+echo "OK: SUBAGENT BOUNDARY, FINDING IDs, and CASE BATCH framing consistent across all sub-agent prompts"
 exit 0
