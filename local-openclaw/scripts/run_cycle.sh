@@ -1286,6 +1286,17 @@ if [[ "${OPENCLAW_SKILL:-}" == "redteam-auditor-hermes" ]]; then
         2> "$revert_log" >/dev/null
     revert_exit=$?
   fi
+
+  # ui-07 must NOT stop a run targeting okx.com — observed across 7
+  # consecutive cycles (054522Z..111827Z) where ui-07 stopped okx runs
+  # #678..#709 and the okx target was effectively never running. Skill
+  # rule was added but Hermes may cache stale skill text; this validator
+  # is the controller-side enforcement.
+  okx_stops_log="$cycle_dir/no-okx-stops.log"
+  okx_stops_exit=0
+  python3 "$ROOT_DIR/scripts/validate_no_okx_stops.py" "$cycle_id" \
+      2> "$okx_stops_log" >/dev/null
+  okx_stops_exit=$?
   set -e
 
   if [[ $artifact_exit -ne 0 ]]; then
@@ -1299,8 +1310,11 @@ if [[ "${OPENCLAW_SKILL:-}" == "redteam-auditor-hermes" ]]; then
   if [[ $revert_exit -ne 0 ]]; then
     log "revert cooling-off: fixed findings lack concrete regression_evidence; see $revert_log"
   fi
+  if [[ $okx_stops_exit -ne 0 ]]; then
+    log "no-okx-stops: production target run was stopped by ui-07; see $okx_stops_log"
+  fi
 
-  if [[ $artifact_exit -ne 0 || $regression_exit -ne 0 || $revert_exit -ne 0 ]]; then
+  if [[ $artifact_exit -ne 0 || $regression_exit -ne 0 || $revert_exit -ne 0 || $okx_stops_exit -ne 0 ]]; then
     if [[ "$cycle_status" == "success" || "$cycle_status" == "success_with_openclaw_error" ]]; then
       cycle_status="success_with_dirty_artifacts"
     fi
