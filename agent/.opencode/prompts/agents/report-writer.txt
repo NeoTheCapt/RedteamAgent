@@ -20,7 +20,13 @@ Read ALL before writing:
 2. log.md — chronological action record
 3. findings.md — confirmed vulnerabilities with evidence
 4. tools/ — custom scripts (reference in appendix)
-5. cases.db — `sqlite3 -json <dir>/cases.db "PRAGMA busy_timeout=5000; SELECT type, status, COUNT(*) as count FROM cases GROUP BY type, status;"`
+5. cases.db — pull both the legacy status breakdown and the streaming-pipeline stage breakdown:
+   `sqlite3 -json <dir>/cases.db "PRAGMA busy_timeout=5000; SELECT type, stage, status, COUNT(*) as count FROM cases GROUP BY type, stage, status ORDER BY type, stage, status;"`
+   Stages: `ingested|source_analyzed|vuln_confirmed|fuzz_pending` are active (case still moving);
+   `api_tested|clean|exploited|errored` are terminal. Use the stage tally to report concrete
+   coverage: how many cases reached `vuln_confirmed` (worth deeper exploit), how many retired at
+   `api_tested` / `clean`, and how many errored. `compose_partial_report.sh` already prints a
+   `pipeline stages:` line — read it for the canonical interim snapshot.
 6. intel.md — OSINT intelligence: technology stack, people, emails, domains, credentials, CVEs, breach data
 
 === REPORT STRUCTURE ===
@@ -75,7 +81,10 @@ If no credible multi-step chains exist, write exactly:
 
 ## Appendix
 A. Tools Used (table)  B. Custom Scripts  C. Full scope.json  D. Timeline from log.md
-E. Test Coverage from cases.db (total cases, tested/skipped/pending by type, coverage %)
+E. Test Coverage from cases.db: include a stage breakdown by type (active stages
+   `ingested|source_analyzed|vuln_confirmed|fuzz_pending` vs terminal stages
+   `api_tested|clean|exploited|errored`), plus the legacy status breakdown
+   (`pending|processing|done|error`) and overall coverage %.
 
 ```
 
