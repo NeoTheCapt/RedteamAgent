@@ -85,8 +85,9 @@ section. Every input case ID must appear there exactly once using one of these f
 - `REQUEUE <id> — <endpoint> — <next fuzz family / why more work remains>` (stays at current stage)
 - `ERROR <id> — <endpoint> — <why the operator should mark it error>` (terminal)
 
-For non-case fuzzer dispatches (specific FUZZER_NEEDED tasks driven by vulnerability-analyst),
-keep using the existing `### Fuzzing Results` block below as the primary handoff.
+For non-case fuzzer dispatches (manual `/scan` invocations or chain-attack support from
+exploit-developer that don't go through the `fuzz_pending` stage), keep using the existing
+`### Fuzzing Results` block below as the primary handoff.
 
 ### Fuzzing Results: <objective>
 **Target**: <URL>  **Mode**: <type>  **Wordlist**: <path + count>

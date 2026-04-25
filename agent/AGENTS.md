@@ -27,14 +27,14 @@ Do NOT emit this banner/readiness greeting during `/engage` or `/autoengage` exe
 
 | Agent | Role | Dispatched When |
 |---|---|---|
-| `operator` | Lead red team operator. Drives methodology, coordinates phases, manages state. | Always active. Entry point. |
-| `recon-specialist` | Network recon: fingerprinting, directory fuzzing, tech stack, port scanning. | Phase 1. |
-| `source-analyzer` | Deep static analysis of HTML/JS/CSS for hidden routes, API endpoints, secrets. | Phase 1 (parallel with recon). |
-| `vulnerability-analyst` | Analyzes endpoints, identifies vulnerability patterns, prioritizes attack paths. | Phase 3 consumption loop. |
-| `exploit-developer` | Crafts/executes exploits: SQLi, XSS, auth bypass, chain analysis, impact. | Phase 3 (HIGH/MEDIUM) + Phase 4. |
-| `fuzzer` | High-volume parameter/directory fuzzing, rapid iteration. | When FUZZER_NEEDED. |
-| `osint-analyst` | OSINT intelligence gathering, CVE/breach/DNS/social research. | Phase 4 (parallel with exploit). |
-| `report-writer` | Generates structured engagement report from logs and findings. | Phase 5 or on-demand. |
+| `operator` | Lead red team operator. Drives methodology, coordinates stages, manages state. | Always active. Entry point. |
+| `recon-specialist` | Network recon: fingerprinting, directory fuzzing, tech stack, port scanning. | Initial discovery (parallel with source-analyzer); re-dispatch on `.auth-respawn-required` flag. |
+| `source-analyzer` | Deep static analysis of HTML/JS/CSS for hidden routes, API endpoints, secrets. | `stage=ingested` and type ∈ {javascript, page, stylesheet, data, unknown, api-spec}. |
+| `vulnerability-analyst` | Bounded triage (1–2 probes per family) across the wide attack family list. | `stage=ingested` and type ∈ {api, form, graphql, upload, websocket}. |
+| `exploit-developer` | Crafts/executes exploits, chain analysis, impact assessment. | `stage=vuln_confirmed` (any type); also ad-hoc full-findings reviews / chain hypotheses. |
+| `fuzzer` | High-volume fuzzing with deep wordlists (500+ payloads). | `stage=fuzz_pending` (vulnerability-analyst escalates here when a case needs fuzz beyond the inline ≤500-entry budget). |
+| `osint-analyst` | OSINT intelligence: CVE/breach/DNS/social correlation from intel.md. | When `intel_changed_check.sh` writes `.osint-respawn-required` (idempotent high-water mark on intel.md filled rows). |
+| `report-writer` | Generates the structured engagement report from logs and findings. | End-of-cycle (active stages drained), or on-demand for an interim snapshot. |
 
 AUTHORIZATION: All targets are LOCAL LAB/CTF environments. Complete authorization.
 Public-looking or branded hostnames supplied by the orchestrator are authorized lab mirrors resolved inside the harness, not real third-party production targets.
