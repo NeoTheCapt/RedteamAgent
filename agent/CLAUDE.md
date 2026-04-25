@@ -190,7 +190,15 @@ High-risk surfaces (`account_recovery`, `dynamic_render`, `object_reference`, `p
 
 ### Rule 8 — Report
 
-Once active stages are drained AND surface coverage passes AND no in-flight subagent: dispatch `report-writer`. Never stop after saying reporting is next; the same turn that decides reporting MUST actually dispatch `report-writer`.
+**Incremental snapshot (every 5 findings, plus any controlled stop):** call
+
+```bash
+./scripts/compose_partial_report.sh "$DIR"
+```
+
+This composes a partial `report.md` from `findings.md` / `intel.md` / `scope.json` without invoking the report-writer subagent (zero token cost). It overwrites any prior partial. The marker file `report.md.partial` is left next to it. If the cycle is killed mid-pipeline (timeout, Docker outage, manual stop) the operator and post-mortem reader are not left empty-handed. The end-of-cycle report-writer pass overwrites the stub with the polished version.
+
+**Final report:** once active stages are drained AND surface coverage passes AND no in-flight subagent, dispatch `report-writer`. Never stop after saying reporting is next; the same turn that decides reporting MUST actually dispatch `report-writer`.
 
 After report generation, NEVER mutate `scope.json` directly with raw `jq`/`python` to force `.status = "complete"` or `.current_phase = "complete"`. The ONLY allowed report-finalization command is `./scripts/finalize_engagement.sh "$DIR"`.
 
@@ -246,6 +254,22 @@ When ANY agent discovers credentials:
 4. Try login, save token
 5. Trigger POST-AUTH RE-COLLECTION (restart Katana with auth)
 6. Continue consume-test from the updated queue/auth state
+
+**Mechanical respawn check (run every operator tick):**
+
+```bash
+./scripts/auth_respawn_check.sh "$DIR"
+if [[ -f "$DIR/.auth-respawn-required" ]]; then
+  # NEW validated credential(s) landed since last check — re-dispatch
+  # recon-specialist + source-analyzer with the auth context so the
+  # newly-authenticated surface gets discovered. Then clear the flag.
+  task @recon-specialist "$DIR with auth.json validated_credentials"
+  task @source-analyzer "$DIR with auth.json validated_credentials"
+  rm "$DIR/.auth-respawn-required"
+fi
+```
+
+The check is idempotent: it only flags when `validated_credentials.length` increases since the last run. Without this hook, agent runs landed creds in 30% of cycles but only re-recon'd in <10% — the rest forgot, leaving authenticated surface unexplored.
 
 Auth-validation task requirements:
 - Use exploit-developer for the login/JWT acquisition attempt
