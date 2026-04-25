@@ -113,11 +113,17 @@ Do NOT present a summary and stop. Read state, recover stale work, and continue 
 
 Special-case report-phase resumes for long-lived observation targets: if `current_phase=report` and the recent log already shows the continuous-observation handoff markers above, that is **not** a request for more diagnostics. It is a direct instruction to run `"$SCRIPTS/finalize_engagement.sh" "$ENG_DIR"` immediately as the next action, with no intervening reads or summaries.
 
-Determine resume point from `scope.json`, `cases.db`, and queue state:
-- Queue has pending or interrupted cases → resume consumption loop (Phase 3)
-- All cases done but exploit/report incomplete → proceed to the next incomplete phase
-- No `cases.db` → start from collect phase (Phase 2)
-- No recon data → start from recon (Phase 1)
+Determine resume point from `scope.json`, `cases.db`, and stage stats
+(`./scripts/dispatcher.sh "$ENG_DIR/cases.db" stats-by-stage`):
+- Active stages have rows (`ingested|source_analyzed|vuln_confirmed|fuzz_pending` non-zero)
+  OR `processing` rows exist → resume the streaming dispatch loop per
+  `operator-core.md` Stage-Based Dispatch (Rules 1–7)
+- Active stages drained but `vuln_confirmed` cases remain or report not yet generated →
+  continue with the residual exploit / report work per `operator-core.md` Rule 8
+- No `cases.db` → run engage.md Step 6 Phase 2 (Collect): import recon endpoints, start
+  Katana
+- No recon data → run engage.md Step 6 Phase 1 (Initial Recon Dispatch): launch
+  recon-specialist + source-analyzer in parallel
 
 If resuming `consume_test`, the fetch/dispatch contract is strict:
 - decide the REAL downstream agent before the fetch
@@ -134,7 +140,11 @@ If resuming `consume_test`, the fetch/dispatch contract is strict:
 - NEVER end `/resume` on queue stats, a fetched batch, a recovery note, or a status banner like `[operator] Autoengage started and active.` without the matching `task(...)` dispatch / case-outcome update in that SAME turn
 - if no advancing action is ready, write an explicit `Run stop` log entry with a stop reason instead of drifting into a status-only turn
 
-Use this exact routing pattern when you need a queue-driven resume snippet:
+Use this exact routing pattern when you need a queue-driven resume snippet. Specs are
+`<stage> <type> <agent>` triples ordered from coverage-expanding source first, through
+API-family triage, low-yield source backlog, then `vuln_confirmed` exploit work and
+`fuzz_pending` deep-fuzz. The loop stops at the first non-empty batch — that batch must be
+matched with a `task(...)` dispatch in the SAME assistant turn (operator-core Rule 1).
 
 ```bash
 ROOT=/workspace
@@ -142,33 +152,41 @@ SCRIPTS="$ROOT/scripts"
 DB="$ENG_DIR/cases.db"
 BATCH_FILE="$ENG_DIR/scans/resume-batch.json"
 : > "$BATCH_FILE"
+# vendor-noise prune before any ingested-javascript fetch (operator-core Rule 6).
+python3 "$SCRIPTS/prune_vendor_cases.py" "$DB"
 for spec in \
-  'api-spec source-analyzer' \
-  'javascript source-analyzer' \
-  'unknown source-analyzer' \
-  'api vulnerability-analyst' \
-  'form vulnerability-analyst' \
-  'upload vulnerability-analyst' \
-  'graphql vulnerability-analyst' \
-  'websocket vulnerability-analyst' \
-  'page source-analyzer' \
-  'stylesheet source-analyzer' \
-  'data source-analyzer'
+  'ingested api-spec source-analyzer' \
+  'ingested javascript source-analyzer' \
+  'ingested unknown source-analyzer' \
+  'ingested api vulnerability-analyst' \
+  'ingested form vulnerability-analyst' \
+  'ingested upload vulnerability-analyst' \
+  'ingested graphql vulnerability-analyst' \
+  'ingested websocket vulnerability-analyst' \
+  'ingested page source-analyzer' \
+  'ingested stylesheet source-analyzer' \
+  'ingested data source-analyzer' \
+  'vuln_confirmed api exploit-developer' \
+  'vuln_confirmed form exploit-developer' \
+  'vuln_confirmed graphql exploit-developer' \
+  'fuzz_pending api fuzzer' \
+  'fuzz_pending form fuzzer'
   do
     set -- $spec
-    batch_type="$1"
-    batch_agent="$2"
+    batch_stage="$1"
+    batch_type="$2"
+    batch_agent="$3"
     : > "$BATCH_FILE"
-    "$SCRIPTS/fetch_batch_to_file.sh" "$DB" "$batch_type" 10 "$batch_agent" "$BATCH_FILE"
+    "$SCRIPTS/fetch_batch_to_file.sh" "$DB" --stage "$batch_stage" "$batch_type" 10 "$batch_agent" "$BATCH_FILE"
     if [ -s "$BATCH_FILE" ]; then
-      printf 'FETCH_TYPE=%s\nFETCH_AGENT=%s\nFETCH_PATH=%s\n' "$batch_type" "$batch_agent" "$BATCH_FILE"
+      printf 'FETCH_STAGE=%s\nFETCH_TYPE=%s\nFETCH_AGENT=%s\nFETCH_PATH=%s\n' "$batch_stage" "$batch_type" "$batch_agent" "$BATCH_FILE"
       break
     fi
   done
 ```
 
 In AUTO-CONFIRM mode: announce and proceed immediately.
-In MANUAL mode: present numbered choice only when a real phase choice is still needed.
+In MANUAL mode: present a numbered choice only when a real branch choice is still needed.
 
 ## User Arguments
 

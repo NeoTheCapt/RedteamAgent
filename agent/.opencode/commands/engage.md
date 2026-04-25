@@ -302,50 +302,78 @@ After approval:
    Do not recreate the background launch + PID-file write inline. Use the helper exactly as shown.
 3. Show queue stats: `./scripts/dispatcher.sh "$DIR/cases.db" stats`
 
-### Phase 3: CONSUME & TEST (main testing loop)
+### Phase 3: CONSUME & TEST (streaming dispatch loop)
 
-Follow the case-dispatching skill methodology. For each cycle:
+This phase follows the streaming pipeline contract — see `operator-core.md` Stage-Based
+Dispatch (Rules 1–7) for the canonical rules; do not duplicate or contradict them here.
+Boot sequence and the few engage-specific shortcuts:
+
 1. `./scripts/dispatcher.sh "$DIR/cases.db" reset-stale 10`
-2. `./scripts/dispatcher.sh "$DIR/cases.db" stats`
-3. Fetch and dispatch exactly one non-empty batch at a time → wait for that single subagent result → mark done / requeue any outcomes → then fetch the next batch
-4. A consume-test subagent handoff is not complete unless it includes a literal `### Case Outcomes` section that accounts for every fetched case ID exactly once with `DONE`, `REQUEUE`, or `ERROR`; if that section is missing or incomplete, immediately request a corrected handoff before touching queue state.
-4a. `./scripts/dispatcher.sh ... done` and `error` accept numeric case IDs only. Never append agent names, `done/error` labels, or freeform notes to those commands; record commentary with a separate `append_log_entry.sh` call after the queue update.
-5. If coverage-expanding source batches remain pending (`api-spec`, `javascript`, `unknown`, or a clearly seed-like `page` such as the root/bootstrap page), do NOT keep chaining vulnerability-analyst batches indefinitely; after any completed API-family batch, the next queue selection SHOULD attempt one of those `source-analyzer` batches before taking another API-family batch.
-6. Do NOT let generic low-yield `page`, `stylesheet`, or `data` backlog (for example redirects, media-heavy pages, or static assets) starve high-signal API-family work once coverage-expanding source batches have already been drained.
-7. When benchmark quality is failing/regressing or surface coverage is unresolved, prefer draining one coverage-expanding `source-analyzer` batch before returning to another API-family batch so bundle-derived routes/surfaces can materialize into follow-up cases; once only generic low-yield source backlog remains, switch back to API-family testing instead of looping on more page churn.
-8. Outcome-recording bash blocks may do `done` / `requeue` / stats updates, but MUST NOT also prefetch the next non-empty batch unless that SAME assistant turn will immediately launch the matching `task(...)` call
-9. Do NOT hide the next non-empty fetch inside a "record outcomes" bash command and then leave the turn on commentary, a fresh `step_start`, or any other non-dispatch state; fetched cases may not sit in `processing` waiting for a later response
-10. NEVER combine outcome recording (`done`, `error`, `requeue`, `append_*`, queue stats, scope/findings/log updates) and `fetch_batch_to_file.sh` in the same bash/tool call. First record outcomes. Then do a dedicated fetch+dispatch step.
-11. once outcome recording starts for a consume-test batch, that SAME turn must either (a) finish the queue updates and immediately perform the next fetch+dispatch step, or (b) run the stop/completion checks and emit an explicit stop reason; never end on commentary-only text such as `[operator] Continuing consume_test.` while queue work remains.
-12. ALWAYS fetch via `./scripts/fetch_batch_to_file.sh "$DIR/cases.db" <type> <limit> <agent> "$BATCH_FILE"`; it saves the full JSON batch to disk and prints only compact `BATCH_*` metadata for the model
-13. NEVER `cat "$BATCH_FILE"`, paste raw fetched JSON into the model context, or stop after a non-empty fetch without the matching `task(...)` call in that SAME turn
-14. Treat the fetch output as a dispatch contract: if `BATCH_COUNT > 0`, the very next advancing action MUST be the matching `task(...)` call for that same `BATCH_AGENT`/`BATCH_FILE`; do not insert reads, grep, todo updates, queue summaries, or any other tool call in between.
-15. Use the emitted `BATCH_FILE`, `BATCH_TYPE`, `BATCH_AGENT`, `BATCH_IDS`, and `BATCH_PATHS` directly when framing the dispatch; do not reopen the batch file just to decide whether to dispatch.
-16. If you are not ready to launch the matching subagent immediately, do NOT fetch yet.
-17. Treat the non-empty fetch and matching `task(...)` call as one atomic consume-test step. Do NOT decide that the fetch alone satisfied the "one step" rule.
-18. If a tool result ends with `BATCH_COUNT > 0`, that assistant turn is not complete until the matching `task(...)` call has been issued; a fetch result alone never counts as progress.
-19. Do NOT launch overlapping `task` calls inside consume-test, even if multiple batch types are ready at once
-20. If credentials are discovered during consume-test, write them to auth.json and in that SAME turn dispatch a bounded exploit-developer auth-validation task; never stop after only a credential-validation log/status entry
-21. Continue until queue empty + producers stopped
+2. `./scripts/dispatcher.sh "$DIR/cases.db" stats-by-stage`
+3. Begin stage-aware dispatch as soon as `ingested` cases land. Fetch via:
+   `./scripts/fetch_batch_to_file.sh "$DIR/cases.db" --stage <stage> <type> <limit> <agent> "$BATCH_FILE"`.
+   Multiple `(stage, agent)` pairs MAY run in the SAME turn (Rule 1) — cross-stage parallel
+   dispatch is the design intent. Do not serialize unless one batch's outcome gates the next.
+4. Every subagent handoff MUST end with `### Case Outcomes` listing every fetched case ID
+   exactly once via `DONE STAGE=<stage>`, `REQUEUE`, or `ERROR` (Rule 2). If that section
+   is missing/incomplete, request a corrected handoff before touching queue state. Translate
+   each outcome via `dispatcher.sh ... done <id> --stage <stage>`. The `done` and `error`
+   subcommands accept numeric case IDs only — record commentary with a separate
+   `append_log_entry.sh` call after the queue update.
+5. BEFORE every `fetch-by-stage ingested javascript` batch, run
+   `python3 ./scripts/prune_vendor_cases.py "$DIR/cases.db"` so vendor / runtime / chunk /
+   polyfill / source-map noise is marked `stage=clean` without burning a source-analyzer
+   dispatch (Rule 6 in operator-core).
+6. Coverage hygiene (carried over): when coverage-expanding source batches remain
+   (`ingested api-spec`, `ingested javascript`, `ingested unknown`, or a seed-like
+   `ingested page` such as the root/bootstrap page), prefer draining one of those before
+   another API-family batch. Once only low-yield `page`/`stylesheet`/`data` backlog remains,
+   switch back to API-family testing — don't let static-asset churn starve high-signal work.
+7. Outcome-recording bash blocks must NOT also prefetch the next non-empty batch unless the
+   SAME turn will immediately launch the matching `task(...)`. NEVER combine outcome
+   recording with a `fetch_batch_to_file.sh` call in the same bash invocation.
+8. If credentials land in auth.json during this loop, dispatch a bounded exploit-developer
+   auth-validation task in the SAME turn. The next `auth_respawn_check.sh` tick will write
+   `.auth-respawn-required`, signalling re-dispatch of recon-specialist + source-analyzer
+   with auth context (operator-core Credential Auto-Use).
+9. Continue until `stats-by-stage` shows zero cases at `ingested|source_analyzed|
+   vuln_confirmed|fuzz_pending`, zero rows in `processing`, and recon-specialist has
+   returned at least once (Rule 5 stop condition).
 
-Before leaving Test phase, run:
-`./scripts/check_collection_health.sh "$DIR"`
-`./scripts/check_surface_coverage.sh "$DIR"`
+Before leaving Test:
+- `./scripts/reconcile_surface_coverage.sh "$DIR" --ingest-followups`
+- `./scripts/check_collection_health.sh "$DIR"`
+- `./scripts/check_surface_coverage.sh "$DIR"`
 
-If either check fails, do not advance yet. Restore collection health first, then resolve each
-remaining discovered surface by marking it `covered`, `deferred`, or `not_applicable`.
+If either gate fails, do not advance — drain the new follow-up cases or resolve unresolved
+surfaces per Rule 7.
 
-### Phase 4: EXPLOIT
+### Phase 4: EXPLOIT (residual chains + ad-hoc rounds)
 
-Dispatch osint-analyst + exploit-developer in parallel.
-After osint-analyst: read intel.md, high-value → findings.md + exploit-developer 2nd round.
+Under the streaming pipeline, exploit-developer runs continuously by stage —
+`fetch-by-stage vuln_confirmed <type> <limit> exploit-developer` happens inside the Phase 3
+loop, not at a separate phase entry. osint-analyst is dispatched only when
+`intel_changed_check.sh` writes `.osint-respawn-required` (idempotent high-water mark on
+intel.md filled rows). There is no fan-out gate that pairs them at "phase 4 entry".
+
+What still belongs here: by the time active stages drain, the bulk of exploit work is done.
+For residuals, dispatch ad-hoc rounds with the relevant artifacts:
+- Full-findings review (pass `findings.md`) when chain candidates are visible across
+  multiple findings.
+- Chain hypothesis dispatches with the specific `FINDING-EX-NNN` set you want chained.
+- Reassess severity based on confirmed impact; update findings.md severity in place.
+
+If the recent intel.md churn has not yet triggered an osint-respawn pass, run
+`./scripts/intel_changed_check.sh "$DIR"` once to flag any pending correlation work.
 
 ### Phase 5: REPORT
 
-Dispatch report-writer with engagement directory.
+Dispatch report-writer with the engagement directory. See `operator-core.md` Rule 8 for the
+full contract (interim snapshots via `compose_partial_report.sh`, partial-marker cleanup,
+and `finalize_engagement.sh` as the only allowed finalization command).
 
-**INTERACTIVE**: Request user approval at each phase transition.
-**AUTONOMOUS**: Never ask approval, always parallel, errors → log and continue.
+**INTERACTIVE**: request user approval at each phase transition.
+**AUTONOMOUS**: never ask approval, run cross-stage in parallel, errors → log and continue.
 
 ---
 
