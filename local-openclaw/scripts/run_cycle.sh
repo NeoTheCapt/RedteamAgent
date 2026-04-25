@@ -1403,6 +1403,39 @@ fi
 send_cycle_summary
 update_local_benchmark_history || true
 
+# Recall regression report — run ONLY when this cycle persisted a new
+# benchmark history entry (i.e. the local Juice Shop run completed and
+# was scored against /api/Challenges this cycle). Operator policy
+# 2026-04-25: "跑一半就分析没有任何意义" — analyzing while the run is
+# still progressing produces stale, misleading reports. The report is
+# only meaningful at the moment a new scored run lands.
+if [[ "${OPENCLAW_SKILL:-}" == "redteam-auditor-hermes" ]] \
+   && [[ -x "$ROOT_DIR/scripts/recall_regression_report.py" ]]; then
+  scored_this_cycle="$(python3 - <<PYEOF 2>/dev/null || true
+import json, pathlib
+p = pathlib.Path("$STATE_DIR/benchmark-metrics-history.json")
+try:
+    d = json.loads(p.read_text())
+except Exception:
+    raise SystemExit
+tgt = (d.get("targets") or {}).get("${OPENCLAW_TARGET_LOCAL:-http://127.0.0.1:8000}")
+if not tgt:
+    raise SystemExit
+last = (tgt.get("history") or [])[-1] if tgt.get("history") else {}
+if last.get("cycle_id") == "$cycle_id":
+    print("yes")
+PYEOF
+)"
+  if [[ "$scored_this_cycle" == "yes" ]]; then
+    log "local benchmark scored this cycle; generating recall regression report"
+    python3 "$ROOT_DIR/scripts/recall_regression_report.py" \
+        --target "${OPENCLAW_TARGET_LOCAL:-http://127.0.0.1:8000}" \
+        2>&1 | sed 's/^/[recall-report] /' || true
+  else
+    log "no new scored benchmark this cycle; skipping recall regression report"
+  fi
+fi
+
 # Post-cycle Juice Shop restart — this is the ONLY place Juice Shop gets restarted.
 # All other code paths (prep recovery, Phase 1-3) must NOT restart Juice Shop.
 # This guarantees challenge score data is intact throughout the entire cycle.
