@@ -28,6 +28,12 @@ set -euo pipefail
 #       had only the bare "Every input case ID" requirement, leaving the
 #       framing-key contract implicit.
 #
+#   D6. EXPLOIT CTF solved-state: exploit-developer must carry explicit guidance
+#       to perform a bounded canonical challenge-triggering action after proving a
+#       lab/CTF vulnerability. A 2026-04-25 local Juice Shop run wrote 20 findings
+#       but scored 0/111 because confirmed exploits were treated as report-only
+#       evidence instead of app solved-state triggers.
+#
 # Exit 0 = pass, 1 = violation, 2 = harness error. Run from repo root.
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -140,6 +146,22 @@ for agent in $SUBAGENTS_WITH_CASE_BATCHES; do
         echo "[D5] $agent: missing canonical CASE BATCH framing token" >&2
         echo "      file: $file" >&2
         echo "      expected substring: $CANONICAL_BATCH_FRAMING" >&2
+        violations=$((violations + 1))
+    fi
+done
+
+# --- D6: EXPLOIT CTF SOLVED-STATE ---
+# Confirmed exploit evidence should also trigger the lab app's own solved-state when
+# an exact canonical action is already known. This protects Juice Shop recall from
+# report-only exploit confirmations that never update /api/Challenges.
+EXPLOIT_PROMPT="$PROMPTS_DIR/exploit-developer.txt"
+for required in \
+    'canonical challenge-triggering action' \
+    'Juice Shop-style recall scoring' \
+    "app's challenge state"; do
+    if ! /usr/bin/grep -qF "$required" "$EXPLOIT_PROMPT"; then
+        echo "[D6] exploit-developer: missing CTF solved-state guidance token: $required" >&2
+        echo "      file: $EXPLOIT_PROMPT" >&2
         violations=$((violations + 1))
     fi
 done
