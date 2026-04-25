@@ -73,6 +73,7 @@ with tempfile.TemporaryDirectory() as tmp:
     flow.wait_for_selector = fake_wait_for_selector
     flow.record = fake_record
     flow.call_with_alert_recovery = lambda fn, source_action='': fn()
+    flow.dismiss_common_overlays = lambda timeout_ms, source_action='': None
 
     flow.select_by_label('Security Question', 5000, text="Mother's maiden name?")
     flow.select_option('#security', 5000, value='city', action='select')

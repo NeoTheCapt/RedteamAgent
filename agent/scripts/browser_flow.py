@@ -483,6 +483,92 @@ return (document.body && document.body.innerText || '').includes(needle);
             raise StepError(f"{action} failed for {selector}: {value}")
         self.record(action, selector=selector, timeout_ms=timeout_ms, **record)
 
+    def dismiss_common_overlays(self, timeout_ms: int, *, source_action: str = "") -> None:
+        script = r"""
+const normalize = (value) => String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+const visible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+const labelFor = (el) => normalize(
+  el.getAttribute?.('aria-label') ||
+  el.getAttribute?.('title') ||
+  el.innerText ||
+  el.textContent ||
+  el.className ||
+  el.id ||
+  el.tagName ||
+  ''
+);
+const overlayKeywords = ['cookie', 'consent', 'welcome', 'overlay', 'backdrop', 'drawer', 'modal', 'dialog', 'banner', 'tour', 'intro'];
+const dismissKeywords = ['dismiss', 'accept', 'accept all', 'allow all', 'got it', 'not interested', 'close welcome banner', 'skip'];
+const dismissed = [];
+const seen = new Set();
+const clickIt = (el, kind) => {
+  if (!el || seen.has(el) || !visible(el)) return;
+  seen.add(el);
+  try { el.scrollIntoView({block:'center', inline:'center'}); } catch (_err) {}
+  try {
+    el.click();
+    dismissed.push({kind, label: labelFor(el)});
+  } catch (_err) {}
+};
+
+for (const el of Array.from(document.querySelectorAll('*'))) {
+  if (!visible(el)) continue;
+  const cls = normalize(typeof el.className === 'string' ? el.className : '');
+  if (cls.includes('backdrop') || cls.includes('overlay-backdrop') || cls.includes('drawer-backdrop')) {
+    clickIt(el, 'backdrop');
+  }
+}
+
+const candidates = Array.from(document.querySelectorAll('button, a, [role="button"], input[type="button"], input[type="submit"]'));
+for (const el of candidates) {
+  if (!visible(el)) continue;
+  const texts = [
+    normalize(el.innerText),
+    normalize(el.textContent),
+    normalize(el.getAttribute('aria-label')),
+    normalize(el.getAttribute('title')),
+    normalize(el.getAttribute('value')),
+  ].filter(Boolean);
+  if (!texts.length) continue;
+  let node = el;
+  let overlayContext = false;
+  while (node && node !== document.documentElement) {
+    const haystack = normalize(
+      (typeof node.className === 'string' ? node.className : '') + ' ' +
+      (node.getAttribute?.('aria-label') || '') + ' ' +
+      (node.getAttribute?.('role') || '')
+    );
+    if (overlayKeywords.some((keyword) => haystack.includes(keyword))) {
+      overlayContext = true;
+      break;
+    }
+    node = node.parentElement;
+  }
+  const keywordHit = texts.some((text) => dismissKeywords.some((keyword) => text.includes(keyword)));
+  const overlayHit = texts.some((text) => overlayKeywords.some((keyword) => text.includes(keyword)));
+  if (keywordHit && (overlayContext || overlayHit)) {
+    clickIt(el, 'control');
+  }
+}
+
+return {ok:true, dismissed};
+"""
+        value = self.call_with_alert_recovery(
+            lambda: self.client.execute(script, []),
+            source_action=source_action or "dismiss_common_overlays",
+        )
+        if not isinstance(value, dict) or not value.get("ok"):
+            raise StepError(f"dismiss_common_overlays failed: {value}")
+        dismissed = value.get("dismissed") or []
+        labels = [str(item.get("label") or "") for item in dismissed if isinstance(item, dict)]
+        self.record(
+            "dismiss_common_overlays",
+            timeout_ms=timeout_ms,
+            source_action=source_action,
+            dismissed_count=len(dismissed),
+            dismissed_labels=labels,
+        )
+
     def _click_selector(self, selector: str, timeout_ms: int, action: str, record: dict[str, Any]) -> None:
         self.wait_for_selector(selector, timeout_ms)
         fallback_error = None
@@ -1083,6 +1169,8 @@ return {ok:true};
         if action == "wait_for_text":
             self.wait_for_text(str(raw_step["text"]), timeout_ms)
             return
+        if action in {"click", "click_text", "type", "type_by_label", "type_by_placeholder", "set_range", "set_rating", "select", "select_option", "choose_option", "select_by_label", "upload", "submit", "submit_first_form"}:
+            self.dismiss_common_overlays(timeout_ms, source_action=action)
         if action == "click":
             self.click(str(raw_step["selector"]), timeout_ms)
             return
@@ -1464,6 +1552,7 @@ def main() -> int:
 
         client.navigate(args.url)
         flow.wait_for_document(args.timeout_ms)
+        flow.dismiss_common_overlays(args.timeout_ms, source_action="post_navigate")
         if args.wait_ms > 0:
             flow.wait(args.wait_ms)
 
