@@ -59,7 +59,7 @@ DEDUP: Check log.md before dispatch. Never dispatch same agent for same objectiv
 PARALLEL: Independent tasks → parallel. Dependent → sequential.
 
 > **Lifecycle decisions** (creating, merging, retiring, or activating a ghost
-> subagent) follow `agent/SUBAGENT_LIFECYCLE.md`. Read it before changing
+> subagent) follow `docs/subagent-lifecycle.md`. Read it before changing
 > `opencode.json` agent registration or proposing a sub-agent merge.
 
 ## Stage-Based Dispatch (replaces strict phase flow)
