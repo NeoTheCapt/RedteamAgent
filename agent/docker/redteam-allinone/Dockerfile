@@ -28,7 +28,15 @@ RUN python3 -m venv /opt/mitmproxy-venv && \
     /opt/mitmproxy-venv/bin/pip install --no-cache-dir mitmproxy && \
     ln -sf /opt/mitmproxy-venv/bin/mitmdump /usr/local/bin/mitmdump && \
     ln -sf /opt/mitmproxy-venv/bin/mitmproxy /usr/local/bin/mitmproxy
-RUN npm install -g opencode-ai@latest
+# Pull npm's latest-version metadata on every build. Docker re-fetches this URL
+# each build; if the resolved `latest` version changes, this ADD layer's hash
+# changes, which busts the cached `npm install` layer below and pulls the new
+# release. If `latest` is unchanged, the cached layer is reused (no needless
+# reinstall). Without this, `@latest` is resolved only the first time and the
+# layer is cached forever, leaving the image stuck on whatever version was
+# `latest` at first build.
+ADD https://registry.npmjs.org/opencode-ai/latest /tmp/opencode-latest.json
+RUN npm install -g opencode-ai@latest && rm -f /tmp/opencode-latest.json
 
 COPY --from=katana-bin /usr/local/bin/katana /usr/local/bin/katana
 
