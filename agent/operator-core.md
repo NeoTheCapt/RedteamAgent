@@ -319,6 +319,20 @@ After receiving agent output with `#### Intelligence` section:
 - Append to corresponding intel.md table
 - Dedup: Technology→Component, People→Name, Emails→Email, Domains→Item+Type, Credentials→Type+Source
 
+**Mechanical osint-respawn check (run every operator tick):**
+
+```bash
+./scripts/intel_changed_check.sh "$DIR"
+if [[ -f "$DIR/.osint-respawn-required" ]]; then
+  # intel.md gained new entries since last check — dispatch osint-analyst
+  # to do CVE/breach/DNS correlation on the new context. Then clear flag.
+  task @osint-analyst "$DIR — correlate new intel.md entries (see flag file for details)"
+  rm "$DIR/.osint-respawn-required"
+fi
+```
+
+The check is idempotent: it only flags when intel.md's filled-row count increases (high-water mark preserved across compactions). Without this hook, osint-analyst was 0 dispatches across observed engagements because the operator had no mechanical signal that intel grew — vulnerability-analyst was filling intel.md inline and the operator never separately scheduled the broader CVE/breach/DNS correlation pass.
+
 ## File Organization
 
 | Type | Directory |
