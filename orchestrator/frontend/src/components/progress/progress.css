@@ -98,6 +98,22 @@
   line-height: 1.4;
 }
 
+.progress__overview-agent {
+  margin: 0;
+  font-size: var(--fs-xs);
+  line-height: 1.4;
+  font-variant-numeric: tabular-nums;
+}
+
+.progress__overview-agent-name {
+  color: var(--c-text);
+  font-weight: 500;
+}
+
+.progress__overview-agent-meta {
+  color: var(--c-text-muted);
+}
+
 .progress {
   display: grid;
   grid-template-columns: repeat(var(--progress-phase-count, 5), minmax(160px, 1fr));

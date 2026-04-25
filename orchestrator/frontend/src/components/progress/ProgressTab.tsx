@@ -3,8 +3,17 @@ import type { Case, Dispatch, RunSummary } from "../../lib/api";
 import { listDispatches, listCases } from "../../lib/api";
 import { useAutoRefresh } from "../../lib/useAutoRefresh";
 import { summarizeAgentParticipation, summarizeTrackedAgentCoverage } from "../../lib/agentParticipation";
+import { formatDuration } from "../../lib/formatDuration";
 import { KanbanColumn } from "./KanbanColumn";
 import "./progress.css";
+
+type AgentActivity = {
+  agent: string;
+  dispatchCount: number;
+  caseCount: number;
+  findingCount: number;
+  totalDurationMs: number;
+};
 
 type ProgressTabProps = {
   token: string;
@@ -136,6 +145,39 @@ export function ProgressTab({ token, projectId, runId, currentPhase, summary }: 
     return m;
   }, [dispatches]);
 
+  // Per-(phase, agent) activity log derived from dispatches + cases.
+  // Retained for completed phases so the overview keeps showing which
+  // agents worked on what after the phase advances. Sorted by dispatch
+  // count (most active first), then by agent name.
+  const phaseAgentActivity = useMemo(() => {
+    const m = new Map<string, AgentActivity[]>();
+    for (const { phase } of CANONICAL_PHASES) {
+      const phaseDispatches = dispatchesByPhase.get(phase) ?? [];
+      const byAgent = new Map<string, AgentActivity>();
+      for (const d of phaseDispatches) {
+        let stats = byAgent.get(d.agent);
+        if (!stats) {
+          stats = { agent: d.agent, dispatchCount: 0, caseCount: 0, findingCount: 0, totalDurationMs: 0 };
+          byAgent.set(d.agent, stats);
+        }
+        stats.dispatchCount += 1;
+        const linkedCases = casesByDispatch.get(d.id) ?? [];
+        stats.caseCount += linkedCases.length;
+        stats.findingCount += linkedCases.filter((c) => c.finding_id).length;
+        if (d.started_at != null && d.finished_at != null) {
+          stats.totalDurationMs += (d.finished_at - d.started_at) * 1000;
+        }
+      }
+      m.set(
+        phase,
+        Array.from(byAgent.values()).sort(
+          (a, b) => b.dispatchCount - a.dispatchCount || a.agent.localeCompare(b.agent),
+        ),
+      );
+    }
+    return m;
+  }, [dispatchesByPhase, casesByDispatch]);
+
   const participation = useMemo(
     () => summarizeAgentParticipation(summary, dispatches),
     [summary, dispatches],
@@ -178,6 +220,30 @@ export function ProgressTab({ token, projectId, runId, currentPhase, summary }: 
                 {phaseSummaryLines(phase, summary).map((line) => (
                   <p key={`${phase}-${line}`} className="progress__overview-line">{line}</p>
                 ))}
+                {(phaseAgentActivity.get(phase) ?? []).map((stat) => {
+                  const parts: string[] = [
+                    `${stat.dispatchCount} dispatch${stat.dispatchCount === 1 ? "" : "es"}`,
+                  ];
+                  if (stat.caseCount > 0) {
+                    parts.push(`${stat.caseCount} case${stat.caseCount === 1 ? "" : "s"}`);
+                  }
+                  if (stat.findingCount > 0) {
+                    parts.push(`${stat.findingCount} finding${stat.findingCount === 1 ? "" : "s"}`);
+                  }
+                  if (stat.totalDurationMs > 0) {
+                    parts.push(formatDuration(stat.totalDurationMs));
+                  }
+                  return (
+                    <p
+                      key={`${phase}-agent-${stat.agent}`}
+                      className="progress__overview-agent"
+                      data-testid="progress-overview-agent"
+                    >
+                      <span className="progress__overview-agent-name">{stat.agent}</span>
+                      <span className="progress__overview-agent-meta"> · {parts.join(" · ")}</span>
+                    </p>
+                  );
+                })}
               </div>
             </section>
           );

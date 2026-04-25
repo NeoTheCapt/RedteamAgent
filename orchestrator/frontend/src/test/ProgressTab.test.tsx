@@ -134,8 +134,37 @@ describe("ProgressTab", () => {
 
     render(<ProgressTab token="t" projectId={1} runId={2} currentPhase="consume" summary={mkSummary()} />);
     await waitFor(() => {
-      expect(screen.getByText("recon-specialist")).toBeInTheDocument();
-      expect(screen.getByText("vuln-analyst")).toBeInTheDocument();
+      // Each agent appears at least twice now: once in the per-phase
+      // overview activity line (kept across phase transitions so the
+      // record persists after the phase completes), and once in the
+      // kanban DispatchCard for the active column.
+      expect(screen.getAllByText("recon-specialist").length).toBeGreaterThan(0);
+      expect(screen.getAllByText("vuln-analyst").length).toBeGreaterThan(0);
+    });
+  });
+
+  it("retains a per-phase agent activity line for completed phases", async () => {
+    mockDispatches.mockResolvedValue([
+      { id: "d1", phase: "recon", round: 0, agent: "recon-specialist", slot: "s0", task: "nmap", state: "done", started_at: 1000, finished_at: 1180, error: null },
+      { id: "d2", phase: "recon", round: 0, agent: "source-analyzer", slot: "s0", task: "JS bundle scan", state: "done", started_at: 1100, finished_at: 1300, error: null },
+    ]);
+    mockCases.mockResolvedValue([
+      { case_id: 1, method: "GET", path: "/main.js", category: null, dispatch_id: "d2", state: "done", result: null, finding_id: null, started_at: null, finished_at: null, duration_ms: null },
+      { case_id: 2, method: "GET", path: "/admin", category: null, dispatch_id: "d2", state: "finding", result: null, finding_id: "F-1", started_at: null, finished_at: null, duration_ms: null },
+    ]);
+
+    // currentPhase="consume" means recon is in the past — its activity
+    // record must still appear in the recon overview card.
+    render(<ProgressTab token="t" projectId={1} runId={2} currentPhase="consume" summary={mkSummary()} />);
+    await waitFor(() => {
+      const lines = screen.getAllByTestId("progress-overview-agent");
+      const reconAgents = lines.filter((el) => el.textContent?.includes("recon-specialist"));
+      const sourceAgents = lines.filter((el) => el.textContent?.includes("source-analyzer"));
+      expect(reconAgents.length).toBeGreaterThan(0);
+      expect(sourceAgents.length).toBeGreaterThan(0);
+      // source-analyzer touched 2 cases including 1 finding
+      expect(sourceAgents.some((el) => el.textContent?.includes("2 cases"))).toBe(true);
+      expect(sourceAgents.some((el) => el.textContent?.includes("1 finding"))).toBe(true);
     });
   });
 
