@@ -268,6 +268,14 @@ latest_run_status_for_target() {
 # Local (Juice Shop): completed is expected (ready for scoring). Only
 #       failed/error/stopped triggers recreation with Juice Shop restart.
 recover_abnormal_runs() {
+    # Per operator policy 2026-04-25:
+    #   running healthy → leave alone
+    #   completed (natural completion) → recreate (fresh observation window)
+    #   abnormal (stopped/failed/error/timeout) → DO NOT recreate in prep;
+    #     leave the slot empty so Hermes's agent_bug source picks it up,
+    #     analyzes log.md / run.json, commits the bug fix, and only THEN
+    #     run_cycle.sh creates the replacement (post-Hermes block).
+    #   "" no run ever existed → bootstrap-create
     refresh_runs_json
     local okx_status local_status needs_recovery=0
     okx_status="$(latest_run_status_for_target "$TARGET_OKX")"
@@ -275,19 +283,10 @@ recover_abnormal_runs() {
 
     case "$okx_status" in
         failed|failure|error|errored|stopped|cancelled|canceled|timeout)
-            # Preserve the terminal run so the auditor's agent_bug source can
-            # still read log.md / run.json / findings when analyzing what went
-            # wrong. Without KEEP_TERMINAL_RUNS the DELETE endpoint would
-            # rmtree the engagement directory before Hermes gets to see it.
-            echo "[$(timestamp)] OKX run is abnormal (status=$okx_status); creating fresh replacement (preserving failed run for post-mortem)" >&2
-            if TARGET_FILTER=okx FORCE_REPLACE_ACTIVE_RUNS=1 KEEP_TERMINAL_RUNS=1 "$ROOT_DIR/scripts/create_runs.sh" >&2; then
-                needs_recovery=1
-            else
-                echo "[$(timestamp)] warning: failed to create OKX replacement run" >&2
-            fi
+            echo "[$(timestamp)] OKX run is abnormal (status=$okx_status); leaving for Hermes to analyze + fix; replacement deferred to post-Hermes block" >&2
             ;;
         "")
-            echo "[$(timestamp)] no OKX run exists; creating one" >&2
+            echo "[$(timestamp)] no OKX run exists (bootstrap); creating one" >&2
             if TARGET_FILTER=okx "$ROOT_DIR/scripts/create_runs.sh" >&2; then
                 needs_recovery=1
             else
@@ -295,7 +294,7 @@ recover_abnormal_runs() {
             fi
             ;;
         completed|complete|succeeded|success)
-            echo "[$(timestamp)] OKX run terminated (status=$okx_status); OKX is a long-lived target — deleting and recreating" >&2
+            echo "[$(timestamp)] OKX run terminated naturally (status=$okx_status); restarting" >&2
             if TARGET_FILTER=okx FORCE_REPLACE_ACTIVE_RUNS=1 "$ROOT_DIR/scripts/create_runs.sh" >&2; then
                 needs_recovery=1
             else
@@ -309,15 +308,10 @@ recover_abnormal_runs() {
 
     case "$local_status" in
         failed|failure|error|errored|stopped|cancelled|canceled|timeout)
-            echo "[$(timestamp)] local run is abnormal (status=$local_status); creating replacement (preserving failed run for post-mortem; Juice Shop NOT restarted — deferred to post-cycle)" >&2
-            if TARGET_FILTER=local FORCE_REPLACE_ACTIVE_RUNS=1 KEEP_TERMINAL_RUNS=1 "$ROOT_DIR/scripts/create_runs.sh" >&2; then
-                needs_recovery=1
-            else
-                echo "[$(timestamp)] warning: failed to create local replacement run" >&2
-            fi
+            echo "[$(timestamp)] local run is abnormal (status=$local_status); leaving for Hermes to analyze + fix; replacement deferred to post-Hermes block" >&2
             ;;
         "")
-            echo "[$(timestamp)] no local run exists; creating one (Juice Shop NOT restarted — deferred to post-cycle)" >&2
+            echo "[$(timestamp)] no local run exists (bootstrap); creating one (Juice Shop NOT restarted — deferred to post-cycle)" >&2
             if TARGET_FILTER=local "$ROOT_DIR/scripts/create_runs.sh" >&2; then
                 needs_recovery=1
             else

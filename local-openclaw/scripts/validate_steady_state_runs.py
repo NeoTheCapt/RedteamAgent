@@ -62,6 +62,24 @@ def fetch_runs() -> list[dict]:
         return json.load(resp)
 
 
+def _findings_for_target(findings_path: Path, target: str) -> list[dict]:
+    """Findings whose evidence/summary mentions the target — used to
+    decide whether running=0 is "acknowledged blocker" (open/deferred
+    finding present) vs "silent loss" (no finding)."""
+    try:
+        doc = json.loads(findings_path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    out = []
+    for f in (doc.get("findings") or []) + (doc.get("deferred") or []):
+        if not isinstance(f, dict):
+            continue
+        blob = json.dumps(f.get("evidence") or {}) + " " + (f.get("summary") or "")
+        if target in blob:
+            out.append(f)
+    return out
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("cycle_id")
@@ -72,6 +90,7 @@ def main(argv: list[str]) -> int:
     args = parser.parse_args(argv)
 
     targets = args.target or DEFAULT_TARGETS
+    findings_path = REPO_ROOT / "local-openclaw" / "audit-reports" / args.cycle_id / "findings-after.json"
 
     try:
         runs = fetch_runs()
@@ -92,26 +111,45 @@ def main(argv: list[str]) -> int:
                     bucket["stopped"] += 1
                 break
 
-    violations = [t for t, c in by_target.items() if c["running"] == 0]
+    violations = []
+    acknowledged = []
+    for t, c in by_target.items():
+        if c["running"] > 0:
+            continue
+        related = _findings_for_target(findings_path, t)
+        active_blocker = [f for f in related
+                          if (f.get("status") or "open").lower() in ("open", "deferred")]
+        if active_blocker:
+            acknowledged.append((t, c, active_blocker[0]))
+        else:
+            violations.append((t, c))
+
+    for t, c in by_target.items():
+        print(f"[steady-state] {t}: running={c['running']} stopped={c['stopped']}",
+              file=sys.stderr)
+    for t, c, finding in acknowledged:
+        print(
+            f"[steady-state] {t}: running=0 ACKNOWLEDGED via {finding.get('id')} "
+            f"({(finding.get('status') or 'open').lower()}) — operator policy: "
+            "abnormal runs await Hermes fix before recreation; allowed",
+            file=sys.stderr,
+        )
 
     if not violations:
-        for t, c in by_target.items():
-            print(f"[steady-state] {t}: running={c['running']} stopped={c['stopped']}",
-                  file=sys.stderr)
         return 0
 
     print(
-        f"[steady-state] {len(violations)} fixed target(s) have ZERO running runs at cycle end:",
+        f"[steady-state] {len(violations)} fixed target(s) have ZERO running runs "
+        "AND no open/deferred finding to acknowledge:",
         file=sys.stderr,
     )
-    for t in violations:
-        c = by_target[t]
+    for t, c in violations:
         print(f"  - {t}: running={c['running']} stopped={c['stopped']}", file=sys.stderr)
     print(
-        "  ACTION: ui-07 (or another skill) stopped a sole-runner without spawning "
-        "a replacement. Pick a redundant run next time, OR follow the STOP click with "
-        "POST /projects/<PID>/runs body {\"target\":\"<target>\"} to keep the steady-state "
-        "contract. Cycle status will be flagged success_with_dirty_artifacts.",
+        "  ACTION: per operator policy 2026-04-25, abnormal runs need either a "
+        "fix-and-restart cycle (Hermes commits a fix → controller recreates the "
+        "run) or an open/deferred finding documenting the blocker. Silent "
+        "running=0 (no finding, no commit) is a contract violation.",
         file=sys.stderr,
     )
     return 1

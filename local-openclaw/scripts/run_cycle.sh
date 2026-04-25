@@ -1321,6 +1321,85 @@ if [[ "${OPENCLAW_SKILL:-}" == "redteam-auditor-hermes" ]]; then
   fi
 fi
 
+# Post-Hermes run recreation (operator policy 2026-04-25):
+#   - prep no longer auto-recreates runs that ended in stopped/failed/error
+#   - Hermes investigates such runs as agent_bug findings and either commits
+#     a fix or marks them deferred/reclassified
+#   - HERE we recreate replacement runs for targets whose abnormal run was
+#     paired with an agent_bug that Hermes marked `fixed` this cycle
+#   - Targets whose finding is `deferred`/`reclassified`/`open` are left
+#     without a run; the next cycle's prep will see them empty and so will
+#     Hermes, who can re-investigate with the new evidence
+if [[ "${OPENCLAW_SKILL:-}" == "redteam-auditor-hermes" ]] \
+   && [[ -f "$cycle_dir/../audit-reports/$cycle_id/findings-after.json" || -f "$ROOT_DIR/audit-reports/$cycle_id/findings-after.json" ]]; then
+  python3 - "$ROOT_DIR/audit-reports/$cycle_id/findings-after.json" <<PYEOF || true
+import json, os, subprocess, sys, urllib.request
+from pathlib import Path
+findings_path = Path(sys.argv[1])
+try:
+    doc = json.loads(findings_path.read_text())
+except Exception:
+    sys.exit(0)
+records = list(doc.get("findings") or []) + list(doc.get("deferred") or [])
+agent_bug_fixed = [
+    f for f in records
+    if isinstance(f, dict)
+    and f.get("category") == "agent_bug"
+    and f.get("status") == "fixed"
+]
+if not agent_bug_fixed:
+    sys.exit(0)
+
+# Read scheduler.env for orch credentials.
+env_file = Path("$STATE_DIR/scheduler.env")
+token = ""; base_url = "http://127.0.0.1:18000"; project_id = "19"
+if env_file.exists():
+    for line in env_file.read_text().splitlines():
+        if line.startswith("ORCH_TOKEN="):  token = line.split("=",1)[1].strip().strip('"').strip("'")
+        elif line.startswith("ORCH_BASE_URL="): base_url = line.split("=",1)[1].strip().strip('"').strip("'")
+        elif line.startswith("PROJECT_ID="): project_id = line.split("=",1)[1].strip().strip('"').strip("'")
+if not token:
+    print("[post-hermes-restart] ORCH_TOKEN missing; cannot recreate runs", file=sys.stderr)
+    sys.exit(0)
+
+# Fetch current runs to know which targets are bare (need recreation).
+try:
+    req = urllib.request.Request(f"{base_url}/projects/{project_id}/runs",
+                                  headers={"Authorization": f"Bearer {token}"})
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        runs = json.load(resp)
+except Exception as exc:
+    print(f"[post-hermes-restart] cannot fetch runs: {exc}", file=sys.stderr)
+    sys.exit(0)
+
+running_targets = {r.get("target") for r in runs if (r.get("status") or "").lower() == "running"}
+
+# For every fixed agent_bug, extract target hint from evidence and recreate
+# if target has no running run.
+TARGET_HINTS = ["https://www.okx.com", "http://127.0.0.1:8000"]
+needs_recreation: set[str] = set()
+for f in agent_bug_fixed:
+    ev = f.get("evidence") or {}
+    blob = json.dumps(ev) + " " + (f.get("summary") or "")
+    for t in TARGET_HINTS:
+        if t in blob and t not in running_targets:
+            needs_recreation.add(t)
+
+for t in sorted(needs_recreation):
+    body = json.dumps({"target": t}).encode()
+    req = urllib.request.Request(f"{base_url}/projects/{project_id}/runs",
+                                  data=body, method="POST",
+                                  headers={"Authorization": f"Bearer {token}",
+                                           "Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            run = json.load(resp)
+            print(f"[post-hermes-restart] recreated {t} as run {run.get('id')} (Hermes fixed agent_bug)", file=sys.stderr)
+    except Exception as exc:
+        print(f"[post-hermes-restart] failed to recreate {t}: {exc}", file=sys.stderr)
+PYEOF
+fi
+
 send_cycle_summary
 update_local_benchmark_history || true
 
