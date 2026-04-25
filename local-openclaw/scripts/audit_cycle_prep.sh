@@ -336,6 +336,24 @@ PYEOF
 fi
 
 # ---------------------------------------------------------------------------
+# Step 4d: Auto-generate recall regression report.
+#
+# The skill's Phase 2 recall investigation checklist tells Hermes to run
+# `recall_regression_report.py` first, but across 12 cycles 2026-04-24..25
+# Hermes never actually invoked it (0 mentions in any openclaw.log). The
+# skill instruction wasn't enforceable — Hermes just skipped it.
+#
+# Run it deterministically here so the output is on disk before Hermes
+# starts. Failures are non-fatal: exit 1 = no regression to report,
+# exit 2 = peak predates solved-list persistence (waiting for new peak).
+# ---------------------------------------------------------------------------
+if [[ -x "$ROOT_DIR/scripts/recall_regression_report.py" ]]; then
+    python3 "$ROOT_DIR/scripts/recall_regression_report.py" \
+        --target "${TARGET_LOCAL:-http://127.0.0.1:8000}" \
+        2>&1 | sed 's/^/[recall-report] /' || true
+fi
+
+# ---------------------------------------------------------------------------
 # Step 5: Append auditor context to latest-context.md
 # ---------------------------------------------------------------------------
 CONTEXT_FILE="$STATE_DIR/latest-context.md"

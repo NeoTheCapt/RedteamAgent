@@ -973,6 +973,14 @@ else
       # clean. It writes exit_status=ok_no_fixes to auditor-state.json in
       # that case. Treat that as success (no commit expected) instead of
       # the "failed_no_fix_commit" status used for real stuck-cycles.
+      #
+      # Hermes contract violation pattern observed across 6/12 cycles
+      # 2026-04-24..2026-04-25: Hermes finished, classified everything
+      # as reclassified/deferred, and never set exit_status — controller
+      # rendered red `failed_no_fix_commit`. Recover from that by also
+      # inferring ok_no_fixes when findings-after.json has zero `open`
+      # AND zero `fixed` findings (i.e. nothing actionable, nothing
+      # claimed-fixed); a commit would be wrong in that case.
       if [[ "${OPENCLAW_SKILL:-}" == "redteam-auditor-hermes" ]]; then
         _auditor_exit="$(python3 -c "
 import json, pathlib
@@ -983,6 +991,42 @@ if p.exists():
 " 2>/dev/null || true)"
         if [[ "$_auditor_exit" == "ok_no_fixes" ]]; then
           log "auditor reported exit_status=ok_no_fixes; codebase clean, no commit expected"
+          break
+        fi
+        # Inference fallback: every finding is reclassified or deferred → no work.
+        _all_inactive="$(python3 -c "
+import json, pathlib
+p = pathlib.Path('$ROOT_DIR/audit-reports/$cycle_id/findings-after.json')
+if not p.exists():
+    print('no_file'); raise SystemExit
+try:
+    d = json.loads(p.read_text())
+except Exception:
+    print('parse_err'); raise SystemExit
+records = list(d.get('findings') or []) + list(d.get('deferred') or [])
+if not records:
+    print('empty'); raise SystemExit
+for f in records:
+    s = (f.get('status') or 'open').lower()
+    if s in ('open','fixed'):
+        print('has_actionable'); raise SystemExit
+print('all_inactive')
+" 2>/dev/null || echo unknown)"
+        if [[ "$_all_inactive" == "all_inactive" ]]; then
+          log "auditor missed exit_status but findings-after.json has zero open/fixed findings; inferring ok_no_fixes"
+          # Also stamp the global state so the Discord summary's display_status
+          # logic honors it (treats as success_no_fixes, not failure).
+          python3 -c "
+import json, pathlib
+p = pathlib.Path('$STATE_DIR/auditor-state.json')
+try:
+    d = json.loads(p.read_text())
+except Exception:
+    d = {}
+d['exit_status'] = 'ok_no_fixes'
+d['_inferred_by'] = 'controller_no_actionable_findings'
+p.write_text(json.dumps(d, indent=2) + '\n', encoding='utf-8')
+" 2>/dev/null || true
           break
         fi
       fi
