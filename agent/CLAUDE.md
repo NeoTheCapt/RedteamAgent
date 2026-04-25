@@ -175,6 +175,16 @@ Cases at `api_tested`, `clean`, `exploited`, `errored` do NOT block exit (they'r
 These rules from the prior phase flow still apply per-stage:
 
 - ALWAYS fetch via `./scripts/fetch_batch_to_file.sh "$DIR/cases.db" --stage <stage> <type> <limit> <agent> "$BATCH_FILE"`; it writes the full JSON batch to disk and prints only compact `BATCH_*` metadata
+- `BATCH_*` legend (every key emitted by `fetch_batch_to_file.sh`):
+  - `BATCH_FILE` — path to the JSON batch on disk; pass this to the subagent so it can read every case
+  - `BATCH_IDS` — comma-separated case IDs in the batch; the subagent's `### Case Outcomes` MUST account for every ID
+  - `BATCH_STAGE` — stage that was fetched; sanity-check it matches the `--stage` you requested
+  - `BATCH_TYPE` — case type fetched (api / form / javascript / page / …); sanity-check the routing
+  - `BATCH_AGENT` — assigned subagent name; MUST match the `task(...)` call you launch next
+  - `BATCH_COUNT` — case count in the batch; if `0`, do NOT dispatch (no work) and do NOT fetch more for the same `(stage, agent)` pair this turn
+  - `BATCH_LIMIT` — max cases requested (informational; equal to or less than your `<limit>` arg)
+  - `BATCH_PATHS` — newline-joined `url_path` list; useful for inlining a one-line batch summary in the dispatch prompt instead of re-reading `BATCH_FILE`
+  - `BATCH_NOTE` — stderr forwarded from the script; if non-empty, surface it in the operator log before dispatching (lock contention, db error, in-flight guard, etc.)
 - NEVER `cat "$BATCH_FILE"`, print raw fetched JSON, or paste full batch payloads back into the model
 - if `BATCH_COUNT > 0`, the very next advancing action MUST be the matching `task(...)` call for that same `BATCH_AGENT`/`BATCH_FILE`
 - if you are not ready to launch the matching subagent immediately, do NOT fetch yet
