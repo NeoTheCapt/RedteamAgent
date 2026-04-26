@@ -9,7 +9,7 @@ set -euo pipefail
 #   - any in-flight processing for recon-specialist / source-analyzer
 #     during initial discovery → recon
 #   - cases.db growing rapidly + most cases at ingested → collect
-#   - active stages (ingested|source_analyzed|vuln_confirmed|fuzz_pending) > 0
+#   - active stages (ingested|vuln_confirmed|fuzz_pending) > 0
 #     and no exploit-developer in flight → consume_test
 #   - any case at vuln_confirmed OR exploit-developer in flight → exploit
 #   - report-writer running, no other in-flight, no active stages → report
@@ -40,7 +40,7 @@ if [[ "${HAS_STAGE:-0}" != "1" ]]; then
     exit 0
 fi
 
-ACTIVE=$(sql "SELECT COUNT(*) FROM cases WHERE stage IN ('ingested','source_analyzed','vuln_confirmed','fuzz_pending');")
+ACTIVE=$(sql "SELECT COUNT(*) FROM cases WHERE stage IN ('ingested','vuln_confirmed','fuzz_pending');")
 PROCESSING=$(sql "SELECT COUNT(*) FROM cases WHERE status='processing';")
 VULN_CONFIRMED=$(sql "SELECT COUNT(*) FROM cases WHERE stage='vuln_confirmed';")
 EXPLOIT_IN_FLIGHT=$(sql "SELECT COUNT(*) FROM cases WHERE status='processing' AND assigned_agent LIKE 'exploit-developer%';")

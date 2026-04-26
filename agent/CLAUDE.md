@@ -104,7 +104,7 @@ recon-specialist re-dispatch on auth foothold     intel.md + auth.json
 | Stage | Set by | Next dispatch |
 |---|---|---|
 | `ingested` | producers (recon-specialist, source-analyzer ingest, katana, source) | type=javascript/page/stylesheet/data/unknown/api-spec → source-analyzer; type=api/form/graphql/upload/websocket → vulnerability-analyst |
-| `source_analyzed` | source-analyzer (after analyzing a JS/page/data/unknown) | if that source produced an `api`/`form` follow-up case, the new case starts at `ingested`; THIS case is terminal as far as testing pipeline goes (mark `STAGE=clean` to retire) UNLESS the source itself contained a directly testable surface (in which case the source-analyzer marks `STAGE=vuln_confirmed`) |
+| `source_analyzed` | source-analyzer (after analyzing a JS/page/data/unknown) | terminal source-carrier marker: the source artifact was analyzed and any new follow-up case starts at `ingested`; this original carrier must not remain pending or block exit. If the source itself contains a directly testable surface, source-analyzer marks `STAGE=vuln_confirmed` instead. |
 | `vuln_confirmed` | source-analyzer (rare) or vulnerability-analyst (main) | exploit-developer |
 | `fuzz_pending` | vulnerability-analyst (when a case needs deep fuzz beyond its inline ≤500-entry budget) | fuzzer; fuzzer transitions to `vuln_confirmed` (signal found), `api_tested` (no signal), or `clean` (non-fuzzable) |
 | `api_tested` | vulnerability-analyst (when no vuln found) | terminal — case retires |
@@ -162,7 +162,7 @@ The same turn that appends the engagement-start log entry MUST do at least one o
 ### Rule 5 — stop condition (replaces "pending=0 AND processing=0")
 
 Exit allowed only when ALL of the following hold:
-- `dispatcher.sh stats-by-stage` shows zero cases in active stages: `ingested`, `source_analyzed`, `vuln_confirmed`, `fuzz_pending`
+- `dispatcher.sh stats-by-stage` shows zero cases in active stages: `ingested`, `vuln_confirmed`, `fuzz_pending`
 - zero cases in `processing` status (no in-flight subagent batch)
 - `check_collection_health.sh` passes
 - `check_surface_coverage.sh` passes
@@ -191,6 +191,9 @@ These rules from the prior phase flow still apply per-stage:
 - a subagent handoff is not complete unless the `### Case Outcomes` section accounts for every fetched case ID exactly once with `DONE STAGE=<stage>` / `REQUEUE` / `ERROR`
 - NEVER combine outcome recording (`done`, `error`, `requeue`, `append_*`, queue stats, scope/findings/log updates) and `fetch_batch_to_file.sh` in the same bash call. First record outcomes. Then a dedicated fetch+dispatch.
 - if subagent output includes `REQUEUE_CANDIDATE` or names an untested higher-risk family, requeue rather than retire
+- when source-analysis keeps collapsing sibling carriers into the SAME exact browser-flow follow-up (same `/#/...` route or same concrete `./scripts/browser_flow.py --url ...` next step), dispatch one bounded live route execution for that exact route before fetching another same-family surface/page batch. Do not keep feeding near-duplicate carriers back through source-analyzer while the preserved exact route follow-up is still waiting.
+- if source-analysis has already route-captured a concrete `/#/...` page and the remaining work is the FIRST bounded `browser_flow.py` pass, do NOT send that page case back to source-analyzer. Hand that exact route to exploit-developer as the live-route execution owner next, unless new source artifacts arrived that materially change the route evidence.
+- if a concrete dynamic-render/auth/workflow surface already preserves that exact follow-up, treat later sibling carriers as duplicates to retire, not as a reason to queue a second or third copy of the same live-route work.
 - the dispatcher's in-flight guard (`Refusing fetch for <agent>: N processing`) is correct behavior — it means there's already a task running for that agent; consume those outcomes first
 - BEFORE every fetch-by-stage on `ingested javascript`, run `python3 ./scripts/prune_vendor_cases.py "$DIR/cases.db"` to mark webpack chunks / polyfills / runtime / vendor-bundle / source-map cases as `stage=clean` without burning a source-analyzer dispatch on them. The script matches GENERIC build-tool patterns (chunk/polyfill/runtime/vendor/commons hashes, .js.map, /vendor/ or /lib/ segments, numeric webpack splits) — not target-specific paths — and is idempotent. Audit data showed source-analyzer was at ROI 0.016 (121 dispatches / 2 findings) largely because of this noise; the prune step is the second filter after katana ingest.
 
@@ -225,7 +228,7 @@ For continuous-observation targets, `report-writer` stops after writing `report.
 Do NOT stop because one batch completed or because you can summarize partial progress.
 Before any final stop/completion message:
 - run `./scripts/dispatcher.sh "$DIR/cases.db" stats-by-stage`
-- if cases at active stages (`ingested`, `source_analyzed`, `vuln_confirmed`, `fuzz_pending`) > 0, continue the loop and do NOT stop
+- if cases at active stages (`ingested`, `vuln_confirmed`, `fuzz_pending`) > 0, continue the loop and do NOT stop
 - if any case is in `processing` status (in-flight subagent), wait for the outcome before stopping
 - if `./scripts/check_collection_health.sh "$DIR"` fails, do NOT stop
 - if `./scripts/check_surface_coverage.sh "$DIR"` fails, do NOT stop
