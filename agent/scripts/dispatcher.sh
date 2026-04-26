@@ -455,8 +455,12 @@ case "$ACTION" in
     ID_LIST="$(normalize_id_list "${DONE_ARGS[@]}")"
     if [[ -n "$NEW_STAGE" ]]; then
       case "$NEW_STAGE" in
-        source_analyzed|clean|exploited|errored)
-          # Terminal: status=done, stage=<terminal>
+        source_analyzed|api_tested|clean|exploited|errored)
+          # Terminal: status=done, stage=<terminal>.  The stats view and
+          # phase derivation both treat api_tested as terminal; keeping it
+          # pending after a vulnerability-analyst DONE outcome leaves queues
+          # apparently unfinished and can make completed report-stage runs
+          # fail later as engagement_incomplete/incomplete_stop.
           sql "UPDATE cases SET status='done', stage='${NEW_STAGE}' WHERE id IN (${ID_LIST});"
           echo "Marked done (stage=${NEW_STAGE}, terminal): ${ID_LIST}"
           ;;
