@@ -1687,13 +1687,13 @@ def _promote_completed_scope_from_artifacts(scope_path: Path, payload: dict[str,
     return changed
 
 
-_REPORT_REQUIRED_SECTIONS = (
-    "## Executive Summary",
-    "## Scope and Methodology",
-    "## Findings",
-    "## Attack Narrative",
-    "## Recommendations",
-    "## Appendix",
+_REPORT_REQUIRED_SECTION_GROUPS = (
+    ("## Executive Summary",),
+    ("## Scope and Methodology", "## Methodology"),
+    ("## Findings",),
+    ("## Attack Narrative", "## Attack Path Narrative"),
+    ("## Recommendations",),
+    ("## Appendix",),
 )
 _FINDING_SECTION_PATTERN = re.compile(
     r"^## \[(?P<id>[^\]]+)\] (?P<title>.+?)\n(?P<body>.*?)(?=^## \[|\Z)",
@@ -1707,12 +1707,18 @@ def _report_has_substantive_content(text: str) -> bool:
     stripped = text.strip()
     if not stripped or len(stripped) < 400:
         return False
-    matched_sections = sum(1 for section in _REPORT_REQUIRED_SECTIONS if section in stripped)
+    matched_sections = sum(
+        1
+        for section_group in _REPORT_REQUIRED_SECTION_GROUPS
+        if any(section in stripped for section in section_group)
+    )
     if matched_sections < 4:
         return False
     if "## Findings" not in stripped:
         return False
     if re.search(r"^### \[FINDING-\d{3}\] ", stripped, flags=re.MULTILINE):
+        return True
+    if re.search(r"^### FINDING-\d{3}:", stripped, flags=re.MULTILINE):
         return True
     return "No confirmed findings" in stripped
 
