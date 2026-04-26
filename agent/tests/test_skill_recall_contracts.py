@@ -7,6 +7,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 FILE_UPLOAD_SKILL = REPO_ROOT / "agent" / "skills" / "file-upload-testing" / "SKILL.md"
 SENSITIVE_DATA_SKILL = REPO_ROOT / "agent" / "skills" / "sensitive-data-detection" / "SKILL.md"
 SOURCE_ANALYSIS_SKILL = REPO_ROOT / "agent" / "skills" / "source-analysis" / "SKILL.md"
+XSS_SKILL = REPO_ROOT / "agent" / "skills" / "xss-testing" / "SKILL.md"
 
 
 def test_file_upload_skill_requires_consumer_path_after_spa_fallback() -> None:
@@ -43,3 +44,14 @@ def test_sensitive_data_skill_sweeps_privileged_juice_shop_endpoints_after_admin
     assert "/api/Users" in skill
     assert "admin/JWT exploit confirms access" in skill
     assert "requeue a narrowed follow-up" in skill
+
+
+def test_xss_skill_requires_juice_shop_browser_flow_recall_contract() -> None:
+    skill = XSS_SKILL.read_text(encoding="utf-8")
+
+    assert "CTF / Juice Shop recall contract" in skill
+    assert "do not close XSS-capable surfaces with API-only probes" in skill
+    assert "/#/search?q=<iframe" in skill
+    assert "/rest/products/search" in skill
+    assert "Zero Stars feedback" in skill
+    assert "return `REQUEUE` with a concrete `dynamic_render` or `form` follow-up" in skill

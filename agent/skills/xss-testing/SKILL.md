@@ -110,6 +110,18 @@ https://target.com/page#<img src=x onerror=alert(1)>
 targetWindow.postMessage('<img src=x onerror=alert(1)>','*')
 ```
 
+### CTF / Juice Shop recall contract
+
+When the target is a local CTF benchmark or the bundle/routes identify OWASP Juice Shop, do not close XSS-capable surfaces with API-only probes. Execute one bounded browser-flow pass for the canonical client-side challenge triggers, then check `/api/Challenges` or the Score Board for solved-state evidence before marking the case done.
+
+Minimum browser-flow payload set:
+- DOM XSS / Missing Encoding / Bonus Payload: render the search route with URL/hash payloads such as `/#/search?q=<iframe src="javascript:alert(1)">`, `/#/search?q=<img src=x onerror=alert(1)>`, and the encoded equivalents that exercise Angular route/query decoding.
+- Reflected/API-only XSS: probe `/rest/products/search?q=<payload>` and then render the search results page that consumes the response; do not stop at a raw JSON reflection check.
+- Stored/user-content XSS: after feedback/comment/upload filename writes, navigate to the exact consumer view that renders the stored value and look for execution or safe escaping.
+- Zero Stars feedback: include the client/API path that submits a `0` rating and verify whether the challenge tracker flips even if the UI normally hides zero-star selection.
+
+If any of those route/payload families has not been browser-rendered, return `REQUEUE` with a concrete `dynamic_render` or `form` follow-up instead of `DONE STAGE=exhausted`. This protects recall for DOM XSS, API-only XSS, Missing Encoding, Bonus Payload, Reflected XSS, and Zero Stars classes that API-only triage otherwise misses.
+
 ## Proof of Concept (demonstrate real impact)
 ```javascript
 alert(document.domain)                                    // Execution context
