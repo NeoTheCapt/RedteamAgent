@@ -6,6 +6,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 FILE_UPLOAD_SKILL = REPO_ROOT / "agent" / "skills" / "file-upload-testing" / "SKILL.md"
 SENSITIVE_DATA_SKILL = REPO_ROOT / "agent" / "skills" / "sensitive-data-detection" / "SKILL.md"
+SOURCE_ANALYSIS_SKILL = REPO_ROOT / "agent" / "skills" / "source-analysis" / "SKILL.md"
 
 
 def test_file_upload_skill_requires_consumer_path_after_spa_fallback() -> None:
@@ -23,6 +24,15 @@ def test_file_upload_skill_keeps_ctf_upload_recall_branches_alive() -> None:
     assert "converts an upload finding into solved-state evidence" in skill
     assert "DONE STAGE=vuln_confirmed" in skill
     assert "REQUEUE" in skill
+
+
+def test_source_analysis_preserves_ctf_scoreboard_routes_for_browser_flow() -> None:
+    skill = SOURCE_ANALYSIS_SKILL.read_text(encoding="utf-8")
+
+    assert "challenge-tracker routes" in skill
+    assert "`/#/score-board`" in skill
+    assert "dynamic_render" in skill
+    assert "bounded browser-flow visit" in skill
 
 
 def test_sensitive_data_skill_sweeps_privileged_juice_shop_endpoints_after_admin_access() -> None:
