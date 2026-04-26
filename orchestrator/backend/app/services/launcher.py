@@ -542,11 +542,37 @@ def _heartbeat_context(run: Run) -> tuple[str, str]:
     return (phase, f"Runtime active in {phase}; waiting for new agent output.")
 
 
+# Stages that are TERMINAL in the streaming pipeline. A case at one of these
+# stages has finished its journey through the queue even if its `status`
+# column wasn't flipped to `done` (which happens, for example, when the
+# operator transitions a case via `set-stage` instead of `done --stage`, or
+# when a subagent's terminal-stage handoff didn't get translated to a `done`
+# call). Counting these as "pending undispatched work" produces false
+# `incomplete_stop` / `queue_stalled` failures (observed on run 730).
+_TERMINAL_CASE_STAGES = ("api_tested", "clean", "exploited", "errored")
+
+
+def _stage_column_present(connection: sqlite3.Connection) -> bool:
+    cols = {
+        row[1]
+        for row in connection.execute("PRAGMA table_info(cases)").fetchall()
+    }
+    return "stage" in cols
+
+
 def _count_remaining_cases(cases_db: Path) -> tuple[int, int]:
     def _reader(connection: sqlite3.Connection) -> tuple[int, int]:
-        pending = connection.execute(
-            "SELECT COUNT(*) FROM cases WHERE status = 'pending'"
-        ).fetchone()
+        if _stage_column_present(connection):
+            terminal_placeholders = ",".join("?" * len(_TERMINAL_CASE_STAGES))
+            pending = connection.execute(
+                "SELECT COUNT(*) FROM cases WHERE status = 'pending' "
+                f"AND stage NOT IN ({terminal_placeholders})",
+                _TERMINAL_CASE_STAGES,
+            ).fetchone()
+        else:
+            pending = connection.execute(
+                "SELECT COUNT(*) FROM cases WHERE status = 'pending'"
+            ).fetchone()
         processing = connection.execute(
             "SELECT COUNT(*) FROM cases WHERE status = 'processing'"
         ).fetchone()
@@ -1027,9 +1053,18 @@ def _load_running_queue_state(engagement_dir: Path | None) -> tuple[str, int, in
 
     def _reader(connection: sqlite3.Connection) -> tuple[int, int, int]:
         total_row = connection.execute("SELECT COUNT(*) FROM cases").fetchone()
-        pending_row = connection.execute(
-            "SELECT COUNT(*) FROM cases WHERE status = 'pending'"
-        ).fetchone()
+        # Stage-aware pending — see _count_remaining_cases comment.
+        if _stage_column_present(connection):
+            terminal_placeholders = ",".join("?" * len(_TERMINAL_CASE_STAGES))
+            pending_row = connection.execute(
+                "SELECT COUNT(*) FROM cases WHERE status = 'pending' "
+                f"AND stage NOT IN ({terminal_placeholders})",
+                _TERMINAL_CASE_STAGES,
+            ).fetchone()
+        else:
+            pending_row = connection.execute(
+                "SELECT COUNT(*) FROM cases WHERE status = 'pending'"
+            ).fetchone()
         processing_row = connection.execute(
             "SELECT COUNT(*) FROM cases WHERE status = 'processing'"
         ).fetchone()
