@@ -2658,6 +2658,32 @@ def _matches_continuous_target(hostname: str, patterns: list[str]) -> bool:
     return False
 
 
+def _continuous_observation_log_hold_active(run: Run, engagement_dir: Path) -> bool:
+    """Detect the operator's post-report continuous-observation hold from logs.
+
+    Some long-running fixed-target engagements intentionally enter an
+    observation hold after the final report is written while the historical
+    ``scope.json`` still says ``consume_test``/``in_progress`` and the queue may
+    retain low-priority backlog.  In that state a clean runtime exit should be
+    auto-resumed instead of consuming the normal three incomplete-exit retries
+    and ending as ``engagement_incomplete``.
+    """
+    if not _continuous_observation_target_matches(run):
+        return False
+
+    report_path = engagement_dir / "report.md"
+    if not report_path.exists():
+        return False
+    if not _report_has_substantive_content(report_path.read_text(encoding="utf-8", errors="replace")):
+        return False
+
+    log_path = engagement_dir / "log.md"
+    if not log_path.exists():
+        return False
+    tail = log_path.read_text(encoding="utf-8", errors="replace")[-12000:]
+    return "Observation hold active" in tail and "runtime attached" in tail
+
+
 def _continuous_observation_report_hold_active(
     run: Run,
     *,
@@ -2670,6 +2696,9 @@ def _continuous_observation_report_hold_active(
     engagement_dir = engagement_dir or _active_engagement_dir(run)
     if engagement_dir is None:
         return False
+
+    if _continuous_observation_log_hold_active(run, engagement_dir):
+        return True
 
     if scope is None:
         scope = _normalize_scope_file(engagement_dir / "scope.json", run=run)
