@@ -297,11 +297,29 @@ def _load_queue_state(scope_path: Path | None) -> tuple[str, int, int, int, str]
     if not cases_db.exists():
         return (current_phase, total_cases, pending_cases, processing_cases, queue_health)
 
+    # Stages that are terminal in the streaming pipeline; rows at these stages
+    # don't count as pending undispatched work even if `status` wasn't flipped
+    # to `done`. Mirrors `launcher._TERMINAL_CASE_STAGES` to avoid an import
+    # cycle (this module already imports from .runs in launcher.py path checks).
+    terminal_stages = ("api_tested", "clean", "exploited", "errored")
+
     def _reader(connection: sqlite3.Connection) -> tuple[int, int, int]:
         total_row = connection.execute("SELECT COUNT(*) FROM cases").fetchone()
-        pending_row = connection.execute(
-            "SELECT COUNT(*) FROM cases WHERE status = 'pending'"
-        ).fetchone()
+        cols = {
+            row[1]
+            for row in connection.execute("PRAGMA table_info(cases)").fetchall()
+        }
+        if "stage" in cols:
+            placeholders = ",".join("?" * len(terminal_stages))
+            pending_row = connection.execute(
+                "SELECT COUNT(*) FROM cases WHERE status = 'pending' "
+                f"AND stage NOT IN ({placeholders})",
+                terminal_stages,
+            ).fetchone()
+        else:
+            pending_row = connection.execute(
+                "SELECT COUNT(*) FROM cases WHERE status = 'pending'"
+            ).fetchone()
         processing_row = connection.execute(
             "SELECT COUNT(*) FROM cases WHERE status = 'processing'"
         ).fetchone()
