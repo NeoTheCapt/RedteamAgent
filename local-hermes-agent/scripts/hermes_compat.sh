@@ -117,7 +117,17 @@ case "$SUBCOMMAND" in
     max_turns="${HERMES_MAX_TURNS:-$default_max_turns}"
 
     cd "$REPO_ROOT"
-    run_hermes_cli "$timeout_seconds" -s "$skill_name" chat -q "$transformed_message" -Q -t "$toolsets" --source "$source_tag" --max-turns "$max_turns"
+    # --yolo: hermes refuses `curl | python3`, `bash <(curl ...)` and similar
+    #   dangerous pipe-to-interpreter patterns by default with an interactive
+    #   approval prompt. The auditor cycle runs unattended (launchd-driven),
+    #   so an interactive prompt = automatic deny = aborted run. Auditor is
+    #   a trusted local context (signed-off authorized testing on lab/CTF
+    #   targets only), and openclaw — the runtime we are migrating off —
+    #   never had this gate. Mirror that behaviour.
+    # --accept-hooks: same reason for shell hooks defined in the skill /
+    #   project config — the cycle controller would deadlock on the
+    #   interactive approve prompt.
+    run_hermes_cli "$timeout_seconds" -s "$skill_name" chat -q "$transformed_message" -Q -t "$toolsets" --source "$source_tag" --max-turns "$max_turns" --yolo --accept-hooks
     ;;
 
   message)
