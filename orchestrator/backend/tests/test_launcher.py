@@ -3633,7 +3633,7 @@ def test_engagement_completion_state_repairs_completed_report_scope_without_stop
     (engagement_dir / "scope.json").write_text(
         json.dumps(
             {
-                "status": "complete",
+                "status": "in_progress",
                 "current_phase": "report",
                 "phases_completed": ["recon", "collect", "consume_test", "exploit"],
                 "target": "http://127.0.0.1:8000",
@@ -3689,6 +3689,7 @@ def test_engagement_completion_state_repairs_completed_report_scope_without_stop
     assert engagement_completion_state(latest) == (True, "Engagement completed and finalized.")
 
     normalized = json.loads((engagement_dir / "scope.json").read_text(encoding="utf-8"))
+    assert normalized["status"] == "complete"
     assert normalized["current_phase"] == "complete"
     assert normalized["phases_completed"] == ["recon", "collect", "consume_test", "exploit", "report"]
 
