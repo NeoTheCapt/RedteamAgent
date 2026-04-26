@@ -176,7 +176,16 @@ echo "$RESPONSE" | jq -r '[paths(scalars)] | .[] | join(".")' | \
           latitude|longitude|geo|location|ip.?addr)'
 ```
 
-### Phase 3: HTTP Header & Cookie Inspection
+### Phase 3: Authenticated Privileged Data Sweep
+
+When an engagement obtains an admin token, forged JWT, recovered session, or any other privileged auth context, immediately sweep sensitive-data endpoints before returning to generic queue work. Do not leave these as low-priority queued cases after an admin takeover chain.
+
+CTF/Juice Shop recall contract:
+- After forged/admin JWT proof, request and classify `/rest/user/authentication-details/`, `/api/Users`, `/api/Users/<id>`, `/rest/admin/application-configuration`, backup files under `/ftp`, and any discovered `user/authentication` route with the privileged token.
+- Treat fields named `password`, `passwordHash`, `hash`, `salt`, `email`, `role`, `totpSecret`, `securityAnswer`, `apiKey`, or `credential` as sensitive findings even when the endpoint is expected to be admin-only; record the exact endpoint and first affected user/hash prefix as challenge evidence.
+- If an admin/JWT exploit confirms access but sensitive-data endpoints remain queued or untested, requeue a narrowed follow-up instead of marking the chain done. This preserves recall for password-hash/user-credential leak challenges that otherwise regress when exploitation stops at “admin access confirmed.”
+
+### Phase 4: HTTP Header & Cookie Inspection
 
 ```bash
 # Check response headers for leaked info
