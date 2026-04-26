@@ -54,7 +54,11 @@ RUN_STARTUP_GRACE_SECONDS = 90
 # early.
 RUN_STALL_TIMEOUT_SECONDS = 900
 PROCESSING_AGENT_MISMATCH_GRACE_SECONDS = 120
-PENDING_QUEUE_DISPATCH_GRACE_SECONDS = 120
+# Pending-but-idle consume-test gaps can occur between autonomous turns while
+# the runtime is still preparing the next dispatch.  Use the full run-stall
+# window here; the shorter processing-agent mismatch grace is only safe once a
+# concrete fetched/processing assignment exists.
+PENDING_QUEUE_DISPATCH_GRACE_SECONDS = RUN_STALL_TIMEOUT_SECONDS
 PERMISSION_REQUEST_GRACE_SECONDS = 60
 # Real targets can spend several minutes in autonomous initialization/recon before the
 # first queue item or observed path lands. Keep the early watchdog long enough to avoid
