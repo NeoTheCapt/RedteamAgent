@@ -32,6 +32,8 @@ run_tool hydra -l root -P passwords.txt target ssh -t 4
 - Predictable/reusable/non-expiring tokens, token not tied to account
 - Host header injection: `Host: attacker.com` in reset request
 - Parameter pollution: `email=victim@mail.com&email=attacker@mail.com`
+- CTF/Juice Shop-style recovery chains: when `/rest/user/security-question`, `/rest/user/reset-password`, or exposed backup/source artifacts exist, do not stop at "unknown answer". Correlate answers from source bundles, `/ftp` backups, incident files, leaked credentials, and OSINT hints; replay reset for high-value users such as `admin@juice-sh.op`, `bjoern@owasp.org`, support/admin accounts, then immediately verify login and record the solved challenge/finding evidence.
+- If reset remains blocked, emit an explicit `REQUEUE_CANDIDATE` naming the missing answer source and the exact endpoints/artifacts already checked, so a later source-analysis or exploit pass can finish the chain instead of retiring it silently.
 
 ### 4. Session Management
 - Session fixation: force token onto victim, use after auth
