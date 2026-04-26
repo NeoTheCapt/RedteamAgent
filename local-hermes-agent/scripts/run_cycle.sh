@@ -12,7 +12,7 @@ PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:${PATH:-}"
 # shellcheck disable=SC1091
 source "$ROOT_DIR/scripts/lib/config.sh"
 
-HERMES_BIN="${HERMES_BIN:-$(command -v openclaw || true)}"
+HERMES_BIN="${HERMES_BIN:-${LOCAL_HERMES_ROOT:-$ROOT_DIR}/scripts/hermes_compat.sh}"
 # Require HERMES_SKILL to be set explicitly by the caller. Silently defaulting
 # to scan-optimizer-loop caused real confusion: a scheduled auditor run that
 # forgot to export the var would quietly start mutating optimizer-state.json.

@@ -553,7 +553,7 @@ def main() -> None:
     parser.add_argument("--mapping", required=True, help="Path to target benchmark mapping JSON.")
     parser.add_argument("--root-dir", default="", help="Optional local-hermes-agent root for resolving relative benchmark paths.")
     parser.add_argument("--label", default="", help="Human label override.")
-    parser.add_argument("--hermes-bin", default="openclaw", help="Hermes-runtime CLI binary used for LLM judging (currently the legacy openclaw binary; will switch when hermes-agent CLI provides equivalent agent --json mode).")
+    parser.add_argument("--hermes-bin", default="hermes", help="Hermes-runtime CLI binary used for LLM judging. Resolved via PATH; override if hermes is not in PATH.")
     args = parser.parse_args()
 
     snapshot = load_snapshot()
