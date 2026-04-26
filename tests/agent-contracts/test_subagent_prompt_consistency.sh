@@ -46,6 +46,14 @@ set -euo pipefail
 #       of requeueing another duplicate live-route task. Drift here caused repeated
 #       privacy-security requeues in the 2026-04-25 recall audit.
 #
+#   D9. FIRST LIVE-ROUTE OWNERSHIP: once source-analysis has already proved a
+#       concrete fragment route exists and named the first browser_flow.py step,
+#       that page case is exhausted for source-analysis. The operator must hand the
+#       first live route execution to exploit-developer (or equivalent live-route
+#       owner) instead of sending the same page case back through source-analyzer.
+#       Drift here caused exact route cases to loop in source-analysis even after
+#       route-capture had already proven the page existed.
+#
 # Exit 0 = pass, 1 = violation, 2 = harness error. Run from repo root.
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -181,15 +189,17 @@ for required in \
     fi
 done
 
-# --- D8: EXACT ROUTE FOLLOW-UP DEDUPE ---
+# --- D8/D9: EXACT ROUTE FOLLOW-UP DEDUPE + FIRST LIVE-ROUTE OWNERSHIP ---
 OPERATOR_PROMPT="$PROMPTS_DIR/operator.txt"
 SOURCE_PROMPT="$PROMPTS_DIR/source-analyzer.txt"
+SKILL_FILE="$ROOT/agent/skills/source-analysis/SKILL.md"
 
 for required in \
     'dispatch one bounded live route execution for that exact route before fetching another same-family surface/page batch' \
-    'treat later sibling carriers as duplicates to retire'; do
+    'treat later sibling carriers as duplicates to retire' \
+    'Hand that exact route to exploit-developer as the live-route execution owner next'; do
     if ! /usr/bin/grep -qF "$required" "$OPERATOR_PROMPT"; then
-        echo "[D8] operator: missing exact-route dedupe guidance token: $required" >&2
+        echo "[D8/D9] operator: missing exact-route/live-route guidance token: $required" >&2
         echo "      file: $OPERATOR_PROMPT" >&2
         violations=$((violations + 1))
     fi
@@ -197,10 +207,22 @@ done
 
 for required in \
     'do not keep multiple sibling carriers pending for the same exact route' \
-    'Requeue only one representative queue row per exact route/workflow until that live follow-up runs'; do
+    'Requeue only one representative queue row per exact route/workflow until that live follow-up runs' \
+    'The first bounded browser-flow pass belongs to exploit-developer or another live-route execution owner, not another source-analysis revisit' \
+    'return `DONE STAGE=clean`, not `REQUEUE`, unless new source artifacts arrived that materially change the route evidence'; do
     if ! /usr/bin/grep -qF "$required" "$SOURCE_PROMPT"; then
-        echo "[D8] source-analyzer: missing exact-route dedupe guidance token: $required" >&2
+        echo "[D8/D9] source-analyzer: missing exact-route/live-route guidance token: $required" >&2
         echo "      file: $SOURCE_PROMPT" >&2
+        violations=$((violations + 1))
+    fi
+done
+
+for required in \
+    'Do **not** keep sending the same page case back through source-analysis just to wait for the first live route execution' \
+    'That first bounded browser-flow pass belongs to exploit-developer or another live-route execution owner'; do
+    if ! /usr/bin/grep -qF "$required" "$SKILL_FILE"; then
+        echo "[D8/D9] source-analysis skill: missing exact-route/live-route guidance token: $required" >&2
+        echo "      file: $SKILL_FILE" >&2
         violations=$((violations + 1))
     fi
 done
@@ -211,5 +233,5 @@ if [[ $violations -gt 0 ]]; then
     exit 1
 fi
 
-echo "OK: SUBAGENT BOUNDARY, FINDING IDs, CASE BATCH framing, and exact-route dedupe guidance consistent across prompts"
+echo "OK: SUBAGENT BOUNDARY, FINDING IDs, CASE BATCH framing, and exact-route/live-route guidance consistent across prompts"
 exit 0
