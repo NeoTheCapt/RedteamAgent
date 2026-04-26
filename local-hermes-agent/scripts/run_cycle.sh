@@ -908,8 +908,31 @@ else
       } >> "$hermes_log"
 
       set +e
-      "$HERMES_BIN" agent --session-id "local-hermes-agent-$cycle_id" --message "$prompt_text" --timeout "$HERMES_TIMEOUT_SECONDS" 2>&1 | tee -a "$hermes_log"
-      hermes_status=${PIPESTATUS[0]}
+      # External hard timeout. The runtime's own `--timeout` flag is advisory
+      # and was observed to be ignored — cycles 20260425T195427Z and
+      # 20260426T080611Z both finished all work and emitted their final
+      # output to hermes.log, but the openclaw process refused to return
+      # (no EOF to the tee pipe) for 30+ minutes, blocking the next launchd
+      # StartInterval fire indefinitely.
+      #
+      # Wrap with `gtimeout` (or `timeout` — both ship via coreutils on
+      # macOS/Linux): SIGTERM at HERMES_TIMEOUT_SECONDS, then SIGKILL 60s
+      # later via --kill-after if the runtime didn't honor SIGTERM.
+      # Status 124 = timeout-on-TERM; 137 = killed via SIGKILL.
+      _hard_timeout_bin="$(command -v gtimeout 2>/dev/null || command -v timeout 2>/dev/null || true)"
+      if [[ -n "$_hard_timeout_bin" ]]; then
+        "$_hard_timeout_bin" --kill-after=60 "$HERMES_TIMEOUT_SECONDS" \
+          "$HERMES_BIN" agent --session-id "local-hermes-agent-$cycle_id" --message "$prompt_text" --timeout "$HERMES_TIMEOUT_SECONDS" 2>&1 \
+          | tee -a "$hermes_log"
+        hermes_status=${PIPESTATUS[0]}
+        if [[ $hermes_status -eq 124 || $hermes_status -eq 137 ]]; then
+          log "hermes runtime exceeded HERMES_TIMEOUT_SECONDS=$HERMES_TIMEOUT_SECONDS; hard-killed by $(basename "$_hard_timeout_bin") (status=$hermes_status)"
+        fi
+      else
+        log "WARN: gtimeout/timeout binary not found; openclaw runtime timeout is advisory only"
+        "$HERMES_BIN" agent --session-id "local-hermes-agent-$cycle_id" --message "$prompt_text" --timeout "$HERMES_TIMEOUT_SECONDS" 2>&1 | tee -a "$hermes_log"
+        hermes_status=${PIPESTATUS[0]}
+      fi
       set -e
 
       if [[ $hermes_status -ne 0 ]]; then
