@@ -36,7 +36,9 @@ origin: RedteamOpencode
 - Treat a successful upload acceptance or an existing upload finding as the start of a workflow, not the end.
 - On follow-up passes, do **not** keep free-exploring extension/MIME permutations if the unresolved question is really where the uploaded content lands.
 - Spend one bounded step on the highest-signal consumer path already evidenced by the app: retrieval URL, public/static asset path, gallery/list view, moderation queue, document viewer, export/download path, or downstream parser.
-- If the consumer path still is not provable inside that bounded pass, return a concrete next step (exact workflow/artifact to confirm) instead of drifting or leaving the batch without outcomes.
+- If direct retrieval falls back to a generic SPA/root page, that is **not** a terminal negative result. Pivot once to the workflow consumer that already references the upload (for example the complaint/review/admin moderation list, document preview, attachment detail, or parser/import job) and record whether the uploaded filename/content is rendered, linked, parsed, or rejected there.
+- For local lab / CTF recall targets, explicitly try the canonical challenge-triggering consumer action when the app has already exposed it: upload the accepted payload, bind it to the matching workflow record if required, then open the consuming route/list/detail with the authenticated session or browser-flow primitive already in evidence. This is the step that converts an upload finding into solved-state evidence for challenges such as upload-type, stored-file render, or malicious attachment workflows.
+- If the consumer path still is not provable inside that bounded pass, return `DONE STAGE=vuln_confirmed` or `REQUEUE` with a concrete next step (exact workflow/artifact to confirm) instead of marking the case clean/exploited or leaving the batch without outcomes.
 - Keep the guidance generic: focus on storage, retrieval, rendering, parsing, and authorization around uploaded content — not target-specific paths.
 
 ### 2. Extension Bypass
