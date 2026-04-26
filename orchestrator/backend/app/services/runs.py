@@ -305,7 +305,7 @@ def _load_queue_state(scope_path: Path | None) -> tuple[str, int, int, int, str]
     # don't count as pending undispatched work even if `status` wasn't flipped
     # to `done`. Mirrors `launcher._TERMINAL_CASE_STAGES` to avoid an import
     # cycle (this module already imports from .runs in launcher.py path checks).
-    terminal_stages = ("api_tested", "clean", "exploited", "errored")
+    terminal_stages = ("source_analyzed", "api_tested", "clean", "exploited", "errored")
 
     def _reader(connection: sqlite3.Connection) -> tuple[int, int, int]:
         total_row = connection.execute("SELECT COUNT(*) FROM cases").fetchone()

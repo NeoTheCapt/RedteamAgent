@@ -549,7 +549,7 @@ def _heartbeat_context(run: Run) -> tuple[str, str]:
 # when a subagent's terminal-stage handoff didn't get translated to a `done`
 # call). Counting these as "pending undispatched work" produces false
 # `incomplete_stop` / `queue_stalled` failures (observed on run 730).
-_TERMINAL_CASE_STAGES = ("api_tested", "clean", "exploited", "errored")
+_TERMINAL_CASE_STAGES = ("source_analyzed", "api_tested", "clean", "exploited", "errored")
 
 
 def _stage_column_present(connection: sqlite3.Connection) -> bool:
