@@ -892,6 +892,95 @@ def test_list_runs_marks_pending_queue_stall_failed_even_if_only_exploit_artifac
     assert "pending queue items remained undispatched" in metadata["stop_reason_text"]
 
 
+def test_list_runs_keeps_pending_queue_alive_during_short_autonomous_dispatch_gap(monkeypatch):
+    client = TestClient(app)
+    token = register_and_login(client, "alice-short-pending-gap")
+    project = create_project(client, token)
+
+    create_run = client.post(
+        f"/projects/{project['id']}/runs",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"target": "https://short-pending-gap.example"},
+    )
+    assert create_run.status_code == 201
+    run = create_run.json()
+    db.update_run_status(run["id"], "running")
+
+    run_root = Path(run["engagement_root"])
+    runtime_dir = run_root / "runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    process_log = runtime_dir / "process.log"
+    process_log.write_text("last subagent completed; operator next dispatch pending\n", encoding="utf-8")
+    short_gap_epoch = datetime.now().timestamp() - 130
+    os.utime(process_log, (short_gap_epoch, short_gap_epoch))
+
+    workspace = run_root / "workspace"
+    engagement_dir = workspace / "engagements" / "2026-04-26-000000-short-pending-gap"
+    engagement_dir.mkdir(parents=True, exist_ok=True)
+    (workspace / "engagements" / ".active").write_text(
+        "engagements/2026-04-26-000000-short-pending-gap\n",
+        encoding="utf-8",
+    )
+    scope_path = engagement_dir / "scope.json"
+    scope_path.write_text(
+        json.dumps(
+            {
+                "status": "in_progress",
+                "current_phase": "consume_test",
+                "phases_completed": ["recon", "collect"],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    os.utime(scope_path, (short_gap_epoch, short_gap_epoch))
+    log_path = engagement_dir / "log.md"
+    log_path.write_text(
+        "## [19:35] Vulnerability batch consumed — operator\n"
+        "**Result**: cases processed; pending queue remains for next dispatch\n",
+        encoding="utf-8",
+    )
+    os.utime(log_path, (short_gap_epoch, short_gap_epoch))
+    with sqlite3.connect(engagement_dir / "cases.db") as connection:
+        connection.execute(
+            "CREATE TABLE cases (id INTEGER PRIMARY KEY AUTOINCREMENT, status TEXT NOT NULL)"
+        )
+        connection.executemany(
+            "INSERT INTO cases(status) VALUES (?)",
+            [("pending",), ("pending",), ("done",)],
+        )
+        connection.commit()
+    os.utime(engagement_dir / "cases.db", (short_gap_epoch, short_gap_epoch))
+
+    (run_root / "run.json").write_text(
+        json.dumps(
+            {
+                "current_phase": "consume_test",
+                "current_task_name": None,
+                "current_agent_name": None,
+                "agents": [],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr("app.services.runs.locate_runtime_pid", lambda _run: 12345)
+    stopped: list[int] = []
+    monkeypatch.setattr("app.services.runs.stop_run_runtime", lambda reconciled_run: stopped.append(reconciled_run.id))
+
+    runs_response = client.get(
+        f"/projects/{project['id']}/runs",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert runs_response.status_code == 200
+    assert runs_response.json()[0]["status"] == "running"
+    assert stopped == []
+    metadata = json.loads((run_root / "run.json").read_text(encoding="utf-8"))
+    assert metadata.get("stop_reason_code") is None
+
+
+
 def test_list_runs_keeps_recent_auto_resume_pending_queue_alive(monkeypatch):
     client = TestClient(app)
     token = register_and_login(client, "alice-auto-resume-list")
