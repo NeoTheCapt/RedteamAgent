@@ -1639,8 +1639,6 @@ def _last_logged_stop_reason(log_path: Path) -> str:
 
 def _promote_completed_scope_from_artifacts(scope_path: Path, payload: dict[str, object]) -> bool:
     status_name = _canonical_scope_status(payload.get("status"))
-    if status_name != "complete":
-        return False
 
     current_phase = _canonical_phase_name(payload.get("current_phase"))
     phases_completed_raw = payload.get("phases_completed")
@@ -1677,6 +1675,9 @@ def _promote_completed_scope_from_artifacts(scope_path: Path, payload: dict[str,
         return False
 
     changed = False
+    if status_name != "complete":
+        payload["status"] = "complete"
+        changed = True
     if current_phase != "complete":
         payload["current_phase"] = "complete"
         changed = True
@@ -1932,6 +1933,12 @@ def engagement_completion_state(run: Run) -> tuple[bool, str]:
     status_name = _canonical_scope_status(scope.get("status"))
     current_phase = _canonical_phase_name(scope.get("current_phase"))
     completed_phases = {_canonical_phase_name(item) for item in scope.get("phases_completed", [])}
+
+    if status_name != "complete" and _promote_completed_scope_from_artifacts(scope_path, scope):
+        scope_path.write_text(json.dumps(scope, indent=2) + "\n", encoding="utf-8")
+        status_name = _canonical_scope_status(scope.get("status"))
+        current_phase = _canonical_phase_name(scope.get("current_phase"))
+        completed_phases = {_canonical_phase_name(item) for item in scope.get("phases_completed", [])}
 
     if status_name != "complete":
         if _continuous_observation_report_hold_active(run, engagement_dir=engagement_dir, scope=scope):
