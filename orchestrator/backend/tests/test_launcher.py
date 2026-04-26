@@ -3223,6 +3223,26 @@ def test_auto_resume_bypasses_limit_for_logged_observation_hold_with_stale_scope
 
 
 
+def test_report_writer_format_counts_as_substantive_for_observation_hold():
+    from app.services.launcher import _report_has_substantive_content
+
+    report = (
+        "# Penetration Test Report: https://www.example.com\n"
+        "## Executive Summary\n" + ("summary line with enough detail\n" * 12)
+        + "## Methodology\n" + ("methodology step\n" * 8)
+        + "## Findings\n"
+        + "### FINDING-001: Example issue\n"
+        + "| Field | Value |\n|---|---|\n| Severity | LOW |\n"
+        + "Evidence and impact narrative for the issue.\n"
+        + "## Intelligence Summary\nNo external intelligence changed.\n"
+        + "## Attack Path Narrative\n" + ("attack path detail\n" * 8)
+        + "## Appendix\n### A. Tools Used\n- curl\n### C. Full `scope.json`\n{}\n"
+    )
+
+    assert _report_has_substantive_content(report) is True
+
+
+
 def test_auto_launch_missing_container_preserves_completed_artifacts(monkeypatch):
     client = TestClient(app)
     token = register_and_login(client, "alice")
