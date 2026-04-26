@@ -32,7 +32,7 @@ if [[ -z "$DB" || -z "$ACTION" ]]; then
   echo ""
   echo "Stage values (pipeline state machine):"
   echo "  ingested         freshly discovered, needs first-pass triage"
-  echo "  source_analyzed  source-analyzer ran (may set vuln_candidate)"
+  echo "  source_analyzed  source-analyzer ran; terminal source-carrier stage"
   echo "  api_tested       vulnerability-analyst ran, no vuln found"
   echo "  vuln_confirmed   exploitable; ready for exploit-developer"
   echo "  fuzz_pending     vulnerability-analyst escalated to deep fuzz; routes to fuzzer"
@@ -310,13 +310,13 @@ case "$ACTION" in
     echo ""
     echo "--- Active vs Terminal ---"
     sql "
-      SELECT 'active (ingested|source_analyzed|vuln_confirmed|fuzz_pending)' as bucket, COUNT(*)
-        FROM cases WHERE stage IN ('ingested','source_analyzed','vuln_confirmed','fuzz_pending')
+      SELECT 'active (ingested|vuln_confirmed|fuzz_pending)' as bucket, COUNT(*)
+        FROM cases WHERE stage IN ('ingested','vuln_confirmed','fuzz_pending')
       UNION ALL
       SELECT 'in-flight (processing)', COUNT(*) FROM cases WHERE status='processing'
       UNION ALL
-      SELECT 'terminal (clean|exploited|errored|api_tested)', COUNT(*)
-        FROM cases WHERE stage IN ('clean','exploited','errored','api_tested')
+      SELECT 'terminal (source_analyzed|clean|exploited|errored|api_tested)', COUNT(*)
+        FROM cases WHERE stage IN ('source_analyzed','clean','exploited','errored','api_tested')
       UNION ALL
       SELECT 'TOTAL', COUNT(*) FROM cases;"
     ;;
@@ -362,7 +362,7 @@ case "$ACTION" in
       WHERE id IN (
         SELECT id FROM cases
         WHERE status = 'pending' AND type = '${TYPE}'
-              AND stage IN ('ingested', 'source_analyzed', 'vuln_confirmed', 'fuzz_pending')
+              AND stage IN ('ingested', 'vuln_confirmed', 'fuzz_pending')
         ${ORDER_CLAUSE}
         LIMIT ${LIMIT}
       )
@@ -455,7 +455,7 @@ case "$ACTION" in
     ID_LIST="$(normalize_id_list "${DONE_ARGS[@]}")"
     if [[ -n "$NEW_STAGE" ]]; then
       case "$NEW_STAGE" in
-        clean|exploited|errored)
+        source_analyzed|clean|exploited|errored)
           # Terminal: status=done, stage=<terminal>
           sql "UPDATE cases SET status='done', stage='${NEW_STAGE}' WHERE id IN (${ID_LIST});"
           echo "Marked done (stage=${NEW_STAGE}, terminal): ${ID_LIST}"

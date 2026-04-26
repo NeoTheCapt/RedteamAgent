@@ -79,7 +79,7 @@ recon-specialist re-dispatch on auth foothold     intel.md + auth.json
 | Stage | Set by | Next dispatch |
 |---|---|---|
 | `ingested` | producers (recon-specialist, source-analyzer ingest, katana, source) | type=javascript/page/stylesheet/data/unknown/api-spec → source-analyzer; type=api/form/graphql/upload/websocket → vulnerability-analyst |
-| `source_analyzed` | source-analyzer (after analyzing a JS/page/data/unknown) | if that source produced an `api`/`form` follow-up case, the new case starts at `ingested`; THIS case is terminal as far as testing pipeline goes (mark `STAGE=clean` to retire) UNLESS the source itself contained a directly testable surface (in which case the source-analyzer marks `STAGE=vuln_confirmed`) |
+| `source_analyzed` | source-analyzer (after analyzing a JS/page/data/unknown) | terminal source-carrier marker: the source artifact was analyzed and any new follow-up case starts at `ingested`; this original carrier must not remain pending or block exit. If the source itself contains a directly testable surface, source-analyzer marks `STAGE=vuln_confirmed` instead. |
 | `vuln_confirmed` | source-analyzer (rare) or vulnerability-analyst (main) | exploit-developer |
 | `fuzz_pending` | vulnerability-analyst (when a case needs deep fuzz beyond its inline ≤500-entry budget) | fuzzer; fuzzer transitions to `vuln_confirmed` (signal found), `api_tested` (no signal), or `clean` (non-fuzzable) |
 | `api_tested` | vulnerability-analyst (when no vuln found) | terminal — case retires |
@@ -137,7 +137,7 @@ The same turn that appends the engagement-start log entry MUST do at least one o
 ### Rule 5 — stop condition (replaces "pending=0 AND processing=0")
 
 Exit allowed only when ALL of the following hold:
-- `dispatcher.sh stats-by-stage` shows zero cases in active stages: `ingested`, `source_analyzed`, `vuln_confirmed`, `fuzz_pending`
+- `dispatcher.sh stats-by-stage` shows zero cases in active stages: `ingested`, `vuln_confirmed`, `fuzz_pending`
 - zero cases in `processing` status (no in-flight subagent batch)
 - `check_collection_health.sh` passes
 - `check_surface_coverage.sh` passes
@@ -203,7 +203,7 @@ For continuous-observation targets, `report-writer` stops after writing `report.
 Do NOT stop because one batch completed or because you can summarize partial progress.
 Before any final stop/completion message:
 - run `./scripts/dispatcher.sh "$DIR/cases.db" stats-by-stage`
-- if cases at active stages (`ingested`, `source_analyzed`, `vuln_confirmed`, `fuzz_pending`) > 0, continue the loop and do NOT stop
+- if cases at active stages (`ingested`, `vuln_confirmed`, `fuzz_pending`) > 0, continue the loop and do NOT stop
 - if any case is in `processing` status (in-flight subagent), wait for the outcome before stopping
 - if `./scripts/check_collection_health.sh "$DIR"` fails, do NOT stop
 - if `./scripts/check_surface_coverage.sh "$DIR"` fails, do NOT stop
