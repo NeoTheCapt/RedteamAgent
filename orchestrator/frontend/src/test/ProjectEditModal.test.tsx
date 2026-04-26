@@ -1,5 +1,6 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { FormEvent } from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { ProjectEditModal } from "../components/projects/ProjectEditModal";
 
@@ -83,5 +84,29 @@ describe("ProjectEditModal", () => {
     await userEvent.click(screen.getByRole("tab", { name: "Crawler" }));
     await userEvent.click(screen.getByRole("tab", { name: "Model" }));
     expect(screen.getByLabelText(/model id/i)).toHaveValue("gpt-4o");
+  });
+
+  it("keeps tab buttons from submitting an enclosing form and persists crawler depth", async () => {
+    const onSubmit = vi.fn((event: FormEvent<HTMLFormElement>) => event.preventDefault());
+    const project = mkProject({ crawler_json: "{}" });
+    mockUpdate.mockResolvedValue({ ...project, crawler_json: '{"KATANA_CRAWL_DEPTH":16}' });
+
+    render(
+      <form onSubmit={onSubmit}>
+        <ProjectEditModal open={true} token="t" project={project}
+          onClose={vi.fn()} onSaved={vi.fn()} />
+      </form>,
+    );
+
+    await userEvent.click(screen.getByRole("tab", { name: "Crawler" }));
+    expect(onSubmit).not.toHaveBeenCalled();
+    await userEvent.clear(screen.getByLabelText(/crawl depth/i));
+    await userEvent.type(screen.getByLabelText(/crawl depth/i), "16");
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => {
+      const call = mockUpdate.mock.calls[0][2];
+      expect(JSON.parse((call as { crawler_json: string }).crawler_json)).toEqual({ KATANA_CRAWL_DEPTH: 16 });
+    });
   });
 });

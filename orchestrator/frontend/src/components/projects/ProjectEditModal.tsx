@@ -71,7 +71,7 @@ export function ProjectEditModal({ open, token, project, onClose, onSaved }: Pro
 
         <nav className="pem__tabs" role="tablist">
           {TABS.map(t => (
-            <button key={t.id} role="tab" aria-selected={tab === t.id}
+            <button key={t.id} type="button" role="tab" aria-selected={tab === t.id}
               className={`pem__tab ${tab === t.id ? "pem__tab--active" : ""}`}
               onClick={() => setTab(t.id)}>
               {t.label}
