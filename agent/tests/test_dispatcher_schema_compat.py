@@ -58,3 +58,32 @@ def test_fetch_auto_migrates_assigned_agent_column(tmp_path: Path) -> None:
     assert "missing columns" not in result.stderr
     assert {"assigned_agent", "consumed_at"}.issubset(table_columns(db_path))
     assert '"assigned_agent":"vulnerability-analyst"' in result.stdout
+
+
+def test_done_api_tested_is_terminal_done_status(tmp_path: Path) -> None:
+    db_path = tmp_path / "cases.db"
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            """
+            CREATE TABLE cases (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              type TEXT NOT NULL,
+              status TEXT NOT NULL,
+              stage TEXT NOT NULL DEFAULT 'ingested',
+              assigned_agent TEXT,
+              consumed_at TEXT
+            )
+            """
+        )
+        connection.execute(
+            "INSERT INTO cases(type, status, stage, assigned_agent) VALUES ('api', 'processing', 'ingested', 'vulnerability-analyst')"
+        )
+        connection.commit()
+
+    result = run_dispatcher(db_path, "done", "1", "--stage", "api_tested")
+
+    assert result.returncode == 0, result.stderr
+    assert "Marked done (stage=api_tested, terminal): 1" in result.stdout
+    with sqlite3.connect(db_path) as connection:
+        row = connection.execute("SELECT status, stage FROM cases WHERE id=1").fetchone()
+    assert row == ("done", "api_tested")
