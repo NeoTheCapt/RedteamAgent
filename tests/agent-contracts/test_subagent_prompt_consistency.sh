@@ -179,6 +179,9 @@ for required in \
     'canonical challenge-triggering action' \
     'Juice Shop-style recall scoring' \
     "app's challenge state" \
+    'Juice Shop solved-state sweep contract' \
+    'Critical-finding early-exit ban' \
+    'post-trigger `/api/Challenges`/Score Board solved-state check' \
     'admin JWT/session, password-reset token, recovered security answers, registration success' \
     'no multi-step attack path assessed' \
     'STAGE=vuln_confirmed'; do
