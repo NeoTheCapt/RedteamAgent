@@ -102,6 +102,9 @@ def test_operator_core_blocks_final_report_until_ctf_recall_closure() -> None:
     assert "do NOT proceed to `report-writer`" in core
     assert "exploit-developer` closure batch" in core
     for challenge in [
+        "Score Board",
+        "Security Policy",
+        "Confidential Document",
         "Five-Star Feedback",
         "Password Strength",
         "Database Schema",
@@ -109,6 +112,8 @@ def test_operator_core_blocks_final_report_until_ctf_recall_closure() -> None:
         "User Credentials",
     ]:
         assert challenge in core
+    assert "low-friction recall branch" in core
+    assert "canonical public document paths" in core
     assert "CTF recall closure is satisfied" in core
 
 
