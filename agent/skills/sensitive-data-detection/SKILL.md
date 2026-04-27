@@ -183,6 +183,12 @@ When an engagement obtains an admin token, forged JWT, recovered session, or any
 CTF/Juice Shop recall contract:
 - After forged/admin JWT proof, request and classify `/rest/user/authentication-details/`, `/api/Users`, `/api/Users/<id>`, `/rest/admin/application-configuration`, backup files under `/ftp`, and any discovered `user/authentication` route with the privileged token.
 - Treat fields named `password`, `passwordHash`, `hash`, `salt`, `email`, `role`, `totpSecret`, `securityAnswer`, `apiKey`, or `credential` as sensitive findings even when the endpoint is expected to be admin-only; record the exact endpoint and first affected user/hash prefix as challenge evidence.
+- For Juice Shop `User Credentials` recall, do not stop at the generic roster finding. Preserve
+  one artifact that demonstrates credential-bearing material specifically (for example
+  `/rest/user/authentication-details/`, `/api/Users`, or a database/backup response containing
+  password hashes, salts, security answers, TOTP secrets, or credential fields), then check
+  solved-state evidence. If only emails/roles were captured and credential-bearing fields remain
+  queued, return `REQUEUE` with the exact endpoint and auth context needed to finish the branch.
 - If an admin/JWT exploit confirms access but sensitive-data endpoints remain queued or untested, requeue a narrowed follow-up instead of marking the chain done. This preserves recall for password-hash/user-credential leak challenges that otherwise regress when exploitation stops at “admin access confirmed.”
 
 ### Phase 4: HTTP Header & Cookie Inspection

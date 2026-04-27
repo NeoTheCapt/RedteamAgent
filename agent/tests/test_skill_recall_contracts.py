@@ -25,6 +25,9 @@ def test_file_upload_skill_keeps_ctf_upload_recall_branches_alive() -> None:
 
     assert "canonical challenge-triggering consumer action" in skill
     assert "converts an upload finding into solved-state evidence" in skill
+    assert "Upload Type" in skill
+    assert "non-PDF/non-ZIP payload" in skill
+    assert "uploaded filename" in skill
     assert "DONE STAGE=vuln_confirmed" in skill
     assert "REQUEUE" in skill
 
@@ -45,6 +48,9 @@ def test_sensitive_data_skill_sweeps_privileged_juice_shop_endpoints_after_admin
     assert "/rest/user/authentication-details/" in skill
     assert "/api/Users" in skill
     assert "admin/JWT exploit confirms access" in skill
+    assert "User Credentials" in skill
+    assert "credential-bearing material" in skill
+    assert "password hashes" in skill
     assert "requeue a narrowed follow-up" in skill
 
 

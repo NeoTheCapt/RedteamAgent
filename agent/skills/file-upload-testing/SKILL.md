@@ -38,6 +38,13 @@ origin: RedteamOpencode
 - Spend one bounded step on the highest-signal consumer path already evidenced by the app: retrieval URL, public/static asset path, gallery/list view, moderation queue, document viewer, export/download path, or downstream parser.
 - If direct retrieval falls back to a generic SPA/root page, that is **not** a terminal negative result. Pivot once to the workflow consumer that already references the upload (for example the complaint/review/admin moderation list, document preview, attachment detail, or parser/import job) and record whether the uploaded filename/content is rendered, linked, parsed, or rejected there.
 - For local lab / CTF recall targets, explicitly try the canonical challenge-triggering consumer action when the app has already exposed it: upload the accepted payload, bind it to the matching workflow record if required, then open the consuming route/list/detail with the authenticated session or browser-flow primitive already in evidence. This is the step that converts an upload finding into solved-state evidence for challenges such as upload-type, stored-file render, or malicious attachment workflows.
+- OWASP Juice Shop recall branch: after `/file-upload` or any multipart endpoint accepts a
+  payload, run one bounded Upload Type confirmation before closing the upload case: submit a
+  non-PDF/non-ZIP payload such as a tiny `.txt`, `.xml`, or `.svg` with the same authenticated
+  context, preserve the status/body evidence, then visit the consumer or scoreboard route that
+  confirms whether `Upload Type` flipped. If the upload accepts but the consumer route is still
+  unknown, return `REQUEUE` with the exact uploaded filename and the next concrete consumer path
+  to inspect instead of `DONE STAGE=exhausted`.
 - If the consumer path still is not provable inside that bounded pass, return `DONE STAGE=vuln_confirmed` or `REQUEUE` with a concrete next step (exact workflow/artifact to confirm) instead of marking the case clean/exploited or leaving the batch without outcomes.
 - Keep the guidance generic: focus on storage, retrieval, rendering, parsing, and authorization around uploaded content — not target-specific paths.
 
