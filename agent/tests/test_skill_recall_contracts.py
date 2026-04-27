@@ -8,6 +8,8 @@ FILE_UPLOAD_SKILL = REPO_ROOT / "agent" / "skills" / "file-upload-testing" / "SK
 SENSITIVE_DATA_SKILL = REPO_ROOT / "agent" / "skills" / "sensitive-data-detection" / "SKILL.md"
 SOURCE_ANALYSIS_SKILL = REPO_ROOT / "agent" / "skills" / "source-analysis" / "SKILL.md"
 XSS_SKILL = REPO_ROOT / "agent" / "skills" / "xss-testing" / "SKILL.md"
+BUSINESS_LOGIC_SKILL = REPO_ROOT / "agent" / "skills" / "business-logic-testing" / "SKILL.md"
+XXE_SKILL = REPO_ROOT / "agent" / "skills" / "xxe-testing" / "SKILL.md"
 
 
 def test_file_upload_skill_requires_consumer_path_after_spa_fallback() -> None:
@@ -66,3 +68,26 @@ def test_xss_skill_requires_juice_shop_browser_flow_recall_contract() -> None:
     assert "/rest/products/search" in skill
     assert "Zero Stars feedback" in skill
     assert "return `REQUEUE` with a concrete `dynamic_render` or `form` follow-up" in skill
+
+
+def test_business_logic_skill_preserves_regressed_juice_shop_logic_recall() -> None:
+    skill = BUSINESS_LOGIC_SKILL.read_text(encoding="utf-8")
+
+    assert "CTF / Juice Shop Recall Contract" in skill
+    assert "Five-Star Feedback" in skill
+    assert "Forged Feedback" in skill
+    assert "Password Strength" in skill
+    assert "Database Schema" in skill
+    assert "POST /api/Feedbacks/" in skill
+    assert "sqlite_master" in skill
+    assert "emit `REQUEUE` with a concrete" in skill
+
+
+def test_xxe_skill_preserves_juice_shop_xxe_data_access_recall() -> None:
+    skill = XXE_SKILL.read_text(encoding="utf-8")
+
+    assert "CTF / Juice Shop Recall Contract" in skill
+    assert "Content-Type: application/xml" in skill
+    assert "SVG/XML payload" in skill
+    assert "XXE Data Access" in skill
+    assert "return `REQUEUE` with the exact XML-capable endpoint" in skill

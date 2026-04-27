@@ -178,6 +178,29 @@ run_tool curl -s -X POST "http://target/api/payment" \
   -d '{}'
 ```
 
+### 7. CTF / Juice Shop Recall Contract
+
+When the target fingerprints as OWASP Juice Shop, keep the following challenge-triggering
+logic probes alive until they either produce solved-state evidence or are requeued with the
+exact blocker. Do not retire these as "duplicate" just because a broader endpoint finding
+already exists.
+
+- Feedback workflows: submit and verify both a five-star rating and a forged-feedback path.
+  Exercise `POST /api/Feedbacks/` with `rating: 5` and a forged/alternate `UserId` or
+  author context, then check the scoreboard/challenge evidence before marking the case done.
+- Password-strength recall: after any credential leak, admin token, or account takeover,
+  attempt one bounded weak-password login/change/reset branch for known Juice Shop users
+  (`admin@juice-sh.op`, `bjoern@owasp.org`, `jim@juice-sh.op`) and record whether the
+  Password Strength challenge flips. If only missing credentials block it, return `REQUEUE`
+  with the exact credential source already checked.
+- Database-schema recall: when SQL injection or admin data exposure is confirmed, perform
+  one schema-oriented probe (`sqlite_master`, `information_schema`, ORM metadata, or the
+  equivalent DB error path) and preserve the response artifact. Do not stop at admin login
+  success if schema extraction has not been attempted.
+- If any of Five-Star Feedback, Forged Feedback, Password Strength, or Database Schema is
+  still untested after the relevant endpoint is discovered, emit `REQUEUE` with a concrete
+  `api` or `form` follow-up instead of `DONE STAGE=exhausted`.
+
 ## What to Record
 
 - **Workflow step** that was bypassed or abused
