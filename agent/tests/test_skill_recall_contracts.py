@@ -115,6 +115,10 @@ def test_operator_core_blocks_final_report_until_ctf_recall_closure() -> None:
     assert "low-friction recall branch" in core
     assert "canonical public document paths" in core
     assert "CTF recall closure is satisfied" in core
+    assert "recent peak/baseline" in core
+    assert "must return either solved-state evidence or `REQUEUE`" in core
+    assert "not a concrete blocker" in core
+    assert "or concrete blockers are logged" not in core
 
 
 def test_xxe_skill_preserves_juice_shop_xxe_data_access_recall() -> None:
