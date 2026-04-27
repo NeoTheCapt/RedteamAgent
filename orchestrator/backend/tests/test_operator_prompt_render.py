@@ -65,3 +65,14 @@ def test_rendered_operator_prompt_forbids_orphaned_source_carrier_fetches(tmp_pa
     assert "source-carrier types (`data`, `unknown`, `api-spec`, `javascript`, `stylesheet`, `page`)" in rendered
     assert "a non-empty fetch for `BATCH_AGENT=source-analyzer` MUST be followed by the source-analyzer task" in rendered
     assert "A fetched `data` carrier left in `processing` is an orphaned batch and will fail the run." in rendered
+
+
+def test_rendered_operator_prompt_prevents_respawn_starving_queue(tmp_path: Path) -> None:
+    _render_repo(tmp_path)
+
+    rendered = (tmp_path / ".opencode" / "prompts" / "agents" / "operator.txt").read_text(encoding="utf-8")
+
+    assert "respawn work MUST NOT starve the case queue" in rendered
+    assert "must perform a real stage fetch+task dispatch before doing another respawn-only pass" in rendered
+    assert "Respawn dispatch is queue expansion, not a substitute for queue consumption." in rendered
+    assert "OSINT correlation must not become a liveness loop." in rendered

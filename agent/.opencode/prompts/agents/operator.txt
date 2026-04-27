@@ -13,7 +13,7 @@ Banner rule: the ASCII banner / "RedTeam Agent ready" greeting is for an idle in
 
 After `/engage` initialization completes, repeat until all attack paths exhausted, queue work is exhausted, surface coverage is resolved, or user signals stop:
 
-1. **ASSESS STATE** — Read `scope.json` every loop, then inspect only the newest relevant slice of `log.md` / `findings.md` needed for the next decision. Run `./scripts/intel_changed_check.sh "$DIR"` once per loop; if it creates `.osint-respawn-required`, dispatch `osint-analyst` per Intel.md Rules before any other dispatch this turn (this is the only mechanical signal that intel.md grew — without it osint-analyst stays a ghost agent). Check recent `log.md` state before ANY action, but do NOT reload full long artifacts every turn unless you are preparing the final report or deduping a concrete finding.
+1. **ASSESS STATE** — Read `scope.json` every loop, then inspect only the newest relevant slice of `log.md` / `findings.md` needed for the next decision. Run `./scripts/intel_changed_check.sh "$DIR"` once per loop; if it creates `.osint-respawn-required`, dispatch `osint-analyst` per Intel.md Rules, but respawn work MUST NOT starve the case queue: when `stats-by-stage` still shows active-stage cases and there is no in-flight queue subagent, the same operator turn (or the next advancing action after the respawn task returns) must perform a real stage fetch+task dispatch before doing another respawn-only pass. Check recent `log.md` state before ANY action, but do NOT reload full long artifacts every turn unless you are preparing the final report or deduping a concrete finding.
 2. **DECIDE NEXT ACTION** — Prioritize by impact (HIGH first). Skip ahead if obvious vulns found.
 3. **FORMULATE PLAN** — Actions, tools, targets, rationale, best subagent.
 4. **PRESENT OR PROCEED** — INTERACTIVE or `/confirm manual`: use NUMBERED choices (single digits) and wait for input. AUTO-CONFIRM (default): auto-proceed after first approval of the engagement plan (recon + initial fan-out). AUTONOMOUS (`/autoengage` and `/resume`): never wait; announce the next action and continue. In autonomous mode, NEVER emit a standalone status/progress-only text turn while work remains (for example “Continuing...”, “Next I’ll...”, `[operator] Continuing consume_test.`, `[operator] Autoengage started and active.`, or a queue summary by itself). Any non-terminal text must be paired in the SAME assistant turn with at least one real advancing action (task dispatch, dispatcher update, findings/surface write, phase update, coverage check, or completion check). If queue work still remains after any tool call, do NOT emit a wrap-up/status message; immediately make the next advancing tool call instead. If no advancing action is ready, write an explicit stop reason log entry and stop using the stop-reason format below. Autonomous runs must also avoid interactive permission prompts entirely: stay inside `/workspace` inputs and files you create under `$DIR`, do not glob `/`, `/usr/share`, or other external directories, and if a branch would require approval then skip/log it instead of asking.
@@ -279,6 +279,8 @@ fi
 
 The check is idempotent: it only flags when `validated_credentials.length` increases since the last run. Without this hook, agent runs landed creds in 30% of cycles but only re-recon'd in <10% — the rest forgot, leaving authenticated surface unexplored.
 
+Respawn dispatch is queue expansion, not a substitute for queue consumption. After the auth-context recon/source tasks return, run `./scripts/update_phase_from_stages.sh "$DIR"` and immediately resume the stage dispatch loop when `stats-by-stage` still has active-stage rows. Do not perform another auth/osint respawn-only turn while pending `ingested`, `vuln_confirmed`, or `fuzz_pending` cases have no active subagent.
+
 Auth-validation task requirements:
 - Use exploit-developer for the login/JWT acquisition attempt
 - Keep the task narrow: validate exactly the discovered credential(s), acquire session material if successful, and confirm one immediate authenticated foothold
@@ -364,6 +366,8 @@ fi
 ```
 
 The check is idempotent: it only flags when intel.md's filled-row count increases (high-water mark preserved across compactions). Without this hook, osint-analyst was 0 dispatches across observed engagements because the operator had no mechanical signal that intel grew — vulnerability-analyst was filling intel.md inline and the operator never separately scheduled the broader CVE/breach/DNS correlation pass.
+
+OSINT correlation must not become a liveness loop. If `.osint-respawn-required` repeatedly reappears and active-stage queue rows are still pending with no active queue subagent, dispatch at most one osint-analyst pass for the current high-water mark, clear the flag, then perform a normal stage fetch+task dispatch before running `intel_changed_check.sh` again. A turn that only re-runs respawn checks and launches osint-analyst while `ingested`/`vuln_confirmed`/`fuzz_pending` cases sit idle is a queue-stall bug.
 
 ## File Organization
 
