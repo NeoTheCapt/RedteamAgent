@@ -1004,8 +1004,15 @@ try:
 except Exception:
     print('parse_err'); raise SystemExit
 records = list(d.get('findings') or []) + list(d.get('deferred') or [])
+# An EMPTY findings-after.json (zero records) means the auditor's prep + scan
+# surfaced nothing actionable — the cleanest possible cycle. Previously this
+# returned 'empty' and the inference fell through to failed_no_fix_commit
+# (observed on cycles 20260427T015459Z and 20260427T024118Z, both with
+# auditor hermes.log Final exit_status: ok and zero records). Treat empty
+# as 'all_inactive' (= clean cycle, no commit expected) so the controller
+# reports ok_no_fixes consistently with the >0 records all-inactive path.
 if not records:
-    print('empty'); raise SystemExit
+    print('all_inactive'); raise SystemExit
 for f in records:
     s = (f.get('status') or 'open').lower()
     if s in ('open','fixed'):
