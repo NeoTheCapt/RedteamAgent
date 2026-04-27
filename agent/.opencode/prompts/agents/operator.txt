@@ -167,6 +167,7 @@ These rules from the prior phase flow still apply per-stage:
   - `BATCH_NOTE` — stderr forwarded from the script; if non-empty, surface it in the operator log before dispatching (lock contention, db error, in-flight guard, etc.)
 - NEVER `cat "$BATCH_FILE"`, print raw fetched JSON, or paste full batch payloads back into the model
 - if `BATCH_COUNT > 0`, the very next advancing action MUST be the matching `task(...)` call for that same `BATCH_AGENT`/`BATCH_FILE`
+- this is especially strict for source-carrier types (`data`, `unknown`, `api-spec`, `javascript`, `stylesheet`, `page`): a non-empty fetch for `BATCH_AGENT=source-analyzer` MUST be followed by the source-analyzer task before any exploit follow-up, status text, queue scan, file read, or additional fetch. A fetched `data` carrier left in `processing` is an orphaned batch and will fail the run.
 - if you are not ready to launch the matching subagent immediately, do NOT fetch yet
 - a subagent handoff is not complete unless the `### Case Outcomes` section accounts for every fetched case ID exactly once with `DONE STAGE=<stage>` / `REQUEUE` / `ERROR`
 - NEVER combine outcome recording (`done`, `error`, `requeue`, `append_*`, queue stats, scope/findings/log updates) and `fetch_batch_to_file.sh` in the same bash call. First record outcomes. Then a dedicated fetch+dispatch.

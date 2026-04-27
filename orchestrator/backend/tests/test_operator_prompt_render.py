@@ -38,9 +38,9 @@ def test_rendered_operator_prompt_keeps_consume_test_serialized(tmp_path: Path) 
 
     rendered = (tmp_path / ".opencode" / "prompts" / "agents" / "operator.txt").read_text(encoding="utf-8")
 
-    assert "consume-test dispatch is SERIALIZED" in rendered
-    assert "do NOT launch overlapping `task` calls inside the same consume-test pass" in rendered
-    assert "after each dispatched subagent returns" in rendered
+    assert "if `BATCH_COUNT > 0`, the very next advancing action MUST be the matching `task(...)` call" in rendered
+    assert "if you are not ready to launch the matching subagent immediately, do NOT fetch yet" in rendered
+    assert "NEVER combine outcome recording" in rendered
     assert "consume-test dispatch is PARALLEL" not in rendered
     assert "parallel dispatch is the default" not in rendered
 
@@ -55,3 +55,13 @@ def test_rendered_operator_prompt_bans_nonterminal_wrapup_turns(tmp_path: Path) 
 
     assert expected_line in rendered
     assert expected_line in resume_cmd
+
+
+def test_rendered_operator_prompt_forbids_orphaned_source_carrier_fetches(tmp_path: Path) -> None:
+    _render_repo(tmp_path)
+
+    rendered = (tmp_path / ".opencode" / "prompts" / "agents" / "operator.txt").read_text(encoding="utf-8")
+
+    assert "source-carrier types (`data`, `unknown`, `api-spec`, `javascript`, `stylesheet`, `page`)" in rendered
+    assert "a non-empty fetch for `BATCH_AGENT=source-analyzer` MUST be followed by the source-analyzer task" in rendered
+    assert "A fetched `data` carrier left in `processing` is an orphaned batch and will fail the run." in rendered
