@@ -17,6 +17,7 @@
 # into a fully-excluded directory.
 /local-hermes-agent/*
 !/local-hermes-agent/scripts/
+!/local-hermes-agent/skills/
 !/local-hermes-agent/prompts/
 !/local-hermes-agent/requirements/
 !/local-hermes-agent/skills/
