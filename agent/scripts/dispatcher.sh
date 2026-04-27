@@ -9,6 +9,34 @@ source "$SCRIPT_DIR/lib/params.sh"
 source "$SCRIPT_DIR/lib/placeholders.sh"
 source "$SCRIPT_DIR/lib/source_queue_filter.sh"
 
+# Emit a `case_done` runtime event per id so the orchestrator's cases /
+# dispatches mirror tables stay populated under SERIALIZED dispatch.
+# Best-effort: emit_runtime_event.sh self-noops when ORCHESTRATOR_* env
+# vars are unset, and the underlying curl is already backgrounded with
+# 1s/2s timeouts. If jq or python3 is missing the call is skipped.
+EMIT_RUNTIME_EVENT="${EMIT_RUNTIME_EVENT:-$SCRIPT_DIR/emit_runtime_event.sh}"
+emit_case_done_batch() {
+    # emit_case_done_batch <outcome> <comma-separated-ids>
+    local outcome="$1" id_list="$2" cid payload
+    [[ -x "$EMIT_RUNTIME_EVENT" ]] || return 0
+    command -v jq >/dev/null 2>&1 || return 0
+    for cid in ${id_list//,/ }; do
+        [[ -n "$cid" ]] || continue
+        payload="$(jq -cn \
+            --argjson case_id "$cid" \
+            --arg outcome "$outcome" \
+            '{case_id:$case_id, outcome:$outcome, source:"dispatcher.sh"}')"
+        bash "$EMIT_RUNTIME_EVENT" \
+            "case.done" \
+            "${ORCHESTRATOR_PHASE:-consume}" \
+            "case-$cid" \
+            "${ORCHESTRATOR_AGENT:-dispatcher}" \
+            "$outcome case $cid" \
+            --kind case_done \
+            --payload-json "$payload" 2>/dev/null || true
+    done
+}
+
 DB="${1:-}"
 ACTION="${2:-}"
 
@@ -475,6 +503,7 @@ case "$ACTION" in
       sql "UPDATE cases SET status='done' WHERE id IN (${ID_LIST});"
       echo "Marked done: ${ID_LIST}"
     fi
+    emit_case_done_batch "DONE" "$ID_LIST"
     ;;
 
   set-stage)
@@ -498,6 +527,7 @@ case "$ACTION" in
     ID_LIST="$(normalize_id_list "$@")"
     sql "UPDATE cases SET status='error', stage='errored', retry_count = COALESCE(retry_count,0) + 1 WHERE id IN (${ID_LIST});"
     echo "Marked error: ${ID_LIST}"
+    emit_case_done_batch "ERROR" "$ID_LIST"
     ;;
 
   migrate)
@@ -573,6 +603,7 @@ case "$ACTION" in
                 consumed_at=NULL
               WHERE id IN (${ID_LIST});"
         echo "Requeued existing: ${ID_LIST}"
+        emit_case_done_batch "REQUEUE" "$ID_LIST"
         requeued_existing=1
       fi
     fi

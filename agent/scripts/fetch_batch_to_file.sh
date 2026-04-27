@@ -81,3 +81,36 @@ printf 'BATCH_PATHS=%s\n' "$batch_paths"
 if [[ -s "$stderr_file" ]]; then
     printf 'BATCH_NOTE=%s\n' "$(tr '\n' ' ' < "$stderr_file" | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//')"
 fi
+
+# Emit a structured `dispatch_start` event so the orchestrator-side cases /
+# dispatches mirror tables stay populated under SERIALIZED dispatch.
+# Best-effort: emit_runtime_event.sh self-noops when ORCHESTRATOR_* env vars
+# are unset, and the underlying curl is already backgrounded with 1s/2s
+# timeouts.
+EMIT_RUNTIME_EVENT="${EMIT_RUNTIME_EVENT:-$SCRIPT_DIR/emit_runtime_event.sh}"
+if [[ "$batch_count" -gt 0 && -x "$EMIT_RUNTIME_EVENT" ]] && command -v jq >/dev/null 2>&1; then
+    # Synthesize a unique-enough batch id for orchestrator-side dispatches mirror
+    # (event_apply.py:_apply_dispatch_start drops payloads with no `batch`).
+    batch_id="serial-$(date +%s)-${batch_ids%%,*}"
+    cases_array="$(jq -c '[.[] | {id, method, path: .url_path, type}]' "$OUT_FILE" 2>/dev/null || echo '[]')"
+    dispatch_payload="$(jq -cn \
+        --arg batch "$batch_id" \
+        --arg slot "serialized" \
+        --argjson case_count "$batch_count" \
+        --arg type "$BATCH_TYPE" \
+        --arg stage "$BATCH_STAGE" \
+        --arg agent_name "$BATCH_AGENT" \
+        --arg case_ids "$batch_ids" \
+        --argjson cases "$cases_array" \
+        '{batch:$batch, slot:$slot, case_count:$case_count, type:$type, stage:$stage,
+          agent:$agent_name, case_ids:$case_ids, cases:$cases,
+          source:"fetch_batch_to_file.sh"}')"
+    bash "$EMIT_RUNTIME_EVENT" \
+        "dispatch.started" \
+        "${ORCHESTRATOR_PHASE:-consume}" \
+        "$batch_id" \
+        "$BATCH_AGENT" \
+        "${BATCH_TYPE} batch (${batch_count} cases)" \
+        --kind dispatch_start \
+        --payload-json "$dispatch_payload" 2>/dev/null || true
+fi
