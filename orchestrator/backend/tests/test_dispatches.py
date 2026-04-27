@@ -77,3 +77,65 @@ def test_list_dispatches_empty_for_new_run(isolate_data_dir):
     )
     assert r.status_code == 200
     assert r.json() == []
+
+
+def test_list_dispatches_falls_back_to_events_when_table_empty(isolate_data_dir):
+    """For runs predating the dispatcher.sh emit hooks (commit 5c46451), the
+    dispatches table is empty but events still describe agent activity. The
+    API derives synthetic rows so the AgentsPanel UI can still surface
+    per-agent dispatch history."""
+    client = TestClient(app)
+    token, proj, run = _setup(client, "derived_c3", isolate_data_dir)
+
+    db.create_event(run_id=run.id, event_type="artifact.updated", phase="consume",
+                    task_name="t1", agent_name="source-analyzer",
+                    summary="Source analysis start", level="info", payload_json="{}")
+    db.create_event(run_id=run.id, event_type="artifact.updated", phase="consume",
+                    task_name="t1", agent_name="source-analyzer",
+                    summary="Source analysis summary", level="info", payload_json="{}")
+    db.create_event(run_id=run.id, event_type="artifact.updated", phase="recon",
+                    task_name="t2", agent_name="recon-specialist",
+                    summary="Recon start", level="info", payload_json="{}")
+    db.create_event(run_id=run.id, event_type="run.heartbeat", phase="recon",
+                    task_name="hb", agent_name="launcher", summary="Heartbeat",
+                    level="info", payload_json="{}")
+
+    r = client.get(
+        f"/projects/{proj.id}/runs/{run.id}/dispatches",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert r.status_code == 200
+    rows = r.json()
+    assert len(rows) == 2
+    by_agent = {row["agent"]: row for row in rows}
+    assert by_agent["source-analyzer"]["state"] == "done"
+    assert by_agent["source-analyzer"]["finished_at"] is not None
+    assert by_agent["source-analyzer"]["slot"] == "derived"
+    assert by_agent["source-analyzer"]["id"].startswith("derived-")
+    assert by_agent["recon-specialist"]["state"] == "running"
+    assert by_agent["recon-specialist"]["finished_at"] is None
+    agents = {row["agent"] for row in rows}
+    assert "launcher" not in agents
+
+
+def test_list_dispatches_real_table_takes_precedence_over_events(isolate_data_dir):
+    """When the dispatches table has rows, they're returned as-is; the events
+    fallback only kicks in when the table is empty."""
+    client = TestClient(app)
+    token, proj, run = _setup(client, "real_wins_c3", isolate_data_dir)
+    db.upsert_dispatch(dispatch_id="real-1", run_id=run.id, phase="consume", round=1,
+                       agent="vulnerability-analyst", slot="s0", task="real",
+                       state="running", started_at=100)
+    db.create_event(run_id=run.id, event_type="artifact.updated", phase="consume",
+                    task_name="t1", agent_name="source-analyzer",
+                    summary="Source analysis start", level="info", payload_json="{}")
+
+    r = client.get(
+        f"/projects/{proj.id}/runs/{run.id}/dispatches",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert r.status_code == 200
+    rows = r.json()
+    assert len(rows) == 1
+    assert rows[0]["id"] == "real-1"
+    assert rows[0]["slot"] == "s0"
