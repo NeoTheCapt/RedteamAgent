@@ -257,6 +257,15 @@ rg -oN '\$2[aby]?\$\d{2}\$[./A-Za-z0-9]{53}' "$EXTRACT_FILE"
 rg -oN '\b[A-Za-z0-9+/]{40,}={0,2}\b' "$EXTRACT_FILE"
 ```
 
+### Phase 6: CTF / Juice Shop Recall Sweep
+
+When the target is a local CTF benchmark or artifacts identify OWASP Juice Shop, public file and data exposures are not finished after the first sensitive-data finding. Before marking the case done, run one bounded recall sweep that converts exposed artifacts into challenge-triggering evidence:
+
+- For `/ftp` listings, direct-download and inspect exact challenge files and backups that are commonly solved by access itself or by extracting a secret: `acquisitions.md`, `package.json.bak`, `package-lock.json.bak`, KeePass/SQLite/zip backups, quarantine shortcut `.url` files, and any document whose name suggests confidential, support, incident, credential, or backup material.
+- For API or database responses containing `password`, `hash`, `email`, `role`, `securityAnswer`, `totp`, `deluxeToken`, or JWT claim material, run the hash/secret scan above and preserve a narrowed follow-up for the consumer workflow instead of closing on a generic exposure note.
+- After each bounded artifact access or extraction, check challenge solved-state evidence (`/api/Challenges` or the Score Board route) and record the challenge name when it changes. If the file is blocked, requeue the exact blocked path with the HTTP status/body clue; do not collapse it into a broad `/ftp` duplicate.
+- Keep these follow-ups separate from the initial disclosure finding: a public KeePass vault or backup finding can be valid while Password Hash Leak, Confidential Document, or other low-difficulty recall triggers still need an exact artifact/action pass.
+
 ## Luhn Checksum Validation
 
 For suspected credit card numbers, validate before reporting:

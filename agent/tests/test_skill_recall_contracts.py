@@ -46,6 +46,17 @@ def test_sensitive_data_skill_sweeps_privileged_juice_shop_endpoints_after_admin
     assert "requeue a narrowed follow-up" in skill
 
 
+def test_sensitive_data_skill_runs_ctf_ftp_artifact_recall_sweep() -> None:
+    skill = SENSITIVE_DATA_SKILL.read_text(encoding="utf-8")
+
+    assert "CTF / Juice Shop Recall Sweep" in skill
+    assert "`acquisitions.md`" in skill
+    assert "`package.json.bak`" in skill
+    assert "Password Hash Leak" in skill
+    assert "check challenge solved-state evidence" in skill
+    assert "requeue the exact blocked path" in skill
+
+
 def test_xss_skill_requires_juice_shop_browser_flow_recall_contract() -> None:
     skill = XSS_SKILL.read_text(encoding="utf-8")
 
