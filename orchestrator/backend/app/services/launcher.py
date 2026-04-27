@@ -1661,7 +1661,11 @@ def _promote_completed_scope_from_artifacts(scope_path: Path, payload: dict[str,
     surfaces_path = engagement_dir / "surfaces.jsonl"
 
     reason_code, _reason_text = _last_logged_stop_metadata(log_path)
-    if reason_code and reason_code != "completed":
+    # A stale earlier Run stop entry must not block finalization once scope.json
+    # itself is complete and the durable report/queue/surface artifacts below
+    # prove the engagement finished. This happens when an autonomous run resumes
+    # after a mid-run pause and later reaches report completion.
+    if reason_code and reason_code != "completed" and status_name != "complete":
         return False
     if not report_path.exists():
         return False
