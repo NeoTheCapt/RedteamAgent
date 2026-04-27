@@ -275,7 +275,7 @@ For each finding in top-N (in severity order):
 
    If verify fails 3 times → revert the Edit, mark finding as `skipped: manual_review_needed`, move on.
 
-**4. Commit** with message: `fix(audit-<category>): <FND-id> <root_cause_short>` and list changed files.
+**4. Commit** with message: `fix(audit-<category>): <FND-id> <root_cause_short>` PLUS a 2-3 line body that captures: (a) what the pre-fix reproducer showed, (b) what file:line(s) changed, (c) what post-fix evidence (test output, grep result, scan re-run) confirms the fix. The 2-line subject + body convention exists because the cycle's `summary.md` is gitignored and `findings-after.json` is per-cycle; the commit body is the only place a future `git log` can stand-alone explain WHY the change landed. Empty bodies are forbidden — meta-audit on 2026-04-27 found 13/13 audit-* commits in a 20-commit window had body=0, leaving the rationale invisible to anyone not reading the cycle artifacts.
 
 ### Phase 3 — Static Re-verify (+ bounded backend runtime re-verify)
 
@@ -477,9 +477,9 @@ When the cycle finishes, print the final summary **in English**. Include:
 
 ## Commit Rule
 
-Each confirmed fix gets its own commit: `fix(audit-<category>): <FND-id> <root_cause_short>`
+Each confirmed fix gets its own commit: `fix(audit-<category>): <FND-id> <root_cause_short>` followed by a 2-3 line body (reproducer + file:line + post-fix evidence). See Phase 2 step 4 for the rationale; empty bodies are forbidden.
 
-Cleanup commits from Phase 4: `chore(audit-review): <description>`
+Cleanup commits from Phase 4: `chore(audit-review): <description>` — body required only if the cleanup is non-trivial.
 
 If the verified fix lives under `local-openclaw/`, remember that path is gitignored in this repo. Stage those files with `git add -f ...` before running `git diff --check` / `git commit`, otherwise the cycle can appear clean while the actual auditor fix is still unstaged.
 

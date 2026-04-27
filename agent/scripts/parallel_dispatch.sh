@@ -1,4 +1,14 @@
 #!/usr/bin/env bash
+# parallel_dispatch.sh — multi-slot fetch/record helper.
+#
+# NOT for consume-test. As of 2026-04-24 (commits ee824b9, 5793ded), consume-test
+# dispatch is SERIALIZED — one fetch + one task() per turn. Operator prompts no
+# longer reference this script. It is kept because the orchestrator agent-participation
+# UI (orchestrator/frontend/src/lib/agentParticipation.ts), backend launcher
+# (orchestrator/backend/app/services/launcher.py), regression checker
+# (local-hermes-agent/scripts/check_regression_against_prior_cycles.py), and
+# events documentation (agent/scripts/EVENTS.md) still reference its event flow.
+# Use only for non-consume-test parallel work or as a low-level event source.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
