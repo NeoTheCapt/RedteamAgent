@@ -85,8 +85,8 @@ cd ~/redteam-docker
 
 **Notes**
 - This is the cleanest runtime path: the image bundles OpenCode, Redteam Agent, and the pentest toolchain.
-- `run.sh` starts from the image-baked clean template, persists engagement files in `workspace/`, and persists the full OpenCode state directory in `opencode-home/`.
-- Use `./run.sh --ephemeral-opencode` if you do not want to persist OpenCode state outside the container.
+- `run.sh` starts from the image-baked clean template, persists engagement files in `workspace/`, and persists the OpenCode XDG dirs across restarts: `opencode-home/` (auth tokens), `opencode-config/` (model selection), `opencode-state/` (TUI state).
+- Use `./run.sh --ephemeral-opencode` if you do not want to persist any OpenCode state outside the container (you'll have to reconfigure the model each run).
 - Use `./run.sh --rebuild` to force a clean image rebuild after install.
 
 ### OpenCode (Recommended)
