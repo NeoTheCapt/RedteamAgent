@@ -17,6 +17,29 @@ router = APIRouter(
 # we exclude when reconstructing dispatches from events.
 _INFRA_AGENTS = {"launcher", "operator", "dispatcher", "", None}
 
+# Map subagent name → canonical phase when the source event's phase column
+# is empty / "unknown" (legacy events from older runs). Without this, the
+# AgentsPanel renders "unknown" in every derived row's phase cell.
+_AGENT_TO_PHASE = {
+    "recon-specialist": "recon",
+    "source-analyzer": "consume_test",
+    "vulnerability-analyst": "consume_test",
+    "fuzzer": "consume_test",
+    "exploit-developer": "exploit",
+    "osint-analyst": "exploit",
+    "report-writer": "report",
+}
+
+
+def _resolve_phase(event_phase: str | None, agent: str) -> str:
+    """Prefer the event's phase if it carries a non-trivial value; fall back
+    to the agent → phase map when the event predates the streaming pipeline
+    (legacy 'unknown' or empty)."""
+    p = (event_phase or "").strip()
+    if p and p.lower() != "unknown":
+        return p
+    return _AGENT_TO_PHASE.get(agent, "consume_test")
+
 
 def _serialize(d) -> dict:
     return {
@@ -71,10 +94,10 @@ def _derive_dispatches_from_events(run_id: int, phase: str | None) -> list[dict]
             start_ev = stack.pop()
             completed.append({
                 "id": f"derived-{start_ev.id}",
-                "phase": start_ev.phase or "consume",
+                "phase": _resolve_phase(start_ev.phase, agent),
                 "round": 0,
                 "agent": agent,
-                "slot": "derived",
+                "slot": "",
                 "task": start_ev.summary,
                 "state": "done",
                 "started_at": _iso_to_epoch(start_ev.created_at),
@@ -86,10 +109,10 @@ def _derive_dispatches_from_events(run_id: int, phase: str | None) -> list[dict]
         for start_ev in stack:
             completed.append({
                 "id": f"derived-{start_ev.id}",
-                "phase": start_ev.phase or "consume",
+                "phase": _resolve_phase(start_ev.phase, agent),
                 "round": 0,
                 "agent": agent,
-                "slot": "derived",
+                "slot": "",
                 "task": start_ev.summary,
                 "state": "running",
                 "started_at": _iso_to_epoch(start_ev.created_at),

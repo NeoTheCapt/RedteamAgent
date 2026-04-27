@@ -87,13 +87,15 @@ def test_list_dispatches_falls_back_to_events_when_table_empty(isolate_data_dir)
     client = TestClient(app)
     token, proj, run = _setup(client, "derived_c3", isolate_data_dir)
 
-    db.create_event(run_id=run.id, event_type="artifact.updated", phase="consume",
+    # Use phase="" / "unknown" to confirm the agent → phase fallback fires;
+    # legacy events from older runs commonly have an empty / "unknown" phase.
+    db.create_event(run_id=run.id, event_type="artifact.updated", phase="unknown",
                     task_name="t1", agent_name="source-analyzer",
                     summary="Source analysis start", level="info", payload_json="{}")
-    db.create_event(run_id=run.id, event_type="artifact.updated", phase="consume",
+    db.create_event(run_id=run.id, event_type="artifact.updated", phase="unknown",
                     task_name="t1", agent_name="source-analyzer",
                     summary="Source analysis summary", level="info", payload_json="{}")
-    db.create_event(run_id=run.id, event_type="artifact.updated", phase="recon",
+    db.create_event(run_id=run.id, event_type="artifact.updated", phase="",
                     task_name="t2", agent_name="recon-specialist",
                     summary="Recon start", level="info", payload_json="{}")
     db.create_event(run_id=run.id, event_type="run.heartbeat", phase="recon",
@@ -110,8 +112,15 @@ def test_list_dispatches_falls_back_to_events_when_table_empty(isolate_data_dir)
     by_agent = {row["agent"]: row for row in rows}
     assert by_agent["source-analyzer"]["state"] == "done"
     assert by_agent["source-analyzer"]["finished_at"] is not None
-    assert by_agent["source-analyzer"]["slot"] == "derived"
+    # Synthetic rows carry empty slot (frontend hides the ":slot" prefix when
+    # it's empty) and id="derived-<event_id>" so the frontend can still detect
+    # a synthetic origin without a separate flag.
+    assert by_agent["source-analyzer"]["slot"] == ""
     assert by_agent["source-analyzer"]["id"].startswith("derived-")
+    # Phase is inferred from agent_name when the event's phase column is
+    # unknown / empty (common in legacy runs).
+    assert by_agent["source-analyzer"]["phase"] == "consume_test"
+    assert by_agent["recon-specialist"]["phase"] == "recon"
     assert by_agent["recon-specialist"]["state"] == "running"
     assert by_agent["recon-specialist"]["finished_at"] is None
     agents = {row["agent"] for row in rows}

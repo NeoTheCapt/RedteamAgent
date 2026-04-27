@@ -209,7 +209,9 @@ export function AgentsPanel({ summary, dispatches }: AgentsPanelProps) {
                           data-testid="agents-panel-dispatch"
                         >
                           <span className="agents-panel__dispatch-phase">{d.phase}</span>
-                          <span className="agents-panel__dispatch-slot">:{d.slot}</span>
+                          {d.slot && (
+                            <span className="agents-panel__dispatch-slot">:{d.slot}</span>
+                          )}
                           <span className="agents-panel__dispatch-state">{d.state.toUpperCase()}</span>
                           {duration && (
                             <span className="agents-panel__dispatch-duration">{duration}</span>
