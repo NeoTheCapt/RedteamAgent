@@ -198,7 +198,15 @@ High-risk surfaces (`account_recovery`, `dynamic_render`, `object_reference`, `p
 
 This composes a partial `report.md` from `findings.md` / `intel.md` / `scope.json` without invoking the report-writer subagent (zero token cost). It overwrites any prior partial. The marker file `report.md.partial` is left next to it. If the cycle is killed mid-pipeline (timeout, Docker outage, manual stop) the operator and post-mortem reader are not left empty-handed. The end-of-cycle report-writer pass overwrites the stub with the polished version.
 
-**Final report:** once active stages are drained AND surface coverage passes AND no in-flight subagent, dispatch `report-writer`. Never stop after saying reporting is next; the same turn that decides reporting MUST actually dispatch `report-writer`. As soon as report-writer returns and `report.md` is the polished version, run `rm -f "$DIR/report.md.partial"` to clear the interim-stub marker (otherwise downstream tooling thinks the cycle ended on a stub).
+**CTF recall closure gate:** before the final-report decision on a local lab / OWASP Juice Shop target, perform one bounded challenge-state sanity check using the already discovered scoreboard/challenge evidence. If any high-signal recall-contract branch that was solved in recent successful runs is still unsolved after its prerequisite surface/auth was reached, do NOT proceed to `report-writer` yet. Dispatch exactly one narrow `exploit-developer` closure batch for the remaining concrete branches, especially:
+- `Five-Star Feedback`: submit/verify the canonical five-star feedback action separately from forged-feedback proof.
+- `Password Strength`: after any admin/support account takeover or validated credential, try the bounded weak-password login/change/reset branch and record solved-state evidence.
+- `Database Schema`: after SQL injection or admin data exposure, perform one schema-oriented extraction (`sqlite_master`, `information_schema`, or equivalent DB error path) and save the artifact.
+- `Upload Type`: after `/file-upload` acceptance, submit a non-PDF/non-ZIP payload and check the consumer/scoreboard result instead of stopping at ZIP acceptance.
+- `User Credentials`: after privileged auth, fetch a credential-bearing endpoint/artifact and preserve hash/salt/security-answer evidence, not only emails/roles.
+If a branch remains blocked, requeue or log the exact blocker; do not let a generic all-cases-drained state hide the missing solved-state check.
+
+**Final report:** once active stages are drained, CTF recall closure is satisfied (or concrete blockers are logged), surface coverage passes, and no in-flight subagent remains, dispatch `report-writer`. Never stop after saying reporting is next; the same turn that decides reporting MUST actually dispatch `report-writer`. As soon as report-writer returns and `report.md` is the polished version, run `rm -f "$DIR/report.md.partial"` to clear the interim-stub marker (otherwise downstream tooling thinks the cycle ended on a stub).
 
 After report generation, NEVER mutate `scope.json` directly with raw `jq`/`python` to force `.status = "complete"` or `.current_phase = "complete"`. The ONLY allowed report-finalization command is `./scripts/finalize_engagement.sh "$DIR"`.
 
