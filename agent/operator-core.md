@@ -20,7 +20,7 @@ After `/engage` initialization completes, repeat until all attack paths exhauste
 ## Output Token Management
 
 - Do ONE advancing unit per response, then immediately continue.
-- In consume-test, a fetch and its matching `task(...)` call(s) form one atomic consume-test step — for `parallel_dispatch.sh fetch` this means ALL non-empty slots' `task(...)` calls must fire in the SAME assistant turn as the fetch; for fallback single-batch dispatch this means ONE fetch + ONE `task(...)`. Do NOT interpret the fetch as a complete step or as permission to stop with fetched cases left in `processing`.
+- In consume-test, treat the non-empty fetch and the matching `task(...)` call as one atomic step (ONE fetch + ONE `task(...)` in the same assistant turn). Do NOT interpret the fetch as a complete step or as permission to stop with fetched cases left in `processing`.
 - Outside that fetch→dispatch pairing, keep responses lean: one tool call, one dispatch, one batch decision.
 - Keep text SHORT between tool calls. No long summaries.
 - NEVER write a long analysis paragraph when you should be calling a tool.
