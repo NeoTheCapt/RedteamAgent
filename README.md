@@ -11,7 +11,7 @@
     <img src="https://img.shields.io/badge/platform-macOS%20|%20Linux-blue" alt="Platform">
     <img src="https://img.shields.io/badge/tools-Docker%20containerized-blue" alt="Docker">
     <img src="https://img.shields.io/badge/agents-8%20specialized-orange" alt="Agents">
-    <img src="https://img.shields.io/badge/skills-32%20attack%20methodologies-red" alt="Skills">
+    <img src="https://img.shields.io/badge/skills-31%20attack%20methodologies-red" alt="Skills">
     <img src="https://img.shields.io/badge/references-79%20files-green" alt="References">
   </p>
 </p>
@@ -28,7 +28,7 @@ An autonomous red team simulation agent that works with **Claude Code**, **OpenC
 
 **Key Features:**
 - **Multi-CLI support** — works with Claude Code, OpenCode, and Codex out of the box
-- **Autonomous workflow** — 5-phase methodology (Recon → Collect → Test → Exploit+OSINT → Report) runs with minimal user interaction
+- **Autonomous workflow** — 5-phase methodology (Recon → Collect → Test → Exploit+OSINT → Report) runs with minimal user interaction; the Test phase is a streaming, stage-based case pipeline with serialized dispatch (one fetch + one subagent task per turn)
 - **Orchestrator GUI** — local web UI for projects, live runs, artifacts, timelines, and terminal run metadata
 - **Intelligence collection** — `intel.md` accumulates tech stack, people, domains, credentials from recon through exploitation; OSINT agent enriches with CVE, breach, DNS history, and social data
 - **8 specialized agents** — operator, recon-specialist, source-analyzer, vulnerability-analyst, exploit-developer, fuzzer, osint-analyst, report-writer
@@ -235,13 +235,19 @@ Phase 1: RECON ─── recon-specialist + source-analyzer (parallel)
     │
 Phase 2: COLLECT ─ Import endpoints → SQLite queue, start Katana crawler
     │
-Phase 3: TEST ──── Consume queue → vulnerability-analyst + source-analyzer
-    │               exploit-developer runs in parallel for HIGH/MEDIUM findings
-    │               (continuous loop with progress display)
+Phase 3: TEST ──── Stage-based case pipeline (replaces strict phase gates):
+    │               cases carry a `stage` column independent of `status`.
+    │               Routing by stage+type:
+    │                 ingested + {api,form,graphql,upload,websocket} → vuln-analyst
+    │                 ingested + {javascript,page,stylesheet,data,unknown,api-spec} → source-analyzer
+    │                 vuln_confirmed                                 → exploit-developer
+    │                 fuzz_pending                                   → fuzzer (deep wordlists, >500 entries)
+    │               Consume-test dispatch is SERIALIZED: one fetch + one task() per turn.
 Phase 4: EXPLOIT ── osint-analyst + exploit-developer (parallel)
     │               osint-analyst: CVE/breach/DNS/social intel from intel.md
     │               exploit-developer: chain analysis, impact assessment
-    │               OSINT high-value intel → 2nd round exploitation
+    │               osint-respawn: operator runs `intel_changed_check.sh` per
+    │               loop tick; flag triggers a fresh osint correlation pass.
 Phase 5: REPORT ── report-writer with coverage statistics + intelligence summary
 ```
 
@@ -336,8 +342,8 @@ RedteamOpencode/                ← dev workspace (git root)
 │   │   ├── install-time generators ← install.sh builds .claude/agents + .codex/agents + .claude/commands
 │   │   ├── dispatcher.sh       ← case queue management
 │   │   └── ...                 ← ingest, hooks, shared libraries
-│   ├── skills/                 ← 32 attack methodology skills
-│   ├── references/             ← 78 reference files (OWASP, tools, tactics, AD)
+│   ├── skills/                 ← 31 attack methodology skills
+│   ├── references/             ← 79 reference files (OWASP, tools, tactics, AD)
 │   ├── docker/                 ← Dockerfiles + docker-compose.yml
 │   └── engagements/            ← per-engagement output (created at runtime)
 │
