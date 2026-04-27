@@ -88,6 +88,11 @@ def test_business_logic_skill_preserves_regressed_juice_shop_logic_recall() -> N
     assert "POST /api/Feedbacks/" in skill
     assert "sqlite_master" in skill
     assert "emit `REQUEUE` with a concrete" in skill
+    assert "A functionally successful request is not enough for CTF recall closure" in skill
+    assert "technical evidence remains" in skill
+    assert "admin123" in skill
+    assert "challenge-specific" in skill
+    assert "schema-extraction payload" in skill
 
 
 def test_operator_core_blocks_final_report_until_ctf_recall_closure() -> None:
