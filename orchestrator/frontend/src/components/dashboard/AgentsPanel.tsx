@@ -102,6 +102,37 @@ export function AgentsPanel({ summary, dispatches }: AgentsPanelProps) {
   const activeRows = rows.filter((r) => r.status === "active" || r.status === "running");
   const activeTotal = activeRows.reduce((sum, r) => sum + Math.max(r.parallel_count, 1), 0);
 
+  // Cross-kind concurrency: distinct agents currently active. Surfaces the
+  // streaming-pipeline design intent (recon+source / vuln+source / osint+exploit)
+  // which the per-agent rows alone hide. Only render when 2+ distinct agents
+  // are active — a single active agent is just sequential dispatch.
+  const concurrentAgentNames = activeRows.map((r) => r.agent_name).sort();
+  const showLiveConcurrency = concurrentAgentNames.length >= 2;
+
+  // Historical concurrency: bucket Dispatch.started_at into 5s windows; keep
+  // windows where 2+ distinct agents fired. Forward-looking — populated by the
+  // dispatcher.sh / fetch_batch_to_file.sh emit hooks (5c46451). Old runs whose
+  // engagement workspace was provisioned before that commit will show empty.
+  const concurrencyWindows = useMemo(() => {
+    const WINDOW_SEC = 5;
+    const buckets = new Map<number, Set<string>>();
+    for (const d of dispatches) {
+      if (typeof d.started_at !== "number") continue;
+      const bucket = Math.floor(d.started_at / WINDOW_SEC) * WINDOW_SEC;
+      const set = buckets.get(bucket) ?? new Set<string>();
+      set.add(d.agent);
+      buckets.set(bucket, set);
+    }
+    return Array.from(buckets.entries())
+      .filter(([, set]) => set.size >= 2)
+      .sort(([a], [b]) => b - a)
+      .slice(0, 6)
+      .map(([ts, set]) => ({
+        timestamp: new Date(ts * 1000).toLocaleTimeString(),
+        agents: Array.from(set).sort(),
+      }));
+  }, [dispatches]);
+
   return (
     <section className="dash-card agents-panel" data-testid="agents-panel">
       <header className="dash-card__head">
@@ -110,6 +141,14 @@ export function AgentsPanel({ summary, dispatches }: AgentsPanelProps) {
           {activeTotal} active · {summary.overview.available_agents} defined
         </p>
       </header>
+      {showLiveConcurrency && (
+        <div className="agents-panel__concurrency-live" data-testid="agents-panel-concurrency-live">
+          <span className="agents-panel__concurrency-label">Concurrent now</span>
+          {concurrentAgentNames.map((name) => (
+            <span key={name} className="agents-panel__concurrency-chip">{name}</span>
+          ))}
+        </div>
+      )}
       {rows.length === 0 ? (
         <p className="dash-card__empty">No agent activity recorded yet.</p>
       ) : (
@@ -194,6 +233,23 @@ export function AgentsPanel({ summary, dispatches }: AgentsPanelProps) {
             );
           })}
         </ul>
+      )}
+      {concurrencyWindows.length > 0 && (
+        <div className="agents-panel__concurrency-history" data-testid="agents-panel-concurrency-history">
+          <h4 className="agents-panel__concurrency-title">Recent concurrent windows</h4>
+          <ul className="agents-panel__concurrency-list">
+            {concurrencyWindows.map((w) => (
+              <li key={w.timestamp} className="agents-panel__concurrency-row">
+                <span className="agents-panel__concurrency-time">{w.timestamp}</span>
+                <span className="agents-panel__concurrency-agents">
+                  {w.agents.map((a) => (
+                    <span key={a} className="agents-panel__concurrency-chip">{a}</span>
+                  ))}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
       )}
     </section>
   );
