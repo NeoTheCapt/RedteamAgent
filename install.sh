@@ -269,7 +269,7 @@ else
     if [ -d "$INSTALL_DIR/skills" ] || [ -d "$INSTALL_DIR/.opencode" ] || [ -d "$INSTALL_DIR/.claude" ] || [ -d "$INSTALL_DIR/.codex" ] || [ -d "$INSTALL_DIR/agent" ] || [ -f "$INSTALL_DIR/run.sh" ]; then
         warn "Existing installation detected in $INSTALL_DIR — upgrading"
         # Preserve engagement data and .env (user config)
-        for keep in engagements .env auth.json workspace opencode-home; do
+        for keep in engagements .env auth.json workspace opencode-home opencode-config opencode-state; do
             [ -e "$INSTALL_DIR/$keep" ] && mv "$INSTALL_DIR/$keep" "/tmp/redteam-preserve-$keep" 2>/dev/null
         done
         # Remove old files
@@ -279,7 +279,7 @@ else
                "$INSTALL_DIR/.env.example" "$INSTALL_DIR/agent" "$INSTALL_DIR/run.sh" \
                "$INSTALL_DIR/install.sh"
         # Restore preserved data
-        for keep in engagements .env auth.json workspace opencode-home; do
+        for keep in engagements .env auth.json workspace opencode-home opencode-config opencode-state; do
             [ -e "/tmp/redteam-preserve-$keep" ] && mv "/tmp/redteam-preserve-$keep" "$INSTALL_DIR/$keep" 2>/dev/null
         done
         ok "Old installation cleaned (state + .env preserved)"
@@ -389,7 +389,10 @@ else
             cp "$INSTALL_DIR/.env.example" "$INSTALL_DIR/.env"
             warn "Created $INSTALL_DIR/.env from Docker template — update API keys before running ./run.sh"
         fi
-        mkdir -p "$INSTALL_DIR/workspace" "$INSTALL_DIR/opencode-home"
+        mkdir -p "$INSTALL_DIR/workspace" \
+                 "$INSTALL_DIR/opencode-home" \
+                 "$INSTALL_DIR/opencode-config" \
+                 "$INSTALL_DIR/opencode-state"
         ok "Docker runtime files (agent/, run.sh, .env)"
         ;;
     esac
@@ -610,6 +613,6 @@ case "$PRODUCT" in
   opencode) echo "    .opencode/  skills/  references/  scripts/  docker/" ;;
   claude)   echo "    .claude/    skills/  references/  scripts/  docker/  CLAUDE.md" ;;
   codex)    echo "    .codex/     skills/  references/  scripts/  docker/  AGENTS.md" ;;
-  docker)   echo "    agent/  run.sh  .env  workspace/  opencode-home/" ;;
+  docker)   echo "    agent/  run.sh  .env  workspace/  opencode-home/  opencode-config/  opencode-state/" ;;
 esac
 echo ""
