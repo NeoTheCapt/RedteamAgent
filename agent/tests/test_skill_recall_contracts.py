@@ -10,6 +10,7 @@ SOURCE_ANALYSIS_SKILL = REPO_ROOT / "agent" / "skills" / "source-analysis" / "SK
 XSS_SKILL = REPO_ROOT / "agent" / "skills" / "xss-testing" / "SKILL.md"
 BUSINESS_LOGIC_SKILL = REPO_ROOT / "agent" / "skills" / "business-logic-testing" / "SKILL.md"
 XXE_SKILL = REPO_ROOT / "agent" / "skills" / "xxe-testing" / "SKILL.md"
+OPERATOR_CORE = REPO_ROOT / "agent" / "operator-core.md"
 
 
 def test_file_upload_skill_requires_consumer_path_after_spa_fallback() -> None:
@@ -87,6 +88,23 @@ def test_business_logic_skill_preserves_regressed_juice_shop_logic_recall() -> N
     assert "POST /api/Feedbacks/" in skill
     assert "sqlite_master" in skill
     assert "emit `REQUEUE` with a concrete" in skill
+
+
+def test_operator_core_blocks_final_report_until_ctf_recall_closure() -> None:
+    core = OPERATOR_CORE.read_text(encoding="utf-8")
+
+    assert "CTF recall closure gate" in core
+    assert "do NOT proceed to `report-writer`" in core
+    assert "exploit-developer` closure batch" in core
+    for challenge in [
+        "Five-Star Feedback",
+        "Password Strength",
+        "Database Schema",
+        "Upload Type",
+        "User Credentials",
+    ]:
+        assert challenge in core
+    assert "CTF recall closure is satisfied" in core
 
 
 def test_xxe_skill_preserves_juice_shop_xxe_data_access_recall() -> None:
