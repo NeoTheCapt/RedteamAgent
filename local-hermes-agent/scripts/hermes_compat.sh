@@ -108,10 +108,17 @@ case "$SUBCOMMAND" in
     # Hermes chat defaults to --max-turns 90, which auditor cycles blow
     # past during Phase 1 (browser navigation + DOM reads + screenshots
     # easily consume 100+ tool calls before the first fix is committed).
-    # Verified necessary after cycle 20260423T043443Z was killed at
-    # ~9 min with 3 UI findings still in memory and not on disk.
+    # 300 was the next step up after 90 (cycle 20260423T043443Z killed at
+    # ~9min with findings unflushed). 300 was still tight: 12 UI checks
+    # × 15-25 turns each = 180-300 turns just for UI, leaving Phase 2
+    # fix / Phase 3 reverify / Phase 4 review starved. Multiple recent
+    # cycles exited `discover_agent_sources_partial` with UI checks 8-12
+    # marked `skipped`. Bumped to 800 (2026-04-29) to give every cycle a
+    # complete UI snapshot and full Phase 2-4 budget; cost is not the
+    # constraint here, single-cycle signal completeness is (a half-done
+    # UI sweep across multiple cycles makes regression bisection 6× wider).
     case "$skill_name" in
-        redteam-auditor-hermes) default_max_turns=300 ;;
+        redteam-auditor-hermes) default_max_turns=800 ;;
         *)                      default_max_turns=90  ;;
     esac
     max_turns="${HERMES_MAX_TURNS:-$default_max_turns}"
