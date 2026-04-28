@@ -126,13 +126,16 @@ nohup bash -c '
     cd "$TEST_DIR"
 
     is_terminal() {
-        local eng status phase elapsed
+        # Use eng_-prefixed names: $status is sometimes readonly in the
+        # harness shell that hosts run_in_background, and `local status`
+        # then dies with "read-only variable".
+        local eng eng_status eng_phase elapsed
         eng="$(find workspace/engagements -maxdepth 1 -mindepth 1 -type d \
                -newermt "@$START_EPOCH" 2>/dev/null | sort | tail -1)"
         if [[ -n "$eng" && -f "$eng/scope.json" ]]; then
-            status="$(jq -r ".status // \"\"" "$eng/scope.json" 2>/dev/null)"
-            phase="$(jq -r ".current_phase // \"\"" "$eng/scope.json" 2>/dev/null)"
-            [[ "$status" == "complete" && "$phase" == "complete" ]] && return 0
+            eng_status="$(jq -r ".status // \"\"" "$eng/scope.json" 2>/dev/null)"
+            eng_phase="$(jq -r ".current_phase // \"\"" "$eng/scope.json" 2>/dev/null)"
+            [[ "$eng_status" == "complete" && "$eng_phase" == "complete" ]] && return 0
         fi
         if [[ -n "$eng" && -f "$eng/log.md" ]] \
            && grep -qE "Run stop.*stop_reason=" "$eng/log.md"; then
