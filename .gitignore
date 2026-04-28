@@ -201,3 +201,6 @@ agent/build/
 /skills/
 /references/
 /docker/
+
+# Playwright MCP tool artifacts (snapshots, console logs, debug trees)
+/.playwright-mcp/
