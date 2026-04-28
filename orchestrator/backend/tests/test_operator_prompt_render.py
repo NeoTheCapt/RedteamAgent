@@ -76,3 +76,13 @@ def test_rendered_operator_prompt_prevents_respawn_starving_queue(tmp_path: Path
     assert "must perform a real stage fetch+task dispatch before doing another respawn-only pass" in rendered
     assert "Respawn dispatch is queue expansion, not a substitute for queue consumption." in rendered
     assert "OSINT correlation must not become a liveness loop." in rendered
+
+
+def test_sensitive_data_skill_preserves_blocked_juice_shop_artifact_followups() -> None:
+    skill = (AGENT_ROOT / "skills" / "sensitive-data-detection" / "SKILL.md").read_text(encoding="utf-8")
+
+    assert "%2500.md" in skill
+    assert "adjacent `.sig` files" in skill
+    assert "concrete `/metrics` route" in skill
+    assert "verify solved-state for `NFT Takeover` separately" in skill
+    assert "requeue the exact artifact, route, bypass, or consumer action" in skill
