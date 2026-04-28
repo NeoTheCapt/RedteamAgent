@@ -104,10 +104,11 @@ elif [ -f ".opencode/opencode.json" ] && [ -d "skills" ]; then
     SOURCE_DIR="$(pwd)"
     info "Running from agent directory"
 else
-    echo "Not in project directory. Cloning to /tmp/redteam-agent-src ..."
+    REDTEAM_REF="${REDTEAM_REF:-v0.1.0}"
+    echo "Not in project directory. Cloning ref '$REDTEAM_REF' to /tmp/redteam-agent-src ..."
     CLONE_DIR="/tmp/redteam-agent-src"
     rm -rf "$CLONE_DIR"
-    git clone -b dev "$REPO_URL" "$CLONE_DIR"
+    git clone --depth 1 --branch "$REDTEAM_REF" "$REPO_URL" "$CLONE_DIR"
     SOURCE_DIR="$CLONE_DIR/agent"
     echo "Working from: $SOURCE_DIR"
     echo ""

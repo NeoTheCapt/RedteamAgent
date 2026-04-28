@@ -63,7 +63,7 @@ An autonomous red team simulation agent that works with **Claude Code**, **OpenC
 **Install**
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/NeoTheCapt/RedteamAgent/dev/install.sh) docker
+bash <(curl -fsSL https://raw.githubusercontent.com/NeoTheCapt/RedteamAgent/v0.1.0/install.sh) docker
 # or:
 ./install.sh docker ~/redteam-docker
 ./install.sh --force docker ~/redteam-docker
@@ -94,7 +94,7 @@ cd ~/redteam-docker
 **Install**
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/NeoTheCapt/RedteamAgent/dev/install.sh) opencode
+bash <(curl -fsSL https://raw.githubusercontent.com/NeoTheCapt/RedteamAgent/v0.1.0/install.sh) opencode
 # or:
 ./install.sh opencode
 ./install.sh opencode ~/my-project
@@ -124,7 +124,7 @@ opencode
 **Install**
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/NeoTheCapt/RedteamAgent/dev/install.sh) claude
+bash <(curl -fsSL https://raw.githubusercontent.com/NeoTheCapt/RedteamAgent/v0.1.0/install.sh) claude
 # or:
 ./install.sh claude
 ./install.sh claude ~/my-project
@@ -149,7 +149,7 @@ claude
 **Install**
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/NeoTheCapt/RedteamAgent/dev/install.sh) codex
+bash <(curl -fsSL https://raw.githubusercontent.com/NeoTheCapt/RedteamAgent/v0.1.0/install.sh) codex
 # or:
 ./install.sh codex
 ./install.sh codex ~/my-project

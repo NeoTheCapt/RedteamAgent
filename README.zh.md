@@ -63,7 +63,7 @@ RedTeam Agent 是一个支持 **Claude Code**、**OpenCode** 和 **Codex** 的�
 **安装**
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/NeoTheCapt/RedteamAgent/dev/install.sh) docker
+bash <(curl -fsSL https://raw.githubusercontent.com/NeoTheCapt/RedteamAgent/v0.1.0/install.sh) docker
 # 或：
 ./install.sh docker ~/redteam-docker
 ./install.sh --force docker ~/redteam-docker
@@ -94,7 +94,7 @@ cd ~/redteam-docker
 **安装**
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/NeoTheCapt/RedteamAgent/dev/install.sh) opencode
+bash <(curl -fsSL https://raw.githubusercontent.com/NeoTheCapt/RedteamAgent/v0.1.0/install.sh) opencode
 # 或：
 ./install.sh opencode
 ./install.sh opencode ~/my-project
@@ -124,7 +124,7 @@ opencode
 **安装**
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/NeoTheCapt/RedteamAgent/dev/install.sh) claude
+bash <(curl -fsSL https://raw.githubusercontent.com/NeoTheCapt/RedteamAgent/v0.1.0/install.sh) claude
 # 或：
 ./install.sh claude
 ./install.sh claude ~/my-project
@@ -149,7 +149,7 @@ claude
 **安装**
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/NeoTheCapt/RedteamAgent/dev/install.sh) codex
+bash <(curl -fsSL https://raw.githubusercontent.com/NeoTheCapt/RedteamAgent/v0.1.0/install.sh) codex
 # 或：
 ./install.sh codex
 ./install.sh codex ~/my-project
