@@ -10,25 +10,22 @@
 /opencode.json
 /.hermes/
 /tools/
-# local-openclaw: track shared tooling (scripts, prompts, skills, tests),
-# ignore per-operator state (scheduler.env with tokens, cycle logs, findings).
-# Note: must exclude `/local-hermes-agent/*` (not `/local-hermes-agent/`) so the
-# negation rules below can re-include specific children. Git won't descend
-# into a fully-excluded directory.
-/local-hermes-agent/*
-!/local-hermes-agent/scripts/
-!/local-hermes-agent/prompts/
-!/local-hermes-agent/requirements/
-!/local-hermes-agent/skills/
-!/local-hermes-agent/tests/
-!/local-hermes-agent/launchd/
-# But the generated .plist files are per-operator (labels like
-# com.neothecapt.*) and are rewritten by manage_launchd.sh — the template
-# lives in that script, so the artifacts themselves stay out of git.
-/local-hermes-agent/launchd/*.plist
-!/local-hermes-agent/README.md
+# local-hermes-agent/ is per-operator quality assessment / regression /
+# inspection tooling (auditor cycle, smoke skill, scan-optimizer loop,
+# launchd schedules, scheduler tokens, cycle logs, findings, audit reports).
+# The whole tree is internal-only and NEVER shipped with the public
+# agent product. Same rule applies to any future testing / optimization /
+# auditing infrastructure.
+/local-hermes-agent/
+# All tests live under root tests/ per project policy and are gitignored
+# (they're product quality assessment / regression / inspection — not part
+# of the published agent runtime). The legacy colocation paths below are
+# kept ignored so accidental re-creation doesn't leak back into git.
 /tests/
+/agent/tests/
 /orchestrator/tests/
+/orchestrator/backend/tests/
+/orchestrator/frontend/src/test/
 /orchestrator/backend/data/
 /orchestrator/backend/*.egg-info/
 /.superpowers/brainstorm/

@@ -23,3 +23,10 @@ package-dir = {"" = "."}
 
 [tool.setuptools.packages.find]
 where = ["."]
+
+[tool.pytest.ini_options]
+# Tests live at repo-root tests/orchestrator/backend/ (per project policy:
+# all tests under root tests/, never colocated with product source). Running
+# `pytest` from this dir auto-discovers them without needing a path arg.
+testpaths = ["../../tests/orchestrator/backend"]
+pythonpath = ["."]
