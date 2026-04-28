@@ -53,9 +53,21 @@ cd "$TEST_DIR"
 docker image inspect redteam-allinone:latest >/dev/null 2>&1 \
   || { echo "FAIL A1: image missing — run install.sh docker first"; exit 2; }
 
-# A2: env file has at least one model API key
-grep -qE '^(OPENAI_API_KEY|ANTHROPIC_API_KEY|OPENROUTER_API_KEY)=.{8,}' .env \
-  || { echo "FAIL A2: .env has no usable model API key"; exit 2; }
+# A2: model auth available — accept either .env API keys OR a populated
+# opencode-home/auth.json (the canonical OpenCode location, written by
+# `opencode auth login` and persisted across container restarts).
+A2_PASS=0
+A2_SOURCE=""
+if grep -qE '^(OPENAI_API_KEY|ANTHROPIC_API_KEY|OPENROUTER_API_KEY)=.{8,}' .env 2>/dev/null; then
+    A2_PASS=1; A2_SOURCE=".env"
+fi
+if [[ -s opencode-home/auth.json ]] \
+   && jq -e 'keys | length > 0' opencode-home/auth.json >/dev/null 2>&1; then
+    A2_PASS=1; A2_SOURCE="${A2_SOURCE:+$A2_SOURCE+}auth.json"
+fi
+[[ "$A2_PASS" == "1" ]] \
+  || { echo "FAIL A2: no usable model auth in .env or opencode-home/auth.json"; exit 2; }
+echo "✓ A2 model auth (source: $A2_SOURCE)"
 
 # A3: model config persisted (avoid the prompt-on-every-start issue this skill
 # was originally written to catch)
@@ -89,25 +101,76 @@ cat > "$TEST_DIR/last-run-meta.json" <<EOF
 {"target_url":"$TARGET_URL","start_iso":"$RUN_START_ISO","start_epoch":$RUN_START_EPOCH}
 EOF
 
-# Background the run. opencode `run` is non-interactive; the slash command is
-# parsed by the operator agent's prompt. --dangerously-skip-permissions is
-# required because /autoengage is unattended and would otherwise stall on
-# permission prompts. --print-logs --log-level INFO surfaces backend events
-# in the console log so the analyzer can correlate them with engagement state.
+# Background a CONTINUATION LOOP. `opencode run "<msg>"` is single-prompt: it
+# runs the operator agent for up to ~12 internal steps and exits at
+# session.idle. /autoengage needs a multi-hour core loop, so a single
+# `opencode run` call only reaches engage init + the first dispatch.
+#
+# To drive the engagement to terminal state we re-fire `opencode run
+# --continue "continue"` between iterations; --continue resumes the same
+# session via the persisted opencode.db (in opencode-home/, mounted), so
+# the operator agent keeps its working memory across iterations.
+#
+# The loop exits when scope.json reaches complete, log.md records a
+# stop_reason, or the wall-clock timeout expires. All console output (from
+# every iteration) is concatenated into the same log file.
 cd "$TEST_DIR"
-nohup ./run.sh -- opencode run \
-  --print-logs \
-  --log-level INFO \
-  --dangerously-skip-permissions \
-  --agent operator \
-  "/autoengage $TARGET_URL" \
-  >"$CONSOLE_LOG" 2>&1 &
+WAIT_TIMEOUT_SEC=$(( ${WAIT_TIMEOUT_MIN:-240} * 60 ))
+nohup bash -c '
+    set -u
+    TEST_DIR="'"$TEST_DIR"'"
+    TARGET_URL="'"$TARGET_URL"'"
+    CONSOLE_LOG="'"$CONSOLE_LOG"'"
+    START_EPOCH='"$RUN_START_EPOCH"'
+    TIMEOUT_SEC='"$WAIT_TIMEOUT_SEC"'
+    cd "$TEST_DIR"
+
+    is_terminal() {
+        local eng status phase elapsed
+        eng="$(find workspace/engagements -maxdepth 1 -mindepth 1 -type d \
+               -newermt "@$START_EPOCH" 2>/dev/null | sort | tail -1)"
+        if [[ -n "$eng" && -f "$eng/scope.json" ]]; then
+            status="$(jq -r ".status // \"\"" "$eng/scope.json" 2>/dev/null)"
+            phase="$(jq -r ".current_phase // \"\"" "$eng/scope.json" 2>/dev/null)"
+            [[ "$status" == "complete" && "$phase" == "complete" ]] && return 0
+        fi
+        if [[ -n "$eng" && -f "$eng/log.md" ]] \
+           && grep -qE "Run stop.*stop_reason=" "$eng/log.md"; then
+            return 0
+        fi
+        elapsed=$(( $(date +%s) - START_EPOCH ))
+        (( elapsed > TIMEOUT_SEC )) && return 0
+        return 1
+    }
+
+    iter=0
+    printf "[smoke loop] iter=0 starting /autoengage %s\n" "$TARGET_URL" >>"$CONSOLE_LOG"
+    ./run.sh -- opencode run --print-logs --log-level INFO \
+        --dangerously-skip-permissions --agent operator \
+        "/autoengage $TARGET_URL" >>"$CONSOLE_LOG" 2>&1
+    while ! is_terminal; do
+        iter=$((iter+1))
+        printf "[smoke loop] iter=%d --continue\n" "$iter" >>"$CONSOLE_LOG"
+        ./run.sh -- opencode run --print-logs --log-level INFO \
+            --dangerously-skip-permissions --agent operator --continue \
+            "continue the engagement core loop until scope.json is complete or you hit a stop reason" \
+            >>"$CONSOLE_LOG" 2>&1
+        sleep 3
+    done
+    printf "[smoke loop] terminal reached at iter=%d\n" "$iter" >>"$CONSOLE_LOG"
+' </dev/null >/dev/null 2>&1 &
 RUN_PID=$!
 echo "$RUN_PID" > "$TEST_DIR/last-run.pid"
-echo "smoke launched: pid=$RUN_PID target=$TARGET_URL log=$CONSOLE_LOG"
+disown
+echo "smoke loop launched: pid=$RUN_PID target=$TARGET_URL log=$CONSOLE_LOG"
 ```
 
 If the `nohup ... &` returns immediately without a sane PID, that is itself a failure (write `runtime_error: launch_failed` and skip to Phase F).
+
+The loop wrapper (one bash background process) outlives any individual
+`opencode run` invocation, so the smoke survives the per-iteration session
+exit at step 12. Phase C still polls the same scope.json / log.md fields —
+nothing else changes, only the launch path.
 
 ### Phase C — Wait for terminal state
 
