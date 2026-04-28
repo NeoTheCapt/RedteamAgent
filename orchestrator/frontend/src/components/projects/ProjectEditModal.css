@@ -179,3 +179,30 @@
   color: var(--c-text-dim);
   margin: 0 0 var(--sp-2);
 }
+
+.pforms__example {
+  font-size: var(--fs-xs);
+  color: var(--c-text-dim);
+  border: 1px dashed var(--c-border);
+  border-radius: var(--r-sm);
+  padding: var(--sp-2) var(--sp-3);
+  margin-top: var(--sp-2);
+}
+
+.pforms__example summary {
+  cursor: pointer;
+  font-weight: var(--fw-semibold);
+  color: var(--c-text);
+}
+
+.pforms__example-code {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--c-text);
+  background: var(--c-panel-soft);
+  padding: var(--sp-2);
+  border-radius: var(--r-sm);
+  margin: var(--sp-2) 0 0;
+  white-space: pre-wrap;
+  overflow-x: auto;
+}
