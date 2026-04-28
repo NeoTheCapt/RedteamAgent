@@ -159,6 +159,35 @@ def crawler_stats(eng_dir: Path):
         'katana_error_tail': err_tail,
     }
 
+def has_solved_challenge_evidence(eng_dir) -> bool:
+    """Return True when run artifacts prove challenge state was non-zero.
+
+    The local Juice Shop container may be reset between a completed run and
+    context construction. In that case a fresh scrape of /api/Challenges can
+    report 0/111 even though the engagement log recorded solved challenges,
+    producing a false recall regression. Treat that mismatch as an invalid
+    score instead of persisting a fake 0.000 recall sample.
+    """
+    if not eng_dir:
+        return False
+    log_path = eng_dir / 'log.md'
+    if not log_path.exists():
+        return False
+    try:
+        text = log_path.read_text(encoding='utf-8', errors='replace').lower()
+    except Exception:
+        return False
+    markers = (
+        'solved=true',
+        ' flipped ',
+        ' remains solved',
+        ' stayed solved',
+        ' challenge solved',
+        ' solved;',
+        ' solved.',
+    )
+    return any(marker in text for marker in markers)
+
 def build_summary(run):
     if not run:
         return None
@@ -259,25 +288,34 @@ elif local_status.rstrip() == 'completed':
             'solved_challenge_names': [f"[difficulty {item.get('difficulty')}] {item.get('name')}" for item in solved],
             'unsolved_challenge_names': [f"[difficulty {item.get('difficulty')}] {item.get('name')}" for item in unsolved],
         }
-        challenge_lines.extend([
-            '- status: scored',
-            f'- local_run_status: {local_status}',
-            '- source: Juice Shop /api/Challenges (ground truth)',
-            f'- total_challenges: {challenge_data["total_challenges"]}',
-            f'- solved_challenges: {challenge_data["solved_challenges"]}',
-            f'- unsolved_challenges: {challenge_data["unsolved_challenges"]}',
-            f'- challenge_recall: {challenge_data["challenge_recall"]}',
-            '',
-            '### Category Breakdown',
-        ])
-        for category, score in challenge_data['category_breakdown'].items():
-            challenge_lines.append(f'- {category}: {score}')
-        challenge_lines.extend(['', '### Solved Challenges'])
-        for row in challenge_data['solved_challenge_names']:
-            challenge_lines.append(f'- {row}')
-        challenge_lines.extend(['', '### Unsolved Challenges'])
-        for row in challenge_data['unsolved_challenge_names']:
-            challenge_lines.append(f'- {row}')
+        local_eng_dir = Path((local_summary or {}).get('target', {}).get('engagement_dir') or '')
+        if items and not solved and has_solved_challenge_evidence(local_eng_dir):
+            challenge_data = None
+            challenge_lines.extend([
+                '- status: api_error',
+                f'- local_run_status: {local_status}',
+                '- reason: live /api/Challenges reported 0 solved, but the completed engagement log contains solved-challenge evidence; score withheld as likely post-run target reset',
+            ])
+        else:
+            challenge_lines.extend([
+                '- status: scored',
+                f'- local_run_status: {local_status}',
+                '- source: Juice Shop /api/Challenges (ground truth)',
+                f'- total_challenges: {challenge_data["total_challenges"]}',
+                f'- solved_challenges: {challenge_data["solved_challenges"]}',
+                f'- unsolved_challenges: {challenge_data["unsolved_challenges"]}',
+                f'- challenge_recall: {challenge_data["challenge_recall"]}',
+                '',
+                '### Category Breakdown',
+            ])
+            for category, score in challenge_data['category_breakdown'].items():
+                challenge_lines.append(f'- {category}: {score}')
+            challenge_lines.extend(['', '### Solved Challenges'])
+            for row in challenge_data['solved_challenge_names']:
+                challenge_lines.append(f'- {row}')
+            challenge_lines.extend(['', '### Unsolved Challenges'])
+            for row in challenge_data['unsolved_challenge_names']:
+                challenge_lines.append(f'- {row}')
     except Exception as exc:
         challenge_lines.extend([
             '- status: api_error',
