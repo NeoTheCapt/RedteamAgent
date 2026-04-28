@@ -91,8 +91,8 @@ def extract_token_from_scheduler_env(text: str) -> str:
     return ""
 
 
-def resolve_token() -> str:
-    token = os.environ.get("ORCH_TOKEN", "").strip()
+def resolve_token(*, prefer_env: bool = True) -> str:
+    token = os.environ.get("ORCH_TOKEN", "").strip() if prefer_env else ""
     if token:
         return token
     scheduler_env = Path(
@@ -104,6 +104,21 @@ def resolve_token() -> str:
     if not scheduler_env.exists():
         return ""
     return extract_token_from_scheduler_env(scheduler_env.read_text(encoding="utf-8"))
+
+
+def refresh_scheduler_token() -> bool:
+    """Ask the shared auth helper to repair scheduler.env, without logging the token."""
+    helper = SCRIPT_DIR / "lib" / "orchestrator_auth.sh"
+    if not helper.exists():
+        return False
+    proc = subprocess.run(
+        ["bash", "-lc", f"source {str(helper)!r} && ensure_orchestrator_token"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        timeout=20,
+    )
+    return proc.returncode == 0
 
 
 def build_temp_project_name(cycle_id: str, suffix: str | None = None) -> str:
@@ -187,12 +202,15 @@ def main(argv: list[str]) -> int:
     # sentinel "token expired" finding instead. Verified necessary after
     # cycle 20260423T023057Z.
     probe_status, _ = _api(base_url, "GET", "/auth/me", token=token)
+    if probe_status != 200 and refresh_scheduler_token():
+        token = resolve_token(prefer_env=False)
+        probe_status, _ = _api(base_url, "GET", "/auth/me", token=token)
     if probe_status != 200:
         record_fail(
             "token_valid",
             "critical",
-            f"ORCH_TOKEN rejected by /auth/me (HTTP {probe_status}); skipping features audit to avoid 401-noise findings",
-            {"http_status": probe_status, "hint": "rotate ORCH_TOKEN in scheduler.env"},
+            f"ORCH_TOKEN rejected by /auth/me (HTTP {probe_status}) after refresh attempt; skipping features audit to avoid 401-noise findings",
+            {"http_status": probe_status, "hint": "ensure_orchestrator_token failed to refresh a valid scheduler token"},
         )
         write_report(report_path, cycle_id)
         return 0

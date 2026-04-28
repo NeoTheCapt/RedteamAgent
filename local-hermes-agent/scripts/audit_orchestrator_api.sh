@@ -264,14 +264,25 @@ fi
 
 auth_probe_code="$(_curl_authed_code "GET" "/auth/me")"
 if [[ "$auth_probe_code" != "200" ]]; then
+    # A stale scheduler token is recoverable: refresh from the orchestrator DB,
+    # update scheduler.env, and retry once before emitting a sentinel finding.
+    # This keeps normal post-restart cycles from reporting false critical API
+    # failures that disappear as soon as the token is rotated.
+    if ensure_orchestrator_token 2>/dev/null; then
+        _RESOLVED_TOKEN="${ORCH_TOKEN:-}"
+        export _RESOLVED_TOKEN
+        auth_probe_code="$(_curl_authed_code "GET" "/auth/me")"
+    fi
+fi
+if [[ "$auth_probe_code" != "200" ]]; then
     if [[ -z "$_RESOLVED_TOKEN" ]]; then
         reason="ORCH_TOKEN could not be resolved from env or scheduler.env"
     else
-        reason="ORCH_TOKEN rejected by /auth/me (HTTP $auth_probe_code); probably stale after orchestrator restart"
+        reason="ORCH_TOKEN rejected by /auth/me (HTTP $auth_probe_code) after refresh attempt; scheduler token may be unrecoverable"
     fi
     audit_append_finding "API-AUTH" "critical" "orch_api" \
         "$reason" \
-        "{\"endpoint\": \"GET /auth/me\", \"http_code\": \"$auth_probe_code\", \"hint\": \"rotate ORCH_TOKEN in scheduler.env and re-run\"}"
+        "{\"endpoint\": \"GET /auth/me\", \"http_code\": \"$auth_probe_code\", \"hint\": \"ensure_orchestrator_token failed to refresh a valid scheduler token\"}"
     audit_finalize_report
     echo "[BLOCKED] $reason; aborting API audit to avoid 401-noise findings" >&2
     exit 0
