@@ -78,6 +78,16 @@ def test_rendered_operator_prompt_prevents_respawn_starving_queue(tmp_path: Path
     assert "OSINT correlation must not become a liveness loop." in rendered
 
 
+def test_rendered_operator_prompt_blocks_failed_recall_replay_retirement(tmp_path: Path) -> None:
+    _render_repo(tmp_path)
+
+    rendered = (tmp_path / ".opencode" / "prompts" / "agents" / "operator.txt").read_text(encoding="utf-8")
+
+    assert "that failed replay is NOT terminal" in rendered
+    assert "MUST preserve another exact challenge-triggering action" in rendered
+    assert "It may not retire the case as clean and proceed to `report-writer`" in rendered
+
+
 def test_sensitive_data_skill_preserves_blocked_juice_shop_artifact_followups() -> None:
     skill = (AGENT_ROOT / "skills" / "sensitive-data-detection" / "SKILL.md").read_text(encoding="utf-8")
 
