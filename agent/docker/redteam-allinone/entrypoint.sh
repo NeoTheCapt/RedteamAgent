@@ -6,9 +6,35 @@ WORKSPACE_DIR="${REDTEAM_WORKSPACE_DIR:-/workspace}"
 
 mkdir -p "$WORKSPACE_DIR"
 
-if [ ! -e "$WORKSPACE_DIR/.opencode" ]; then
-  cp -a "$TEMPLATE_DIR/." "$WORKSPACE_DIR/"
-fi
+# Always re-sync the read-only template artifacts (scripts, skills,
+# references, .opencode, docker) from the image into the workspace.
+# Preserves user state: engagements/, .env, .env.example, auth.json,
+# pids/, scans/, tools/, downloads/, opencode databases mounted under
+# the XDG dirs.
+#
+# Why this isn't a one-shot copy: the previous "if [ ! -e
+# WORKSPACE/.opencode ]; then cp -a once" pattern locks in whatever
+# version of scripts/skills was current the FIRST time the container
+# booted. After agent/scripts/lib/container.sh got the
+# `runtime_mode == local` short-circuit in check_docker (newer than the
+# stale workspace's March 2026 copy), every restart still saw the
+# OLD container.sh shadowing the image's fix, which made check_docker
+# falsely fail with "Docker is not installed" inside the all-in-one
+# container. Re-sync per boot so image fixes propagate.
+SYNC_DIRS=(scripts skills references .opencode docker)
+for d in "${SYNC_DIRS[@]}"; do
+  if [ -e "$TEMPLATE_DIR/$d" ]; then
+    rm -rf "$WORKSPACE_DIR/$d"
+    cp -a "$TEMPLATE_DIR/$d" "$WORKSPACE_DIR/"
+  fi
+done
+
+# .env / .env.example are user-editable; only seed if absent.
+for f in .env .env.example; do
+  if [ ! -f "$WORKSPACE_DIR/$f" ] && [ -f "$TEMPLATE_DIR/$f" ]; then
+    cp "$TEMPLATE_DIR/$f" "$WORKSPACE_DIR/$f"
+  fi
+done
 
 cd "$WORKSPACE_DIR"
 
