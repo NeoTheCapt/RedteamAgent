@@ -44,6 +44,108 @@ def normalize_json_object(value: str | None, field_name: str) -> str:
     return json.dumps(payload, sort_keys=True)
 
 
+_ENV_KEY_PATTERN = re.compile(r"^[A-Z_][A-Z0-9_]*$")
+# Reserved at the API boundary — orchestrator owns these and silently
+# overwriting them via env_json would break run wiring.
+_RESERVED_ENV_KEYS = frozenset({
+    "ORCHESTRATOR_BASE_URL",
+    "ORCHESTRATOR_TOKEN",
+    "ORCHESTRATOR_PROJECT_ID",
+    "ORCHESTRATOR_RUN_ID",
+    "OPENCODE_HOME",
+})
+
+
+def _bad_request(detail: str) -> HTTPException:
+    return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail)
+
+
+def _parse_json_object(raw: str, field_name: str, example: str) -> dict:
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise _bad_request(f"{field_name} must be valid JSON: {exc.msg} at line {exc.lineno} col {exc.colno}") from exc
+    if not isinstance(payload, dict):
+        raise _bad_request(f"{field_name} must be a JSON object, e.g. {example}")
+    return payload
+
+
+def _validate_string_dict(value: object, field_path: str) -> None:
+    if not isinstance(value, dict):
+        raise _bad_request(f"{field_path} must be a JSON object of string values, got {type(value).__name__}")
+    for k, v in value.items():
+        if not isinstance(k, str):
+            raise _bad_request(f"{field_path}: keys must be strings")
+        if not isinstance(v, str):
+            raise _bad_request(f"{field_path}.{k} must be a string, got {type(v).__name__}")
+
+
+def validate_auth_json(value: str | None) -> str:
+    """Validate auth_json shape and return canonical JSON.
+
+    Schema (every top-level key is optional):
+      {
+        "cookies": Record<string,string>,
+        "headers": Record<string,string>,
+        "tokens":  Record<string,string>,
+        "discovered_credentials": list,
+        "validated_credentials":  list,
+        "credentials":            list,   // legacy compat
+      }
+    Extra top-level keys are passed through unchanged so future agent-side
+    additions don't have to be re-allowlisted here.
+    """
+    raw = (value or "").strip()
+    if not raw:
+        return ""
+    payload = _parse_json_object(
+        raw,
+        "auth_json",
+        '{"cookies":{},"headers":{"Authorization":"Bearer ..."},"tokens":{}}',
+    )
+    for key in ("cookies", "headers", "tokens"):
+        if key in payload:
+            _validate_string_dict(payload[key], f"auth_json.{key}")
+    for key in ("discovered_credentials", "validated_credentials", "credentials"):
+        if key in payload and not isinstance(payload[key], list):
+            raise _bad_request(
+                f"auth_json.{key} must be a JSON array, got {type(payload[key]).__name__}"
+            )
+    return json.dumps(payload, sort_keys=True)
+
+
+def validate_env_json(value: str | None) -> str:
+    """Validate env_json — POSIX env-var keys, scalar values.
+
+    Keys must match `[A-Z_][A-Z0-9_]*`. Values must be string / number / bool
+    (coerced to string when injected into the container at run time).
+    Reserved orchestrator keys (ORCHESTRATOR_*, OPENCODE_HOME) are rejected
+    so users cannot accidentally clobber the run wiring.
+    """
+    raw = (value or "").strip()
+    if not raw:
+        return ""
+    payload = _parse_json_object(
+        raw,
+        "env_json",
+        '{"HTTP_PROXY":"http://proxy:8080","MY_TARGET_USER":"alice"}',
+    )
+    for key, val in payload.items():
+        if not isinstance(key, str) or not _ENV_KEY_PATTERN.match(key):
+            raise _bad_request(
+                f"env_json key {key!r} must match [A-Z_][A-Z0-9_]* (POSIX env-var convention)"
+            )
+        if key in _RESERVED_ENV_KEYS:
+            raise _bad_request(
+                f"env_json key {key!r} is reserved by the orchestrator and cannot be overridden"
+            )
+        if not isinstance(val, (str, int, float, bool)) or isinstance(val, type(None)):
+            raise _bad_request(
+                f"env_json.{key} must be a string, number, or boolean, got {type(val).__name__}"
+            )
+    return json.dumps(payload, sort_keys=True)
+
+
 def create_project_for_user(
     user: User,
     name: str,
@@ -75,8 +177,8 @@ def create_project_for_user(
         small_model_id=small_model_id.strip(),
         api_key=api_key.strip(),
         base_url=base_url.strip(),
-        auth_json=normalize_json_object(auth_json, "auth_json"),
-        env_json=normalize_json_object(env_json, "env_json"),
+        auth_json=validate_auth_json(auth_json),
+        env_json=validate_env_json(env_json),
         crawler_json=normalize_json_object(crawler_json, "crawler_json") or "{}",
         parallel_json=normalize_json_object(parallel_json, "parallel_json") or "{}",
         agents_json=normalize_json_object(agents_json, "agents_json") or "{}",
@@ -124,12 +226,12 @@ def update_project_config_for_user(
     if clear_auth_json:
         next_auth_json = ""
     elif auth_json is not None and auth_json.strip():
-        next_auth_json = normalize_json_object(auth_json, "auth_json")
+        next_auth_json = validate_auth_json(auth_json)
 
     if clear_env_json:
         next_env_json = ""
     elif env_json is not None and env_json.strip():
-        next_env_json = normalize_json_object(env_json, "env_json")
+        next_env_json = validate_env_json(env_json)
 
     return db.update_project_config(
         project.id,
@@ -157,16 +259,30 @@ def update_project_for_user(user: User, project_id: int, **fields: str) -> Proje
     if not fields:
         return project
 
-    # Validate JSON fields
-    for json_field in ("auth_json", "env_json", "crawler_json", "parallel_json", "agents_json"):
+    # Validate JSON fields. auth_json and env_json get full schema checks
+    # (cookies/headers/tokens shape, env-var key pattern, reserved-key reject);
+    # the structured-editor fields (crawler/parallel/agents) just need to parse
+    # as a JSON object since their keys are emitted by purpose-built editors.
+    if "auth_json" in fields and fields["auth_json"]:
+        fields = dict(fields)
+        fields["auth_json"] = validate_auth_json(fields["auth_json"])
+    if "env_json" in fields and fields["env_json"]:
+        fields = dict(fields)
+        fields["env_json"] = validate_env_json(fields["env_json"])
+    for json_field in ("crawler_json", "parallel_json", "agents_json"):
         if json_field in fields and fields[json_field]:
             try:
-                json.loads(fields[json_field])
+                payload = json.loads(fields[json_field])
             except json.JSONDecodeError as exc:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=f"{json_field} must be valid JSON: {exc}",
                 ) from exc
+            if not isinstance(payload, dict):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"{json_field} must be a JSON object",
+                )
 
     # If name is being changed, regenerate slug and check for collision
     if "name" in fields and fields["name"].strip():

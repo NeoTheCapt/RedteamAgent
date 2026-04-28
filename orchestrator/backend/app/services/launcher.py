@@ -3597,6 +3597,32 @@ def _launch_runtime_container(
         if value:
             env_args.extend(["-e", f"{key}={value}"])
 
+    # Forward every user-supplied env_json key. The passthrough_keys allowlist
+    # only covers internal model/observation/log keys that the orchestrator
+    # itself populates; without this loop, custom vars like HTTP_PROXY,
+    # MY_TARGET_USER, or CAPTCHA_SOLVER_KEY would never reach the container.
+    # Reserved orchestrator keys are rejected at the API boundary
+    # (validate_env_json), so we don't need to re-check them here.
+    project_env_raw = (project.env_json or "").strip()
+    if project_env_raw:
+        try:
+            project_env_payload = json.loads(project_env_raw)
+        except json.JSONDecodeError:
+            project_env_payload = {}
+        if isinstance(project_env_payload, dict):
+            already_forwarded = set(passthrough_keys)
+            for key, value in sorted(project_env_payload.items()):
+                if not isinstance(key, str) or value is None:
+                    continue
+                if key in already_forwarded:
+                    continue
+                env_args.extend(["-e", f"{key}={value}"])
+
+    # Mount seed dir read-only at /workspace/.redteam-seed so the agent's
+    # `/engage` command can pick up auth.json without needing a host-side copy.
+    # Without this mount, `prepare_run_runtime` would write auth.json into a
+    # directory that the container never sees, and the agent silently falls
+    # through to the empty-auth fallback in agent/.opencode/commands/engage.md.
     docker_command = [
         "docker",
         "run",
@@ -3608,6 +3634,8 @@ def _launch_runtime_container(
         "host.docker.internal:host-gateway",
         "-v",
         f"{workspace_root_for(run)}:/workspace",
+        "-v",
+        f"{seed_root_for(run)}:/workspace/.redteam-seed:ro",
         "-v",
         f"{opencode_home_root_for(run)}:/root/.local/share/opencode",
         *env_args,

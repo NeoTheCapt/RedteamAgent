@@ -4,10 +4,10 @@ import { updateProject } from "../../lib/api";
 import {
   ModelFields,
   AuthFields,
+  EnvFields,
   CrawlerFields,
   ParallelFields,
   AgentsFields,
-  JsonTextareaFields,
 } from "./ProjectForms";
 import "./ProjectEditModal.css";
 
@@ -35,6 +35,11 @@ export function ProjectEditModal({ open, token, project, onClose, onSaved }: Pro
   const [draft, setDraft] = useState<ProjectUpdate>({});
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Track per-tab validation state. Editors that have schema validation
+  // (Auth, Env) report up here; Save is disabled while any tab is invalid.
+  const [authValid, setAuthValid] = useState(true);
+  const [envValid, setEnvValid] = useState(true);
+  const formValid = authValid && envValid;
 
   if (!open) return null;
 
@@ -92,13 +97,13 @@ export function ProjectEditModal({ open, token, project, onClose, onSaved }: Pro
           )}
           {tab === "auth" && (
             <AuthFields value={effective.auth_json ?? ""}
-              onChange={v => updateDraft({ auth_json: v })} />
+              onChange={v => updateDraft({ auth_json: v })}
+              onValidityChange={setAuthValid} />
           )}
           {tab === "env" && (
-            <JsonTextareaFields value={effective.env_json ?? ""}
+            <EnvFields value={effective.env_json ?? ""}
               onChange={v => updateDraft({ env_json: v })}
-              label="Env JSON"
-              placeholder='{"SOME_VAR": "value"}' />
+              onValidityChange={setEnvValid} />
           )}
           {tab === "crawler" && (
             <CrawlerFields value={effective.crawler_json}
@@ -120,7 +125,13 @@ export function ProjectEditModal({ open, token, project, onClose, onSaved }: Pro
           <button type="button" className="pem__cancel" onClick={onClose} disabled={saving}>
             Cancel
           </button>
-          <button type="button" className="pem__save" onClick={handleSave} disabled={saving}>
+          <button
+            type="button"
+            className="pem__save"
+            onClick={handleSave}
+            disabled={saving || !formValid}
+            title={!formValid ? "Fix validation errors in Auth / Env tabs to save" : undefined}
+          >
             {saving ? "Saving..." : "Save"}
           </button>
         </footer>
