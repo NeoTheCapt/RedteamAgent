@@ -61,9 +61,9 @@ Historical failed-run pitfall: the orchestrator API can keep returning old faile
 
 **2. agent_recall** — the **authoritative** peak is `local-hermes-agent/state/benchmark-metrics-history.json` → `targets.<target>.peak.metrics.challenge_recall` (populated monotonically by `benchmark_gate.py`). Do NOT scrape peak numbers from `recall-analysis/*.md` or `latest-context.md` — those contain ephemeral scoring from scan-optimizer Phase 2 that is not a real benchmark event. Older cycles incorrectly cited an ephemeral "peak 0.162" (18/111) for http://127.0.0.1:8000; always trust the current `benchmark-metrics-history.json` peak for the target instead of any hard-coded example value.
 
-**Low recall is a bug — but only when there is FRESH scored data this cycle.** When `last_metrics.challenge_recall` is below `peak.metrics.challenge_recall` AND `last_metrics.cycle_id` is THIS cycle (i.e. the local Juice Shop run completed and was just scored), that is a **real finding** to investigate and fix in Phase 2.
+**Low recall is a bug — but only when there is FRESH scored data this cycle.** When `last_metrics.challenge_recall` is below `peak.metrics.challenge_recall` AND `last_metrics.cycle_id` is THIS cycle (i.e. the local Juice Shop run completed and was just scored), that is a **real finding** to investigate and fix in Phase 2. If `benchmark-metrics-history.json` has not yet advanced but `latest-context.md` for THIS bound cycle shows `Local Challenge Score` with `status: scored`, treat that latest-context score as fresh current-cycle evidence and compare it to the authoritative history peak; record the history lag in evidence instead of skipping the recall finding.
 
-**If the local run is still mid-flight** (`last_metrics.cycle_id` is from a prior cycle, OR `latest-context.md` Local Challenge Score has `status: deferred`), do NOT emit a fresh recall finding this cycle. A half-finished run hasn't had time to solve everything it would naturally solve, so comparing partial recall to peak is meaningless — operator policy 2026-04-25: "跑一半就分析没有任何意义". Defer with reason `"local run still progressing; recall comparison reserved for the cycle in which the run completes"`. The controller only generates a `recall-analysis/<date>-<cycle>-regression.md` report when a new history entry lands, so the absence of that report is the fast signal that this cycle didn't score.
+**If the local run is still mid-flight** (`last_metrics.cycle_id` is from a prior cycle AND `latest-context.md` Local Challenge Score has `status: deferred` or no scored section), do NOT emit a fresh recall finding this cycle. A half-finished run hasn't had time to solve everything it would naturally solve, so comparing partial recall to peak is meaningless — operator policy 2026-04-25: "跑一半就分析没有任何意义". Defer with reason `"local run still progressing; recall comparison reserved for the cycle in which the run completes"`. The controller usually generates a `recall-analysis/<date>-<cycle>-regression.md` report when a new history entry lands, but latest-context scored data can briefly be fresher than history; check both before skipping.
 
 When you DO have a fresh scored run below peak, defer is ONLY legitimate when you can document, with evidence, that the regression is due to a factor outside repo code (e.g. target itself changed challenge set, benchmark endpoint unreachable). Do not defer with reason "no fresh benchmark available" — you are not verifying the fix by re-running the benchmark; you are shipping a root-cause fix.
 
@@ -94,6 +94,8 @@ Record the script's exit line verbatim in the finding's `evidence.timeline_check
 - Fixing a concrete bug in `scripts/append_surface_jsonl.sh` / `dispatcher.sh` / `case-dispatching/SKILL.md` that the log evidence shows caused the miss
 - Updating the skill's `## Checklist` to cover a class of challenges that regressed
 
+Agent prompt fix pitfall: `agent/.opencode/prompts/agents/operator.txt`, `agent/AGENTS.md`, and `agent/CLAUDE.md` are generated from `agent/operator-core.md`. When root-cause evidence points at operator behavior/prompt drift, edit `agent/operator-core.md`, run `bash agent/scripts/render-operator-prompts.sh`, and add/extend `orchestrator/backend/tests/test_operator_prompt_render.py` so the rendered prompt contract is tested. Do not hand-edit only a generated prompt file.
+
 Reverify_scope for recall fixes is `pending_new_run` (agent/skills/** changes only affect runs created AFTER the commit; auditor is forbidden from creating runs). Status stays `fixed` if the skill/prompt edit includes a concrete behavioral change backed by evidence from a regressed challenge; otherwise `deferred` with the specific blocker documented.
 
 **3. orch_api** — findings already in `audit-reports/<cycle_id>/api.json` (written by prep). Read and fold in.
@@ -123,7 +125,8 @@ Practical token-handling note:
 - Before declaring `token_invalid`, validate the exact in-page token with a browser-console fetch such as `fetch('/projects', {headers:{Authorization:'Bearer <token>'}})` and confirm whether the browser is truly seeing 200 vs 401.
 - If the displayed token is redacted, recover the full token from a non-redacted local artifact already produced by the scheduler/auditor flow (for example a prior cycle report or token helper artifact) before retrying the bootstrap.
 - Practical Hermes fallback when the shell can authenticate but browser/tool output redacts the token: start a tiny localhost helper that reads `local-hermes-agent/state/scheduler.env` and serves the raw token on `http://127.0.0.1:<port>/token`, then use `browser_console(expression=...)` to `fetch()` that endpoint inside the page and write `localStorage["redteam-orchestrator-session"]` without ever pasting the secret through model-visible text. Verify with an in-page authenticated fetch before reloading.
-- If the Hermes browser can reach the orchestrator port but cannot reach the helper port (`TypeError: Failed to fetch`), use a same-origin one-shot token handoff instead: from the shell, write the raw token to a temporary file under the already-served frontend dist (for example `orchestrator/frontend/dist/__hermes_session_token.txt`), use `browser_console` to `fetch('/__hermes_session_token.txt')`, set localStorage, verify `fetch('/projects', {Authorization})` returns 200, then immediately delete the temporary token file. Do not leave the token file on disk or stage it in git.
+- If Hermes browser can reach the orchestrator port but cannot reach the helper port (`TypeError: Failed to fetch`), use a same-origin one-shot token handoff instead: from the shell, write the raw token to a temporary file under the already-served frontend dist (for example `orchestrator/frontend/dist/__hermes_session_token.txt`), use `browser_console` to `fetch('/__hermes_session_token.txt')`, set localStorage, verify `fetch('/projects', {Authorization})` returns 200, then immediately delete the temporary token file. Do not leave the token file on disk or stage it in git.
+- If the scheduler token was valid earlier in the cycle but later starts returning 401, refresh it before declaring `token_invalid`: run `source local-hermes-agent/scripts/lib/orchestrator_auth.sh && ensure_orchestrator_token`, then repeat the one-shot token handoff from the updated `local-hermes-agent/state/scheduler.env`. This can happen when the orchestrator session rotates mid-audit.
 - `browser_vision` may fail model-side while still saving a screenshot path (for example `Unsupported value: 'temperature'` from the vision model). When it returns `success=false` with a `screenshot_path`, copy that file into `audit-reports/<cycle_id>/ui-screenshots/<check_id>-<short>.png` and use DOM/browser_snapshot evidence for the pass/fail decision.
 
 Once authenticated, run ALL 12 checks in order.
@@ -181,11 +184,19 @@ For EACH of the 12 checks, save a screenshot to `audit-reports/<cycle_id>/ui-scr
 - Practical verification notes from 20260424T003942Z:
   - `ui-01`: `browser_vision` can miss tiny sidebar edit/delete icons; confirm against `browser_snapshot` / accessibility tree before calling a failure.
   - `ui-09`: a screenshot alone cannot prove the Events stream is paused; verify the Pause→Resume toggle plus stable `.event-row` count/tail over a short timed wait.
-  - `ui-10`: after Tab-focusing a cases-table row and pressing Enter, confirm the side panel via DOM (`.case-side` / `aria-label="Case <id>"`) if the compact snapshot truncates the right pane.
+  - `ui-10`: after Tab-focusing a cases-table row and pressing Enter, confirm the side panel via DOM (`.cases__side` / `.case-side` / `aria-label="Case <id>"`) if the compact snapshot truncates the right pane. Current frontend wraps `CaseSidePanel` in `.cases__side`; checking only `.case-side` can produce a false failure even when keyboard activation worked.
   - `ui-02`/`ui-03`: hidden React `<dialog>` / confirm-dialog nodes may remain in the DOM with `display:none` after cancel/close. Do not treat `document.querySelector('.confirm-dialog')` existing as an active blocker, and do not diagnose ProjectEditModal tab switching while a visible dialog is still open. Check `getComputedStyle(dialog).display !== 'none'`, then re-open the modal and click tabs with a short wait before calling a failure.
   - `ui-07` reverify pitfall: the STOPPING state can be brief in real browsers even after the fix. After clicking STOP, grab `browser_snapshot` / DOM text immediately and only then take the screenshot; `browser_vision` alone can miss the amber STOPPING badge and capture the later STOPPED state instead.
   - If the authenticated shell reports `0 runs`, treat run-scoped checks (`ui-07` through `ui-12`) as `skipped`, not `failed`; still save screenshots for each skipped check and cite the `0 runs` shell evidence in `source-status.json`. **BUT**: 0 runs with a healthy orchestrator also means prep's `recover_abnormal_runs` failed to create a run this cycle — that IS a bug. Emit an `agent_bug` finding `recovery_did_not_create_run` citing the cycle's prep log (expect `no latest run exists` + `recover_abnormal_runs` attempts); do NOT silently absorb 0-runs as normal. The infrastructure gate in `run_cycle.sh` already aborts the cycle when Docker is down, so seeing 0 runs here means recovery logic failed for non-infrastructure reasons.
   - Browser accessibility refs can become stale or hit the project row instead of the tiny edit/delete icon after sidebar refreshes. For sidebar/modal UI checks, prefer DOM clicks via `browser_console` using stable `aria-label` values (for example `Edit project <slug>` / `Delete project <slug>`) and verify visible dialogs with `getComputedStyle(...)` before deciding pass/fail.
+  - React-controlled form fields may ignore direct `el.value = ...` assignment in `browser_console`, leaving buttons disabled even though DOM values briefly appear changed. Use the native property setter and dispatch `input` + `change`, for example:
+    ```js
+    const desc = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
+    desc.set.call(inputEl, 'new value');
+    inputEl.dispatchEvent(new Event('input', {bubbles: true}));
+    inputEl.dispatchEvent(new Event('change', {bubbles: true}));
+    ```
+    For `<select>`, use `HTMLSelectElement.prototype`.
 
 For each failed check, also append a finding to `findings-before.json` with `category: "orch_ui"` and include the same `check_id` in its `evidence` field.
 
@@ -275,7 +286,7 @@ For each finding in top-N (in severity order):
 
    If verify fails 3 times → revert the Edit, mark finding as `skipped: manual_review_needed`, move on.
 
-**4. Commit** with message: `fix(audit-<category>): <FND-id> <root_cause_short>` PLUS a 2-3 line body that captures: (a) what the pre-fix reproducer showed, (b) what file:line(s) changed, (c) what post-fix evidence (test output, grep result, scan re-run) confirms the fix. The 2-line subject + body convention exists because the cycle's `summary.md` is gitignored and `findings-after.json` is per-cycle; the commit body is the only place a future `git log` can stand-alone explain WHY the change landed. Empty bodies are forbidden — meta-audit on 2026-04-27 found 13/13 audit-* commits in a 20-commit window had body=0, leaving the rationale invisible to anyone not reading the cycle artifacts.
+**4. Commit** with message: `fix(audit-<category>): <FND-id> <root_cause_short>` PLUS a 2-3 line body that captures: (a) what the pre-fix reproducer showed, (b) what file:line(s) changed, (c) what post-fix evidence (test output, grep result, scan re-run) confirms the fix. Use separate `git commit -m "subject" -m "paragraph 1" -m "paragraph 2" ...` arguments (or a real commit-message file) for multi-paragraph bodies; do not embed escaped `\n` sequences inside a single `-m`, because they land literally in `git log` and fail the stand-alone-rationale intent. The 2-line subject + body convention exists because the cycle's `summary.md` is gitignored and `findings-after.json` is per-cycle; the commit body is the only place a future `git log` can stand-alone explain WHY the change landed. Empty bodies are forbidden — meta-audit on 2026-04-27 found 13/13 audit-* commits in a 20-commit window had body=0, leaving the rationale invisible to anyone not reading the cycle artifacts.
 
 ### Phase 3 — Static Re-verify (+ bounded backend runtime re-verify)
 
@@ -434,6 +445,8 @@ This is the imperfect-but-cheap substitute for actually dispatching a separate s
 
 Always write the review conclusion to `audit-reports/<cycle_id>/review.md` (whether or not cleanup commits were needed — the Discord summary pulls from this file). If issues were found, also make 1-2 small cleanup commits OR reopen the affected finding(s).
 
+**Concurrent HEAD movement pitfall:** periodically re-check `git rev-parse HEAD` and `git status --short`, especially before Phase 3/4. If another local actor commits during the audit, update `review.md`/`adversarial-review.md` to use the actual current `baseline_sha..HEAD` range. If that range now touches `orchestrator/backend/**/*.py`, run the bounded backend restart + reverify even if your own Phase 2 made no backend edits. Do not silently attribute concurrent non-audit commits to audit findings; list them separately in `auditor-state.json.notes` / review.md and keep the finding matrix empty unless a real finding maps to them.
+
 ## Hard Rules (read before every cycle)
 
 **Never** create new orchestrator runs during audit — not via UI, not via `POST /projects/{id}/runs`, not via `create_runs.sh`. The auditor is read-only over existing run history. To exercise UI controls that need a live run, pick the most recent non-initial run from `latest-runs.json`.
@@ -446,6 +459,7 @@ Always write the review conclusion to `audit-reports/<cycle_id>/review.md` (whet
 - Update `findings-after.json` status fields after each fix commit.
 - Watch your tool-call count: browser navigation + DOM reads + screenshots can consume 20-30 calls per UI check. If you're past turn 200 and still in Phase 1, stop and flush before doing another check.
 - When writing small Python checkpoint helpers across the controller's macOS Python versions, prefer `datetime.datetime.now(datetime.timezone.utc)` over `datetime.datetime.now(datetime.UTC)`; older local Python builds may not expose `datetime.UTC` and will crash after partially writing artifacts.
+- Avoid Python 3.10+ syntax in local controller scripts that may run under macOS Python 3.9 (for example `Path | None` type unions inside `build_context.sh` heredoc Python). Use unannotated parameters or `typing.Optional` instead, and run the exact local `python3 -m pytest ...` / script syntax check before committing.
 
 ## Hard Limits
 
@@ -479,9 +493,9 @@ When the cycle finishes, print the final summary **in English**. Include:
 
 Each confirmed fix gets its own commit: `fix(audit-<category>): <FND-id> <root_cause_short>` followed by a 2-3 line body (reproducer + file:line + post-fix evidence). See Phase 2 step 4 for the rationale; empty bodies are forbidden.
 
-Cleanup commits from Phase 4: `chore(audit-review): <description>` PLUS a 2+ line body explaining what the cleanup is and why (which finding/review note authorized it, what was removed/changed, what verifies the cleanup is safe). Meta-audit on 2026-04-28 caught a 1-line `chore(audit-review)` slipping through (`abbac6b`) — the original "body required only if non-trivial" carve-out was abused, so the rule is now uniform: every audit-namespace commit (`fix(audit-*)`, `chore(audit-review)`, `chore(audit-*)`) needs a non-empty body.
+Cleanup commits from Phase 4: `chore(audit-review): <description>` — body required only if the cleanup is non-trivial.
 
-If the verified fix lives under `local-hermes-agent/`, remember that path is gitignored in this repo. Stage those files with `git add -f ...` before running `git diff --check` / `git commit`, otherwise the cycle can appear clean while the actual auditor fix is still unstaged.
+If the verified fix lives under `local-openclaw/`, remember that path is gitignored in this repo. Stage those files with `git add -f ...` before running `git diff --check` / `git commit`, otherwise the cycle can appear clean while the actual auditor fix is still unstaged.
 
 Do not push.
 
