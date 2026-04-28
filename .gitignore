@@ -33,7 +33,7 @@
 docs/**
 !docs/
 !docs/redteam-agent-demo-fast.gif
-!docs/screenshot-20260331-181406.png
+!docs/screenshot-20260429-045700.png
 /tmp/
 .venv/
 /tmp-*/
@@ -119,7 +119,7 @@ screenshots/
 *.gif
 *.bmp
 !docs/redteam-agent-demo-fast.gif
-!docs/screenshot-20260331-181406.png
+!docs/screenshot-20260429-045700.png
 
 # ============================================
 # Generated scripts & payloads

@@ -24,7 +24,7 @@ An autonomous red team simulation agent that works with **Claude Code**, **OpenC
 
 ![RedTeam Agent demo (fast)](docs/redteam-agent-demo-fast.gif)
 
-![RedTeam Agent GUI screenshot](docs/screenshot-20260331-181406.png)
+![RedTeam Agent GUI screenshot](docs/screenshot-20260429-045700.png)
 
 **Key Features:**
 - **Multi-CLI support** — works with Claude Code, OpenCode, and Codex out of the box

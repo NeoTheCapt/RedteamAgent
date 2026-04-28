@@ -24,7 +24,7 @@ RedTeam Agent 是一个支持 **Claude Code**、**OpenCode** 和 **Codex** 的�
 
 ![RedTeam Agent demo](docs/redteam-agent-demo-fast.gif)
 
-![RedTeam Agent GUI 操作界面截图](docs/screenshot-20260331-181406.png)
+![RedTeam Agent GUI 操作界面截图](docs/screenshot-20260429-045700.png)
 
 **核心特性：**
 - **多 CLI 支持** — 开箱即用支持 Claude Code、OpenCode、Codex
