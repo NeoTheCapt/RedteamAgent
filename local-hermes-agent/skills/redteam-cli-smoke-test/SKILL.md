@@ -250,31 +250,55 @@ Goal: scan `$CONSOLE_LOG` for known bug signatures.
 ```bash
 CONSOLE_LOG="${CONSOLE_LOG:-$TEST_DIR/last-run-console.log}"
 
+# Helper: opencode logs every permission evaluation as one giant line that
+# embeds the agent's intended bash/grep argument verbatim — including
+# literal "ERROR", "ratelimit", "kong", etc. Counting raw matches against
+# those lines produced 4+10 false positives in the 2026-04-28 web3.okx.com
+# smoke. Exclude permission-evaluator lines AND the agent's own python
+# print(f'…') / `out[..]=[f'ERROR: …']` literals up front.
+DENOISED="$(sed -E \
+    -e '/^INFO.*service=permission/d' \
+    -e '/print\(f.*ERROR/d' \
+    -e "/=\\[f'ERROR/d" \
+    "$CONSOLE_LOG")"
+
 # D1: Python tracebacks (orchestrator/launcher/dispatcher errors)
-TRACEBACKS=$(grep -cE '^Traceback \(most recent call last\)' "$CONSOLE_LOG")
+TRACEBACKS=$(printf '%s\n' "$DENOISED" | grep -cE '^Traceback \(most recent call last\)')
 
 # D2: ERROR/FATAL log lines (excluding routine `error_count: 0` JSON noise)
-ERR_FATAL=$(grep -cE '\b(ERROR|FATAL)\b' "$CONSOLE_LOG" \
+ERR_FATAL=$(printf '%s\n' "$DENOISED" | grep -cE '\b(ERROR|FATAL)\b' \
             | grep -vE 'error_count":\s*0|errors":\s*\[\]')
 
 # D3: docker-tool failures (run_tool returns non-zero, container exited)
-DOCKER_FAILS=$(grep -cE 'docker:.*Error|docker (run|exec) .* exited|run_tool.*exit code [^0]' "$CONSOLE_LOG")
+DOCKER_FAILS=$(printf '%s\n' "$DENOISED" | grep -cE 'docker:.*Error|docker (run|exec) .* exited|run_tool.*exit code [^0]')
 
-# D4: model API errors (rate limit, auth, provider down)
-MODEL_API_ERR=$(grep -cE 'rate.?limit|invalid_api_key|unauthorized|401 Unauthorized|503 Service Unavailable|model_not_found' "$CONSOLE_LOG")
+# D4: model API errors (rate limit, auth, provider down).
+# Anchor to opencode/server emit lines so agent grep arguments containing
+# the same words don't false-positive (e.g., agent shell `grep ratelimit`
+# on the target's own kong/k8s logs).
+MODEL_API_ERR=$(printf '%s\n' "$DENOISED" \
+    | grep -E '^(INFO|WARN|ERROR)' \
+    | grep -cE 'rate.?limit(ed|_exceeded)?|invalid_api_key|401 Unauthorized\b|503 Service Unavailable\b|model_not_found')
 
 # D5: subagent dispatch failures (operator sent task() but child errored)
-DISPATCH_FAILS=$(grep -cE 'subagent.*error|task\(\).*failed|agent did not return' "$CONSOLE_LOG")
+DISPATCH_FAILS=$(printf '%s\n' "$DENOISED" | grep -cE 'subagent.*error|task\(\).*failed|agent did not return')
 
-# D6: queue stalls / orphaned cases (the bug class the streaming pipeline was
-# designed to prevent — recurrence is itself a smoke failure)
-QUEUE_STALL=$(grep -cE 'incomplete_stop|queue_incomplete|queue_stalled|orphan(ed)? processing' "$CONSOLE_LOG")
+# D6: queue stalls / orphaned cases. Note: queue_incomplete by itself is
+# now a legitimate stop_reason emitted by the operator when an unauthenticated
+# run hits a wallet-gated endpoint — only count it as a STALL when it
+# appears outside the operator's explicit stop announcement (either
+# `stop_reason=…` log entry, or a `[operator] Stop reason: …` console
+# echo of the same).
+QUEUE_STALL=$(printf '%s\n' "$DENOISED" \
+    | grep -E 'incomplete_stop|queue_incomplete|queue_stalled|orphan(ed)? processing' \
+    | grep -vE 'stop_reason=|\[operator\] Stop reason:' \
+    | wc -l | tr -d ' ')
 
 # D7: missing-script warnings (rename loss like run_context_snapshot.py 2026-04-27)
-MISSING_SCRIPT=$(grep -cE 'warning: missing .*\.py|warning: missing .*\.sh|No such file or directory.*scripts/' "$CONSOLE_LOG")
+MISSING_SCRIPT=$(printf '%s\n' "$DENOISED" | grep -cE 'warning: missing .*\.py|warning: missing .*\.sh|No such file or directory.*scripts/')
 
 # D8: model reconfiguration prompt (the bug this skill exists to catch)
-MODEL_PROMPT=$(grep -cE 'select.*provider|configure.*model|choose a model' "$CONSOLE_LOG")
+MODEL_PROMPT=$(printf '%s\n' "$DENOISED" | grep -cE 'select.*provider|configure.*model|choose a model')
 
 # Summarize
 cat <<EOF

@@ -479,7 +479,7 @@ When the cycle finishes, print the final summary **in English**. Include:
 
 Each confirmed fix gets its own commit: `fix(audit-<category>): <FND-id> <root_cause_short>` followed by a 2-3 line body (reproducer + file:line + post-fix evidence). See Phase 2 step 4 for the rationale; empty bodies are forbidden.
 
-Cleanup commits from Phase 4: `chore(audit-review): <description>` — body required only if the cleanup is non-trivial.
+Cleanup commits from Phase 4: `chore(audit-review): <description>` PLUS a 2+ line body explaining what the cleanup is and why (which finding/review note authorized it, what was removed/changed, what verifies the cleanup is safe). Meta-audit on 2026-04-28 caught a 1-line `chore(audit-review)` slipping through (`abbac6b`) — the original "body required only if non-trivial" carve-out was abused, so the rule is now uniform: every audit-namespace commit (`fix(audit-*)`, `chore(audit-review)`, `chore(audit-*)`) needs a non-empty body.
 
 If the verified fix lives under `local-openclaw/`, remember that path is gitignored in this repo. Stage those files with `git add -f ...` before running `git diff --check` / `git commit`, otherwise the cycle can appear clean while the actual auditor fix is still unstaged.
 
