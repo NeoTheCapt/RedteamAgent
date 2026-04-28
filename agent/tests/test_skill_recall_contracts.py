@@ -82,7 +82,7 @@ def test_sensitive_data_skill_names_artifact_recall_targets_before_closure() -> 
     ]:
         assert challenge in skill
     assert "If the named challenge remains unsolved" in skill
-    assert "requeue the exact artifact, route, or consumer action" in skill
+    assert "requeue the exact artifact, route, bypass, or consumer action" in skill
 
 
 def test_xss_skill_requires_juice_shop_browser_flow_recall_contract() -> None:
@@ -124,6 +124,14 @@ def test_operator_core_blocks_final_report_until_ctf_recall_closure() -> None:
         "Score Board",
         "Security Policy",
         "Confidential Document",
+        "Deprecated Interface",
+        "Easter Egg",
+        "Forgotten Developer Backup",
+        "Forgotten Sales Backup",
+        "Misplaced Signature File",
+        "Poison Null Byte",
+        "NFT Takeover",
+        "Web3 Sandbox",
         "Five-Star Feedback",
         "Password Strength",
         "Database Schema",
@@ -133,6 +141,9 @@ def test_operator_core_blocks_final_report_until_ctf_recall_closure() -> None:
         assert challenge in core
     assert "low-friction recall branch" in core
     assert "canonical public document paths" in core
+    assert "exact peak-solved artifact branches" in core
+    assert "exact path/bypass candidate" in core
+    assert "NFT/contract consumer separately" in core
     assert "CTF recall closure is satisfied" in core
     assert "recent peak/baseline" in core
     assert "must return either solved-state evidence or `REQUEUE`" in core
