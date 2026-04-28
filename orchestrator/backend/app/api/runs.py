@@ -153,6 +153,35 @@ class ObservedPathResponse(BaseModel):
     source: str
 
 
+TERMINAL_RUN_STATUSES = {"completed", "failed", "stopped"}
+
+
+def _terminal_reason_code(run: Run, metadata: dict[str, object]) -> str | None:
+    reason_code = metadata.get("stop_reason_code")
+    if isinstance(reason_code, str) and reason_code.strip():
+        return reason_code
+    if run.status in TERMINAL_RUN_STATUSES:
+        return "terminal_reason_unavailable"
+    return None
+
+
+def _terminal_reason_text(run: Run, metadata: dict[str, object]) -> str | None:
+    reason_text = metadata.get("stop_reason_text")
+    if isinstance(reason_text, str) and reason_text.strip():
+        return reason_text
+    if run.status not in TERMINAL_RUN_STATUSES:
+        return None
+
+    current_summary = metadata.get("current_summary")
+    if isinstance(current_summary, str) and current_summary.strip() and current_summary.strip() != "Run failed.":
+        return current_summary.strip()
+
+    return (
+        f"Run reached terminal status {run.status!r}, but run.json does not contain "
+        "stop_reason_text; inspect run.json and runtime/process.log for root-cause evidence."
+    )
+
+
 def _run_response(run: Run) -> RunResponse:
     metadata = {}
     metadata_path = Path(run.engagement_root) / "run.json"
@@ -171,8 +200,8 @@ def _run_response(run: Run) -> RunResponse:
         created_at=run.created_at,
         updated_at=run.updated_at,
         ended_at=metadata.get("ended_at") if isinstance(metadata.get("ended_at"), str) else None,
-        stop_reason_code=metadata.get("stop_reason_code") if isinstance(metadata.get("stop_reason_code"), str) else None,
-        stop_reason_text=metadata.get("stop_reason_text") if isinstance(metadata.get("stop_reason_text"), str) else None,
+        stop_reason_code=_terminal_reason_code(run, metadata),
+        stop_reason_text=_terminal_reason_text(run, metadata),
     )
 
 

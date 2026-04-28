@@ -69,6 +69,43 @@ def test_create_run_and_list_project_runs(isolate_data_dir):
     assert runs_response.json() == [run_payload]
 
 
+def test_terminal_run_without_stop_reason_gets_auditable_fallback(isolate_data_dir):
+    client = TestClient(app)
+    token = register_and_login(client, "alice-terminal-fallback")
+    project = create_project(client, token, "Terminal Fallback")
+
+    create_run = client.post(
+        f"/projects/{project['id']}/runs",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"target": "https://example.com"},
+    )
+    assert create_run.status_code == 201
+    run_payload = create_run.json()
+    db.update_run_status(run_payload["id"], "failed")
+
+    # Regression reproducer for audit cycle 20260428T065501Z: run #966 was
+    # failed in the DB, but run.json had neither stop_reason_code nor
+    # stop_reason_text, so the runs API returned null and the auditor had no
+    # primary diagnosis field to report.
+    run_json = Path(run_payload["engagement_root"]) / "run.json"
+    metadata = json.loads(run_json.read_text(encoding="utf-8"))
+    metadata.pop("stop_reason_code", None)
+    metadata.pop("stop_reason_text", None)
+    metadata["current_summary"] = "Run failed."
+    run_json.write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    runs_response = client.get(
+        f"/projects/{project['id']}/runs",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert runs_response.status_code == 200
+    failed_run = runs_response.json()[0]
+    assert failed_run["status"] == "failed"
+    assert failed_run["stop_reason_code"] == "terminal_reason_unavailable"
+    assert "run.json does not contain stop_reason_text" in failed_run["stop_reason_text"]
+
+
 def test_run_status_transitions_require_project_ownership():
     client = TestClient(app)
 
