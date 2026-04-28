@@ -82,7 +82,8 @@ def test_sensitive_data_skill_names_artifact_recall_targets_before_closure() -> 
     ]:
         assert challenge in skill
     assert "If the named challenge remains unsolved" in skill
-    assert "requeue the exact artifact, route, bypass, or consumer action" in skill
+    assert "requeue the exact artifact, route, or consumer action" in skill
+    assert "exact artifact, route, bypass, or consumer action" in skill
 
 
 def test_xss_skill_requires_juice_shop_browser_flow_recall_contract() -> None:
