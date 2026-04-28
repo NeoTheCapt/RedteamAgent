@@ -17,15 +17,15 @@ Periodic cycles currently run from the Hermes-local controller path `~/dev/proje
 
 Read before starting:
 - Prefer the concrete cycle binding from the user/controller for repo root, state dir, and audit report dir. Newer Hermes cycles may use `local-hermes-agent/...` while older notes use `local-openclaw/...`; do not hard-code one when the prompt supplies the other.
-- `/Users/cis/dev/projects/RedteamOpencode/local-openclaw/requirements/redteam-auditor-hermes.md` (or the controller-specified Hermes equivalent)
-- `/Users/cis/dev/projects/RedteamOpencode/local-openclaw/state/auditor-state.json` (if present — prior cycle state; use `local-hermes-agent/state/auditor-state.json` when supplied by cycle binding)
-- `/Users/cis/dev/projects/RedteamOpencode/local-openclaw/state/latest-context.md` (prep wrote this; use `local-hermes-agent/state/latest-context.md` when supplied)
-- `/Users/cis/dev/projects/RedteamOpencode/local-openclaw/audit-reports/<cycle_id>/*.json` (where cycle_id comes from context; use the bound audit report dir when supplied)
+- `/Users/cis/dev/projects/RedteamOpencode/local-hermes-agent/requirements/redteam-auditor-hermes.md` (or the controller-specified Hermes equivalent)
+- `/Users/cis/dev/projects/RedteamOpencode/local-hermes-agent/state/auditor-state.json` (if present — prior cycle state; use `local-hermes-agent/state/auditor-state.json` when supplied by cycle binding)
+- `/Users/cis/dev/projects/RedteamOpencode/local-hermes-agent/state/latest-context.md` (prep wrote this; use `local-hermes-agent/state/latest-context.md` when supplied)
+- `/Users/cis/dev/projects/RedteamOpencode/local-hermes-agent/audit-reports/<cycle_id>/*.json` (where cycle_id comes from context; use the bound audit report dir when supplied)
 
 Prep scripts to call when needed:
-- `/Users/cis/dev/projects/RedteamOpencode/local-openclaw/scripts/create_runs.sh`
-- `/Users/cis/dev/projects/RedteamOpencode/local-openclaw/scripts/build_context.sh`
-- `/Users/cis/dev/projects/RedteamOpencode/local-openclaw/scripts/update_cycle_state.sh`
+- `/Users/cis/dev/projects/RedteamOpencode/local-hermes-agent/scripts/create_runs.sh`
+- `/Users/cis/dev/projects/RedteamOpencode/local-hermes-agent/scripts/build_context.sh`
+- `/Users/cis/dev/projects/RedteamOpencode/local-hermes-agent/scripts/update_cycle_state.sh`
 
 ## Fixed Workflow
 
@@ -47,7 +47,7 @@ Sources:
 
 **1. agent_bug** — inspect recent engagement runs. The cycle prep now preserves failed runs' engagement directories (KEEP_TERMINAL_RUNS=1), so the DB rows AND the on-disk evidence (log.md, run.json, cases.db, findings.md) are BOTH available. Sources to check, in priority order:
 
-a. **Orchestrator runs API** — fetch `GET /projects/<PROJECT_ID>/runs` (token in `local-openclaw/state/scheduler.env::ORCH_TOKEN`). For every run whose `status` is NOT in {`queued`, `running`, `completed`}, emit an `agent_bug` finding citing `run.id`, `run.target`, `run.status`, and `run.stop_reason_text` (full text, not truncated — the stop reason is the primary diagnosis). Each failed/stopped/error run should produce exactly one finding unless its stop_reason_text matches a different category (e.g., an `orch_feature` code bug surfaced via a run failure).
+a. **Orchestrator runs API** — fetch `GET /projects/<PROJECT_ID>/runs` (token in `local-hermes-agent/state/scheduler.env::ORCH_TOKEN`). For every run whose `status` is NOT in {`queued`, `running`, `completed`}, emit an `agent_bug` finding citing `run.id`, `run.target`, `run.status`, and `run.stop_reason_text` (full text, not truncated — the stop reason is the primary diagnosis). Each failed/stopped/error run should produce exactly one finding unless its stop_reason_text matches a different category (e.g., an `orch_feature` code bug surfaced via a run failure).
 b. **Engagement log.md** — for each failed run, open `<run.engagement_root>/workspace/engagements/*/log.md` and tail the last ~150 lines. Look for Python tracebacks, assertion errors, `stop_reason_code=runtime_error` markers, `REQUEUE_CANDIDATE` loops, or dispatcher-visible errors that clarify WHY the stop reason fired. Attach the top-N lines as `evidence` on the finding.
 c. **run.json** — grep for `stop_reason_code: runtime_error` or any `stop_reason_code` value other than `completed` in any `run.json` under recent engagement roots. This catches runs where the orchestrator DB row might have been cleaned but the engagement directory was preserved.
 d. **Workspace env** — check `workspace/.env` presence and content in the latest engagement root; missing expected keys is itself a finding, but evaluate them against project config: `KATANA_CRAWL_DEPTH` and provider/model env should be present when configured, while `REDTEAM_DISABLED_AGENTS` is only expected when `agents_json` actually disables one or more agents (it is correctly absent when all agents are enabled).
@@ -59,7 +59,7 @@ When a failed run's stop_reason_text clearly points at a product bug (e.g. `no s
 
 Historical failed-run pitfall: the orchestrator API can keep returning old failed runs forever. If a failed run's `created_at`/`ended_at` predates the current baseline and the same fingerprint was already `status: fixed` in the immediately prior cycle, do **not** make a duplicate/category-mismatched fix just to silence the old row. Record the finding in Phase 1 as required, then in Phase 2 mark it `deferred` or `reclassified` with `reason` documenting the prior fix commit and absence/presence of newer reproductions. Only edit product code if a post-baseline run reproduces the same stop reason or the prior fix clearly did not cover the root cause.
 
-**2. agent_recall** — the **authoritative** peak is `local-openclaw/state/benchmark-metrics-history.json` → `targets.<target>.peak.metrics.challenge_recall` (populated monotonically by `benchmark_gate.py`). Do NOT scrape peak numbers from `recall-analysis/*.md` or `latest-context.md` — those contain ephemeral scoring from scan-optimizer Phase 2 that is not a real benchmark event. Older cycles incorrectly cited an ephemeral "peak 0.162" (18/111) for http://127.0.0.1:8000; always trust the current `benchmark-metrics-history.json` peak for the target instead of any hard-coded example value.
+**2. agent_recall** — the **authoritative** peak is `local-hermes-agent/state/benchmark-metrics-history.json` → `targets.<target>.peak.metrics.challenge_recall` (populated monotonically by `benchmark_gate.py`). Do NOT scrape peak numbers from `recall-analysis/*.md` or `latest-context.md` — those contain ephemeral scoring from scan-optimizer Phase 2 that is not a real benchmark event. Older cycles incorrectly cited an ephemeral "peak 0.162" (18/111) for http://127.0.0.1:8000; always trust the current `benchmark-metrics-history.json` peak for the target instead of any hard-coded example value.
 
 **Low recall is a bug — but only when there is FRESH scored data this cycle.** When `last_metrics.challenge_recall` is below `peak.metrics.challenge_recall` AND `last_metrics.cycle_id` is THIS cycle (i.e. the local Juice Shop run completed and was just scored), that is a **real finding** to investigate and fix in Phase 2.
 
@@ -70,7 +70,7 @@ When you DO have a fresh scored run below peak, defer is ONLY legitimate when yo
 **Timeline sanity check — MANDATORY before attributing cause.** If you think a specific commit caused the recall regression, run:
 
 ```bash
-python3 local-openclaw/scripts/check_commit_predates_regression.py \
+python3 local-hermes-agent/scripts/check_commit_predates_regression.py \
     --commit <suspect_sha> \
     --target <target_url_key_in_history>
 ```
@@ -82,7 +82,7 @@ Prior-cycle example of the failure this rule prevents: cycle `20260424T041427Z` 
 Record the script's exit line verbatim in the finding's `evidence.timeline_check` field so the validator can confirm the check ran.
 
 **Investigation checklist** (produce at least two of these before deciding what to edit):
-- Run `python3 local-openclaw/scripts/recall_regression_report.py --target http://127.0.0.1:8000` and read its output (written under `local-openclaw/recall-analysis/<date>-<cycle_id>-regression.md`). The report mechanically diffs the current solved-challenge set against the peak solved set stored in `benchmark-metrics-history.json` — no human interpretation, just names. If the helper exits 2 with "peak has no solved_challenge_names", the peak predates the solved-list persistence that `benchmark_gate.py` added on 2026-04-25; in that case fall back to reading the newest hand-written `local-openclaw/recall-analysis/*.md` (last one dated 2026-04-13) as a stale reference and note the gap in your finding.
+- Run `python3 local-hermes-agent/scripts/recall_regression_report.py --target http://127.0.0.1:8000` and read its output (written under `local-hermes-agent/recall-analysis/<date>-<cycle_id>-regression.md`). The report mechanically diffs the current solved-challenge set against the peak solved set stored in `benchmark-metrics-history.json` — no human interpretation, just names. If the helper exits 2 with "peak has no solved_challenge_names", the peak predates the solved-list persistence that `benchmark_gate.py` added on 2026-04-25; in that case fall back to reading the newest hand-written `local-hermes-agent/recall-analysis/*.md` (last one dated 2026-04-13) as a stale reference and note the gap in your finding.
 - For each regressed challenge, `grep -rn "<challenge id/name>" agent/skills/` to find which skill is supposed to handle it. Did that skill's prompt or methodology change recently? `git log -p agent/skills/<name>/SKILL.md`.
 - Read 2–3 recent engagements' `log.md` for the regressed challenge category. Is the right subagent being dispatched? Is the fuzzer/vulnerability-analyst actually hitting the right surface?
 - Check `agent/.opencode/prompts/*` for drift in dispatch rules (surface-type → agent mapping).
@@ -107,7 +107,7 @@ Reverify_scope for recall fixes is `pending_new_run` (agent/skills/** changes on
 **6. orch_ui** — YOU do this with the `browser` toolset (Hermes Playwright integration). If `browser` isn't in the session's toolsets, record `orch_ui_unavailable` for every check; do NOT pretend to do them from the CLI.
 
 **UI auth bootstrap (REQUIRED before any UI check).** The orchestrator frontend reads its session from `localStorage["redteam-orchestrator-session"]` = `{"token": "...", "username": "admin"}`. There is no shared password — do NOT attempt form-based login. Instead:
-1. Read `ORCH_TOKEN` from `local-openclaw/state/scheduler.env` (line starts with `ORCH_TOKEN=`).
+1. Read `ORCH_TOKEN` from `local-hermes-agent/state/scheduler.env` (line starts with `ORCH_TOKEN=`).
 2. Navigate to `http://127.0.0.1:18000/`.
 3. Inject the session via the browser page-eval facility (in Hermes this is `browser_console(expression=...)`):
    ```js
@@ -122,7 +122,7 @@ Practical token-handling note:
 - Hermes file/terminal output may redact `ORCH_TOKEN` as a prefix/suffix preview (for example `abc...xyz`). Do NOT paste that redacted display string into `localStorage`; it will 401 in-browser even though shell commands that source the env file can still authenticate with the full hidden token.
 - Before declaring `token_invalid`, validate the exact in-page token with a browser-console fetch such as `fetch('/projects', {headers:{Authorization:'Bearer <token>'}})` and confirm whether the browser is truly seeing 200 vs 401.
 - If the displayed token is redacted, recover the full token from a non-redacted local artifact already produced by the scheduler/auditor flow (for example a prior cycle report or token helper artifact) before retrying the bootstrap.
-- Practical Hermes fallback when the shell can authenticate but browser/tool output redacts the token: start a tiny localhost helper that reads `local-openclaw/state/scheduler.env` and serves the raw token on `http://127.0.0.1:<port>/token`, then use `browser_console(expression=...)` to `fetch()` that endpoint inside the page and write `localStorage["redteam-orchestrator-session"]` without ever pasting the secret through model-visible text. Verify with an in-page authenticated fetch before reloading.
+- Practical Hermes fallback when the shell can authenticate but browser/tool output redacts the token: start a tiny localhost helper that reads `local-hermes-agent/state/scheduler.env` and serves the raw token on `http://127.0.0.1:<port>/token`, then use `browser_console(expression=...)` to `fetch()` that endpoint inside the page and write `localStorage["redteam-orchestrator-session"]` without ever pasting the secret through model-visible text. Verify with an in-page authenticated fetch before reloading.
 - If the Hermes browser can reach the orchestrator port but cannot reach the helper port (`TypeError: Failed to fetch`), use a same-origin one-shot token handoff instead: from the shell, write the raw token to a temporary file under the already-served frontend dist (for example `orchestrator/frontend/dist/__hermes_session_token.txt`), use `browser_console` to `fetch('/__hermes_session_token.txt')`, set localStorage, verify `fetch('/projects', {Authorization})` returns 200, then immediately delete the temporary token file. Do not leave the token file on disk or stage it in git.
 - `browser_vision` may fail model-side while still saving a screenshot path (for example `Unsupported value: 'temperature'` from the vision model). When it returns `success=false` with a `screenshot_path`, copy that file into `audit-reports/<cycle_id>/ui-screenshots/<check_id>-<short>.png` and use DOM/browser_snapshot evidence for the pass/fail decision.
 
@@ -236,7 +236,7 @@ Examples:
 
 The fingerprint is the cross-cycle join key. Use it (not `FND-XXX`) in persistent-bug detection below.
 
-**Persistent-bug detection** (do this BEFORE fixing any finding): for each finding you're about to fix, grep `local-openclaw/audit-reports/*/findings-after.json` (last 3 cycles) for a prior `status: fixed` entry with the same `fingerprint` (primary key) OR same `check_id` OR same `category` + substring-match `summary` (fallback keys for older cycles that didn't carry fingerprints). If found, the prior fix didn't work:
+**Persistent-bug detection** (do this BEFORE fixing any finding): for each finding you're about to fix, grep `local-hermes-agent/audit-reports/*/findings-after.json` (last 3 cycles) for a prior `status: fixed` entry with the same `fingerprint` (primary key) OR same `check_id` OR same `category` + substring-match `summary` (fallback keys for older cycles that didn't carry fingerprints). If found, the prior fix didn't work:
 - Bump severity one level (medium → high, high → critical).
 - In `evidence`, enumerate prior commit SHAs that claimed to fix it.
 - For STOP / run-status / reconciler bugs: do NOT just patch the frontend optimistic update path. Check all of these before writing code:
@@ -294,9 +294,9 @@ For each finding in top-N (in severity order):
 **Static re-verify (always):**
 
 1. Re-run the three prep scripts against whatever is currently live:
-   - `bash local-openclaw/scripts/audit_orchestrator_api.sh <cycle_id>`
-   - `bash local-openclaw/scripts/audit_orchestrator_logs.sh <cycle_id>`
-   - `python3 local-openclaw/scripts/audit_orchestrator_features.py <cycle_id>`
+   - `bash local-hermes-agent/scripts/audit_orchestrator_api.sh <cycle_id>`
+   - `bash local-hermes-agent/scripts/audit_orchestrator_logs.sh <cycle_id>`
+   - `python3 local-hermes-agent/scripts/audit_orchestrator_features.py <cycle_id>`
 
    **Scope of the "no-new-runs" binding** (clarified 2026-04-25 after a Docker-down cycle misapplied it):
 
@@ -326,9 +326,9 @@ for i in $(seq 1 10); do
   sleep 1
 done
 # Re-run the prep scripts ONE more time against the fresh uvicorn.
-bash local-openclaw/scripts/audit_orchestrator_api.sh <cycle_id>-reverify
-bash local-openclaw/scripts/audit_orchestrator_logs.sh <cycle_id>-reverify
-python3 local-openclaw/scripts/audit_orchestrator_features.py <cycle_id>-reverify
+bash local-hermes-agent/scripts/audit_orchestrator_api.sh <cycle_id>-reverify
+bash local-hermes-agent/scripts/audit_orchestrator_logs.sh <cycle_id>-reverify
+python3 local-hermes-agent/scripts/audit_orchestrator_features.py <cycle_id>-reverify
 ```
 
 Outcome goes into `findings-after.json`: each finding previously marked `pending_restart` now has its `reverify_scope` updated to either `"runtime_restart_passed"` or `"runtime_restart_still_failing"`. Findings that still fail after restart should be reopened (status → `open`) — the fix did not actually work.
@@ -368,9 +368,9 @@ For EACH finding in `findings-after.json` with `status: "fixed"`, run these 4 su
 3. **commit_msg_finding_id** — the commit message's `FND-XXX` token must match a finding id that exists in this cycle's `findings-before.json`. A commit that claims `FND-007` but findings-before only defines `FND-001..FND-003` → FAIL.
 
 4. **re_run_source** — actually re-run the specific source that surfaced the finding, regardless of which category:
-   - `orch_api` → `bash local-openclaw/scripts/audit_orchestrator_api.sh <cycle_id>`; the finding's API endpoint must now pass
+   - `orch_api` → `bash local-hermes-agent/scripts/audit_orchestrator_api.sh <cycle_id>`; the finding's API endpoint must now pass
    - `orch_log` → re-tail the log pattern that triggered; must no longer match
-   - `orch_feature` → `python3 local-openclaw/scripts/audit_orchestrator_features.py <cycle_id>`
+   - `orch_feature` → `python3 local-hermes-agent/scripts/audit_orchestrator_features.py <cycle_id>`
    - `orch_ui` → re-execute the specific `ui-XX` check in the browser toolset, save a screenshot, confirm `result: passed`
    - `agent_bug` (failed run) → fetch `GET /projects/<id>/runs` and confirm no run has that finding's same `stop_reason_code` in the last minute; OR fetch the run's updated `run.json` and confirm the specific inconsistency (stale `active_agents`, missing env key, etc.) is gone
 
@@ -379,7 +379,7 @@ For EACH finding in `findings-after.json` with `status: "fixed"`, run these 4 su
 **C. Cross-cycle regression delta (F2).** Before closing Phase 4, run:
 
 ```bash
-python3 local-openclaw/scripts/check_regression_against_prior_cycles.py \
+python3 local-hermes-agent/scripts/check_regression_against_prior_cycles.py \
     <baseline_sha> --lookback 30
 ```
 
@@ -481,7 +481,7 @@ Each confirmed fix gets its own commit: `fix(audit-<category>): <FND-id> <root_c
 
 Cleanup commits from Phase 4: `chore(audit-review): <description>` PLUS a 2+ line body explaining what the cleanup is and why (which finding/review note authorized it, what was removed/changed, what verifies the cleanup is safe). Meta-audit on 2026-04-28 caught a 1-line `chore(audit-review)` slipping through (`abbac6b`) — the original "body required only if non-trivial" carve-out was abused, so the rule is now uniform: every audit-namespace commit (`fix(audit-*)`, `chore(audit-review)`, `chore(audit-*)`) needs a non-empty body.
 
-If the verified fix lives under `local-openclaw/`, remember that path is gitignored in this repo. Stage those files with `git add -f ...` before running `git diff --check` / `git commit`, otherwise the cycle can appear clean while the actual auditor fix is still unstaged.
+If the verified fix lives under `local-hermes-agent/`, remember that path is gitignored in this repo. Stage those files with `git add -f ...` before running `git diff --check` / `git commit`, otherwise the cycle can appear clean while the actual auditor fix is still unstaged.
 
 Do not push.
 
@@ -498,7 +498,7 @@ For changes affecting the orchestrator/runtime image:
 
 When creating a fresh local run for verification:
 ```bash
-FORCE_REPLACE_ACTIVE_RUNS=1 TARGET_FILTER=local local-openclaw/scripts/create_runs.sh
+FORCE_REPLACE_ACTIVE_RUNS=1 TARGET_FILTER=local local-hermes-agent/scripts/create_runs.sh
 ```
 
 **NEVER run `docker restart juice-shop` yourself.** The cycle controller handles Juice Shop restart exclusively in the post-cycle step to preserve challenge score data.
