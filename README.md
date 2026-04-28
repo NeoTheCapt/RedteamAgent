@@ -1,3 +1,5 @@
+[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/neothecapt-redteamagent-badge.png)](https://mseep.ai/app/neothecapt-redteamagent)
+
 <p align="center">
   <h1 align="center">🔴 RedTeam Agent</h1>
   <p align="center">
