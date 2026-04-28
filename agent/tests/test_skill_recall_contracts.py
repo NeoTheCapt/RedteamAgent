@@ -66,6 +66,25 @@ def test_sensitive_data_skill_runs_ctf_ftp_artifact_recall_sweep() -> None:
     assert "requeue the exact blocked path" in skill
 
 
+
+def test_sensitive_data_skill_names_artifact_recall_targets_before_closure() -> None:
+    skill = SENSITIVE_DATA_SKILL.read_text(encoding="utf-8")
+
+    for challenge in [
+        "Deprecated Interface",
+        "Easter Egg",
+        "Forgotten Developer Backup",
+        "Forgotten Sales Backup",
+        "Misplaced Signature File",
+        "Exposed Metrics",
+        "Poison Null Byte",
+        "NFT Takeover",
+    ]:
+        assert challenge in skill
+    assert "If the named challenge remains unsolved" in skill
+    assert "requeue the exact artifact, route, or consumer action" in skill
+
+
 def test_xss_skill_requires_juice_shop_browser_flow_recall_contract() -> None:
     skill = XSS_SKILL.read_text(encoding="utf-8")
 
