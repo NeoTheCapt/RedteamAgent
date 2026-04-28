@@ -206,10 +206,19 @@ export const EngagementHooksPlugin = async ({
 
       let queueInfo = ""
       try {
-        const statsOutput = await $`./scripts/dispatcher.sh ${path.join(engagementDir, "cases.db")} stats`.text()
+        // Prefer stats-by-stage so the banner shows the streaming-pipeline view
+        // (active stages: ingested|source_analyzed|vuln_confirmed|fuzz_pending)
+        // rather than just by-status. Falls back to legacy stats on older
+        // engagements without the stage column.
+        const statsOutput = await $`./scripts/dispatcher.sh ${path.join(engagementDir, "cases.db")} stats-by-stage`.text()
         queueInfo = statsOutput.trim()
       } catch {
-        queueInfo = "no queue"
+        try {
+          const fallback = await $`./scripts/dispatcher.sh ${path.join(engagementDir, "cases.db")} stats`.text()
+          queueInfo = fallback.trim()
+        } catch {
+          queueInfo = "no queue"
+        }
       }
 
       log(

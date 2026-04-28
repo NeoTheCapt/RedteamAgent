@@ -286,9 +286,11 @@ _start_local_process() {
     local name="$1"; shift
     local pid_dir
     local env_file
+    local expected_command
     pid_dir="$(_engagement_pid_dir)" || return 1
     env_file="$(_engagement_env_file)"
-    start_managed_process "$pid_dir" "$name" env \
+    expected_command="$(basename "$1")"
+    start_managed_process "$pid_dir" "$name" "$expected_command" env \
         ENGAGEMENT_DIR_ABS="$ENGAGEMENT_DIR_ABS" \
         ENGAGEMENT_DIR="$ENGAGEMENT_DIR_ABS" \
         REDTEAM_ENV_FILE="$env_file" \
@@ -305,9 +307,10 @@ _start_local_process() {
 
 _stop_local_process() {
     local name="$1"
+    local expected_command="${2:-}"
     local pid_dir
     pid_dir="$(_engagement_pid_dir)" || return 1
-    stop_managed_process "$pid_dir" "$name"
+    stop_managed_process "$pid_dir" "$name" "$expected_command"
 }
 
 # Run a one-shot tool in the kali-redteam container
@@ -379,7 +382,7 @@ start_proxy() {
 # Stop the mitmproxy container (also removes exited containers to avoid name conflicts)
 stop_proxy() {
     if [ "$(runtime_mode)" = "local" ]; then
-        _stop_local_process proxy
+        _stop_local_process proxy "$MITMPROXY_BIN"
         return 0
     fi
     local container_name
@@ -507,14 +510,14 @@ start_katana() {
         "${scope_args[@]+"${scope_args[@]}"}" \
         "${auth_args[@]+"${auth_args[@]}"}" \
         -elog /engagement/scans/katana_error.log \
-        -o /engagement/scans/katana_output.jsonl
+        -o "$katana_output_path"
     echo "[katana] Started crawling $target"
 }
 
 # Stop Katana container (also removes exited containers to avoid name conflicts)
 stop_katana() {
     if [ "$(runtime_mode)" = "local" ]; then
-        _stop_local_process katana
+        _stop_local_process katana "$KATANA_LOCAL_BIN"
         return 0
     fi
     local container_name

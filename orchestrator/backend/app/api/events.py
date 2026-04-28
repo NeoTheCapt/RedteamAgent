@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import json
+from typing import Any
+
 from fastapi import APIRouter, status
 from pydantic import BaseModel, Field
 
 from ..models.event import Event
 from ..security import CurrentUser
+from ..services import event_apply
 from ..services.events import create_event_for_run, list_events_for_run, summarize_events_for_run
 from ..ws import broadcaster
 
@@ -17,6 +21,9 @@ class CreateEventRequest(BaseModel):
     task_name: str = Field(min_length=1, max_length=128)
     agent_name: str = Field(min_length=1, max_length=128)
     summary: str = Field(min_length=1, max_length=512)
+    kind: str | None = Field(default=None, max_length=64)
+    level: str | None = Field(default=None, max_length=16)
+    payload: dict[str, Any] | None = None
 
 
 class EventResponse(BaseModel):
@@ -27,9 +34,18 @@ class EventResponse(BaseModel):
     agent_name: str
     summary: str
     created_at: str
+    kind: str | None = None
+    level: str | None = None
+    payload: dict[str, Any] | None = None
 
 
 def _event_response(event: Event) -> EventResponse:
+    try:
+        payload_data: dict[str, Any] | None = json.loads(event.payload_json) if event.payload_json else None
+        if payload_data == {}:
+            payload_data = None
+    except (json.JSONDecodeError, AttributeError):
+        payload_data = None
     return EventResponse(
         id=event.id,
         event_type=event.event_type,
@@ -38,6 +54,9 @@ def _event_response(event: Event) -> EventResponse:
         agent_name=event.agent_name,
         summary=event.summary,
         created_at=event.created_at,
+        kind=event.kind if event.kind not in (None, "", "legacy") else None,
+        level=event.level if event.level not in (None, "", "info") else None,
+        payload=payload_data,
     )
 
 
@@ -57,6 +76,15 @@ async def create_event(
         task_name=request.task_name,
         agent_name=request.agent_name,
         summary=request.summary,
+        kind=request.kind or "legacy",
+        level=request.level or "info",
+        payload_json=json.dumps(request.payload or {}, separators=(",", ":")),
+    )
+    event_apply.apply(
+        run_id=event.run_id,
+        kind=event.kind,
+        phase=event.phase,
+        payload=request.payload or {},
     )
     response = _event_response(event)
     await broadcaster.publish(
@@ -66,7 +94,12 @@ async def create_event(
             "type": "event.created",
             "project_id": project_id,
             "run_id": run_id,
-            "event": response.model_dump(),
+            "event": {
+                **response.model_dump(),
+                "kind": event.kind,
+                "level": event.level,
+                "payload": request.payload or {},
+            },
         },
     )
     return response

@@ -82,6 +82,25 @@ normalize_surface_type() {
     esac
 }
 
+extract_target_method_hint() {
+    local raw_target="${1:-}"
+    local candidate remainder
+
+    if [[ "$raw_target" =~ ^([A-Za-z]+)[[:space:]]+(.+)$ ]]; then
+        candidate="${BASH_REMATCH[1]}"
+        remainder="${BASH_REMATCH[2]}"
+        candidate="$(printf '%s' "$candidate" | tr '[:lower:]' '[:upper:]')"
+        case "$candidate" in
+            GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)
+                printf '%s\n%s\n' "$candidate" "$remainder"
+                return 0
+                ;;
+        esac
+    fi
+
+    return 1
+}
+
 infer_surface_type() {
     local method="${1:-}"
     local target="${2:-}"
@@ -117,7 +136,7 @@ infer_surface_type() {
         return 0
     fi
 
-    if [[ "$haystack" == *"2fa"* || "$haystack" == *"totp"* || "$haystack" == *"otp"* || "$haystack" == *"token"* || "$haystack" == *"jwt"* || "$haystack" == *"session"* || "$haystack" == *"cookie"* || "$haystack" == *"workflow"* ]]; then
+    if [[ "$haystack" == *"2fa"* || "$haystack" == *"totp"* || "$haystack" == *"otp"* || "$haystack" == *"token"* || "$haystack" == *"jwt"* || "$haystack" == *"session"* || "$haystack" == *"cookie"* || "$haystack" == *"workflow"* || "$haystack" == *"privatekey"* || "$haystack" == *"submitkey"* || "$haystack" == *"setup token"* || "$haystack" == *"setuptoken"* || "$haystack" == *"reset token"* || "$haystack" == *"resettoken"* ]]; then
         printf '%s\n' "workflow_token"
         return 0
     fi
@@ -127,7 +146,7 @@ infer_surface_type() {
         return 0
     fi
 
-    if [[ "$method" != "GET" && "$item_type" == "api" ]]; then
+    if [[ "$method" != "GET" ]] && [[ "$item_type" == "api" || "$target" == *"/rest/"* || "$target" == *"/api/"* || "$target" == *"/priapi/"* || "$target" == *"/v1/"* || "$target" == *"/v2/"* || "$target" == *"/v3/"* ]]; then
         printf '%s\n' "privileged_write"
         return 0
     fi
@@ -306,6 +325,20 @@ while IFS= read -r line; do
         target="$url_value"
         if [[ -n "$method" ]]; then
             target="$method $target"
+        fi
+    fi
+
+    if [[ -n "$target" ]]; then
+        target_hint="$(extract_target_method_hint "$target" 2>/dev/null || true)"
+        if [[ -n "$target_hint" ]]; then
+            inline_method="${target_hint%%$'\n'*}"
+            inline_target="${target_hint#*$'\n'}"
+            if [[ -z "$url_value" ]]; then
+                url_value="$inline_target"
+            fi
+            if [[ -z "$method" || "$method" == "GET" ]]; then
+                method="$inline_method"
+            fi
         fi
     fi
 

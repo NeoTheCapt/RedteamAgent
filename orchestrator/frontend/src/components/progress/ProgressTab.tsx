@@ -1,0 +1,275 @@
+import { useState, useMemo } from "react";
+import type { Case, Dispatch, RunSummary } from "../../lib/api";
+import { listDispatches, listCases } from "../../lib/api";
+import { useAutoRefresh } from "../../lib/useAutoRefresh";
+import { summarizeAgentParticipation, summarizeTrackedAgentCoverage } from "../../lib/agentParticipation";
+import { formatDuration } from "../../lib/formatDuration";
+import { KanbanColumn } from "./KanbanColumn";
+import "./progress.css";
+
+type AgentActivity = {
+  agent: string;
+  dispatchCount: number;
+  caseCount: number;
+  findingCount: number;
+  totalDurationMs: number;
+};
+
+type ProgressTabProps = {
+  token: string;
+  projectId: number;
+  runId: number;
+  currentPhase: string | null;
+  summary: RunSummary;
+};
+
+const CANONICAL_PHASES: { phase: string; label: string; match: (p: string) => boolean }[] = [
+  { phase: "recon",    label: "Recon",        match: (p) => /^recon(?:$|[-_])/i.test(p) },
+  { phase: "collect",  label: "Collect",      match: (p) => /^collect(?:$|[-_])/i.test(p) },
+  { phase: "consume",  label: "Consume-Test", match: (p) => /^consume(?:$|[-_])/i.test(p) },
+  { phase: "exploit",  label: "Exploit",      match: (p) => /^exploit(?:$|[-_])/i.test(p) },
+  { phase: "report",   label: "Report",       match: (p) => /^report(?:$|[-_])/i.test(p) },
+];
+
+function normalizePhase(raw: string): string {
+  for (const p of CANONICAL_PHASES) if (p.match(raw)) return p.phase;
+  return raw || "consume";
+}
+
+function columnState(
+  phase: string,
+  currentPhase: string | null,
+  dispatches: Dispatch[],
+): "done" | "active" | "pending" {
+  const normalizedCurrent = currentPhase ? normalizePhase(currentPhase) : null;
+  const order = CANONICAL_PHASES.map((p) => p.phase);
+  const curIdx = normalizedCurrent ? order.indexOf(normalizedCurrent) : -1;
+  const myIdx = order.indexOf(phase);
+  if (curIdx < 0) {
+    const anyRunning = dispatches.some((d) => d.state === "running");
+    if (anyRunning) return "active";
+    if (dispatches.length > 0) return "done";
+    return "pending";
+  }
+  if (myIdx < curIdx) return "done";
+  if (myIdx === curIdx) return "active";
+  return "pending";
+}
+
+function phaseSummaryLines(phase: string, summary: RunSummary): string[] {
+  const phaseCard = summary.phases.find((item) => normalizePhase(item.phase) === phase);
+  const latestSummary = phaseCard?.latest_summary?.trim();
+  switch (phase) {
+    case "recon": {
+      const scopeCount = summary.target.scope_entries.length;
+      return [
+        `Target ${summary.target.target}`,
+        scopeCount > 0 ? `${scopeCount} scope entr${scopeCount === 1 ? "y" : "ies"}` : "Scope inherited from target URL",
+        latestSummary || `${summary.coverage.total_cases} requestable paths queued from recon artifacts`,
+      ];
+    }
+    case "collect":
+      return [
+        `${summary.coverage.total_surfaces} surface candidates recorded`,
+        `${summary.coverage.high_risk_remaining} high-risk surfaces still unresolved`,
+        latestSummary || `${summary.coverage.total_cases} queued URLs/cases observed during collection`,
+      ];
+    case "consume":
+      return [
+        `${summary.cases.done + summary.cases.findings} / ${summary.cases.total} cases processed`,
+        `${summary.cases.queued} queued · ${summary.cases.running} running · ${summary.cases.findings} findings`,
+        latestSummary || `${summary.dispatches.active} active dispatches · ${summary.dispatches.done} completed`,
+      ];
+    case "exploit":
+      return [
+        `${summary.overview.findings_count} findings recorded`,
+        `${phaseCard?.active_agents ?? 0} active exploit agents`,
+        latestSummary || (summary.overview.findings_count > 0 ? "Review findings.md for in-flight exploit follow-ups" : "Awaiting confirmed findings before exploitation"),
+      ];
+    case "report":
+      return [
+        `Report path ${summary.target.engagement_dir}/report.md`,
+        latestSummary || (phaseCard?.state === "completed" ? "Final report generated" : "Final report pending after exploit completion"),
+      ];
+    default:
+      return latestSummary ? [latestSummary] : [];
+  }
+}
+
+export function ProgressTab({ token, projectId, runId, currentPhase, summary }: ProgressTabProps) {
+  const [dispatches, setDispatches] = useState<Dispatch[]>([]);
+  const [cases, setCases] = useState<Case[]>([]);
+  const [error, setError] = useState<string | null>(null);
+
+  useAutoRefresh(
+    async (signal) => {
+      try {
+        const [ds, cs] = await Promise.all([
+          listDispatches(token, projectId, runId),
+          listCases(token, projectId, runId),
+        ]);
+        if (signal.aborted) return;
+        setDispatches(ds);
+        setCases(cs);
+        setError(null);
+      } catch (err) {
+        if (signal.aborted) return;
+        setError(err instanceof Error ? err.message : String(err));
+      }
+    },
+    [token, projectId, runId],
+  );
+
+  const casesByDispatch = useMemo(() => {
+    const m = new Map<string | null, Case[]>();
+    for (const c of cases) {
+      const key = c.dispatch_id;
+      const list = m.get(key) ?? [];
+      list.push(c);
+      m.set(key, list);
+    }
+    return m;
+  }, [cases]);
+
+  const dispatchesByPhase = useMemo(() => {
+    const m = new Map<string, Dispatch[]>();
+    for (const d of dispatches) {
+      const phase = normalizePhase(d.phase);
+      const list = m.get(phase) ?? [];
+      list.push(d);
+      m.set(phase, list);
+    }
+    for (const list of m.values()) {
+      list.sort((a, b) => (b.started_at ?? 0) - (a.started_at ?? 0));
+    }
+    return m;
+  }, [dispatches]);
+
+  // Per-(phase, agent) activity log derived from dispatches + cases.
+  // Retained for completed phases so the overview keeps showing which
+  // agents worked on what after the phase advances. Sorted by dispatch
+  // count (most active first), then by agent name.
+  const phaseAgentActivity = useMemo(() => {
+    const m = new Map<string, AgentActivity[]>();
+    for (const { phase } of CANONICAL_PHASES) {
+      const phaseDispatches = dispatchesByPhase.get(phase) ?? [];
+      const byAgent = new Map<string, AgentActivity>();
+      for (const d of phaseDispatches) {
+        let stats = byAgent.get(d.agent);
+        if (!stats) {
+          stats = { agent: d.agent, dispatchCount: 0, caseCount: 0, findingCount: 0, totalDurationMs: 0 };
+          byAgent.set(d.agent, stats);
+        }
+        stats.dispatchCount += 1;
+        const linkedCases = casesByDispatch.get(d.id) ?? [];
+        stats.caseCount += linkedCases.length;
+        stats.findingCount += linkedCases.filter((c) => c.finding_id).length;
+        if (d.started_at != null && d.finished_at != null) {
+          stats.totalDurationMs += (d.finished_at - d.started_at) * 1000;
+        }
+      }
+      m.set(
+        phase,
+        Array.from(byAgent.values()).sort(
+          (a, b) => b.dispatchCount - a.dispatchCount || a.agent.localeCompare(b.agent),
+        ),
+      );
+    }
+    return m;
+  }, [dispatchesByPhase, casesByDispatch]);
+
+  const participation = useMemo(
+    () => summarizeAgentParticipation(summary, dispatches),
+    [summary, dispatches],
+  );
+
+  const trackedCoverage = useMemo(
+    () => summarizeTrackedAgentCoverage(summary, dispatches),
+    [summary, dispatches],
+  );
+
+  return (
+    <div className="progress-wrap" data-testid="progress-tab">
+      {error && (
+        <div className="progress__error" role="alert">
+          Failed to load progress: {error}
+        </div>
+      )}
+      <div className="progress__meta" aria-label="Agent participation summary">
+        <div className="progress__meta-label">Agent participation</div>
+        <div className="progress__meta-value">{participation.activeTotal} agents active</div>
+        <div className="progress__meta-sub">
+          {trackedCoverage.trackedAgents} agent type{trackedCoverage.trackedAgents === 1 ? "" : "s"} tracked · {trackedCoverage.text}
+        </div>
+      </div>
+      <div className="progress__overview" aria-label="Phase overview cards">
+        {CANONICAL_PHASES.map(({ phase, label }) => {
+          const phaseDispatches = dispatchesByPhase.get(phase) ?? [];
+          const colState = columnState(phase, currentPhase, phaseDispatches);
+          return (
+            <section
+              key={`overview-${phase}`}
+              className={`progress__overview-card progress__overview-card--${colState}`}
+              data-testid="progress-overview-card"
+            >
+              <div className="progress__overview-head">
+                <span className="progress__overview-name">{label}</span>
+                <span className="progress__overview-badge">{colState}</span>
+              </div>
+              <div className="progress__overview-body">
+                {phaseSummaryLines(phase, summary).map((line) => (
+                  <p key={`${phase}-${line}`} className="progress__overview-line">{line}</p>
+                ))}
+                {(phaseAgentActivity.get(phase) ?? []).map((stat) => {
+                  const parts: string[] = [
+                    `${stat.dispatchCount} dispatch${stat.dispatchCount === 1 ? "" : "es"}`,
+                  ];
+                  if (stat.caseCount > 0) {
+                    parts.push(`${stat.caseCount} case${stat.caseCount === 1 ? "" : "s"}`);
+                  }
+                  if (stat.findingCount > 0) {
+                    parts.push(`${stat.findingCount} finding${stat.findingCount === 1 ? "" : "s"}`);
+                  }
+                  if (stat.totalDurationMs > 0) {
+                    parts.push(formatDuration(stat.totalDurationMs));
+                  }
+                  return (
+                    <p
+                      key={`${phase}-agent-${stat.agent}`}
+                      className="progress__overview-agent"
+                      data-testid="progress-overview-agent"
+                    >
+                      <span className="progress__overview-agent-name">{stat.agent}</span>
+                      <span className="progress__overview-agent-meta"> · {parts.join(" · ")}</span>
+                    </p>
+                  );
+                })}
+              </div>
+            </section>
+          );
+        })}
+      </div>
+      <div className="progress" data-phase-count={CANONICAL_PHASES.length}>
+        {CANONICAL_PHASES.map(({ phase, label }) => {
+          const phaseDispatches = dispatchesByPhase.get(phase) ?? [];
+          const colState = columnState(phase, currentPhase, phaseDispatches);
+          const unassigned = colState === "active"
+            ? (casesByDispatch.get(null) ?? [])
+            : [];
+          return (
+            <KanbanColumn
+              key={phase}
+              phase={phase}
+              label={label}
+              state={colState}
+              dispatches={phaseDispatches}
+              casesByDispatchId={casesByDispatch}
+              summaryLines={phaseSummaryLines(phase, summary)}
+              unassignedCases={unassigned}
+            />
+          );
+        })}
+      </div>
+    </div>
+  );
+}

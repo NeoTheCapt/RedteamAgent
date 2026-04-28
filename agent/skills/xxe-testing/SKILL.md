@@ -95,6 +95,19 @@ origin: RedteamOpencode
 - [ ] Embed XXE in DOCX: modify `[Content_Types].xml` or embedded XML parts
 - [ ] XLSX: inject in `xl/sharedStrings.xml`
 
+### 8. CTF / Juice Shop Recall Contract
+
+When Juice Shop exposes XML-capable routes or file upload/download flows, do one bounded
+XXE recall pass before closing the case:
+
+- Try a safe `Content-Type: application/xml` switch on API endpoints already accepting JSON
+  only after confirming it stays within the normal 1-2 representative probe budget.
+- For upload surfaces, include one SVG/XML payload carrying a benign external entity marker
+  and then visit the consumer route that parses/renders the uploaded file.
+- Preserve explicit solved-state or negative evidence for `XXE Data Access`; if parser
+  behavior is unclear, return `REQUEUE` with the exact XML-capable endpoint/file consumer
+  rather than marking the family exhausted.
+
 ## What to Record
 
 - Endpoint and input vector (body, file upload, header)

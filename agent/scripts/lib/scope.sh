@@ -1,9 +1,68 @@
 #!/usr/bin/env bash
 
+trim_whitespace() {
+    local value="${1:-}"
+    printf '%s' "$value" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//'
+}
+
 scope_entries() {
     local eng_dir="${1:?engagement dir required}"
     jq -r '([.hostname] + (.scope // [])) | map(select(type == "string" and . != "")) | unique[]' \
         "$eng_dir/scope.json" 2>/dev/null || true
+}
+
+scope_target_url() {
+    local eng_dir="${1:?engagement dir required}"
+    jq -r '.target // empty' "$eng_dir/scope.json" 2>/dev/null || true
+}
+
+scope_target_hostname() {
+    local eng_dir="${1:?engagement dir required}"
+    local target hostname
+
+    target="$(scope_target_url "$eng_dir")"
+    hostname="$(jq -r '.hostname // empty' "$eng_dir/scope.json" 2>/dev/null || true)"
+    if [[ -n "$hostname" && "$hostname" != "null" ]]; then
+        printf '%s\n' "$hostname"
+        return 0
+    fi
+
+    python3 - <<'PY' "$target"
+from urllib.parse import urlsplit
+import sys
+value = sys.argv[1].strip()
+if not value:
+    raise SystemExit(0)
+parsed = urlsplit(value if '://' in value else f'https://{value}')
+host = parsed.hostname or ''
+if host:
+    print(host)
+PY
+}
+
+continuous_target_matches() {
+    local eng_dir="${1:?engagement dir required}"
+    local configured target hostname rule normalized_rule target_host
+
+    configured="$(trim_whitespace "${REDTEAM_CONTINUOUS_TARGETS:-${CONTINUOUS_OBSERVATION_TARGETS:-}}")"
+    [[ -n "$configured" ]] || return 1
+
+    target="$(scope_target_url "$eng_dir")"
+    hostname="$(scope_target_hostname "$eng_dir")"
+    target_host="$hostname"
+
+    while IFS= read -r rule; do
+        normalized_rule="$(trim_whitespace "$rule")"
+        [[ -n "$normalized_rule" ]] || continue
+        if [[ "$normalized_rule" == "$target" ]]; then
+            return 0
+        fi
+        if [[ -n "$target_host" && "$normalized_rule" == "$target_host" ]]; then
+            return 0
+        fi
+    done < <(printf '%s\n' "$configured" | tr ',;' '\n')
+
+    return 1
 }
 
 extract_command_hosts() {

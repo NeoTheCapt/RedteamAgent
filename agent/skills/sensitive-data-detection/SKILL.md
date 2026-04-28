@@ -176,7 +176,22 @@ echo "$RESPONSE" | jq -r '[paths(scalars)] | .[] | join(".")' | \
           latitude|longitude|geo|location|ip.?addr)'
 ```
 
-### Phase 3: HTTP Header & Cookie Inspection
+### Phase 3: Authenticated Privileged Data Sweep
+
+When an engagement obtains an admin token, forged JWT, recovered session, or any other privileged auth context, immediately sweep sensitive-data endpoints before returning to generic queue work. Do not leave these as low-priority queued cases after an admin takeover chain.
+
+CTF/Juice Shop recall contract:
+- After forged/admin JWT proof, request and classify `/rest/user/authentication-details/`, `/api/Users`, `/api/Users/<id>`, `/rest/admin/application-configuration`, backup files under `/ftp`, and any discovered `user/authentication` route with the privileged token.
+- Treat fields named `password`, `passwordHash`, `hash`, `salt`, `email`, `role`, `totpSecret`, `securityAnswer`, `apiKey`, or `credential` as sensitive findings even when the endpoint is expected to be admin-only; record the exact endpoint and first affected user/hash prefix as challenge evidence.
+- For Juice Shop `User Credentials` recall, do not stop at the generic roster finding. Preserve
+  one artifact that demonstrates credential-bearing material specifically (for example
+  `/rest/user/authentication-details/`, `/api/Users`, or a database/backup response containing
+  password hashes, salts, security answers, TOTP secrets, or credential fields), then check
+  solved-state evidence. If only emails/roles were captured and credential-bearing fields remain
+  queued, return `REQUEUE` with the exact endpoint and auth context needed to finish the branch.
+- If an admin/JWT exploit confirms access but sensitive-data endpoints remain queued or untested, requeue a narrowed follow-up instead of marking the chain done. This preserves recall for password-hash/user-credential leak challenges that otherwise regress when exploitation stops at “admin access confirmed.”
+
+### Phase 4: HTTP Header & Cookie Inspection
 
 ```bash
 # Check response headers for leaked info
@@ -247,6 +262,18 @@ rg -oN '\$2[aby]?\$\d{2}\$[./A-Za-z0-9]{53}' "$EXTRACT_FILE"
 # Base64-encoded blobs (may contain PII)
 rg -oN '\b[A-Za-z0-9+/]{40,}={0,2}\b' "$EXTRACT_FILE"
 ```
+
+### Phase 6: CTF / Juice Shop Recall Sweep
+
+When the target is a local CTF benchmark or artifacts identify OWASP Juice Shop, public file and data exposures are not finished after the first sensitive-data finding. Before marking the case done, run one bounded recall sweep that converts exposed artifacts into challenge-triggering evidence:
+
+- For `/ftp` listings, direct-download and inspect exact challenge files and backups that are commonly solved by access itself or by extracting a secret: `acquisitions.md`, `package.json.bak`, `package-lock.json.bak`, KeePass/SQLite/zip backups, quarantine shortcut `.url` files, and any document whose name suggests confidential, support, incident, credential, or backup material.
+- Preserve Juice Shop artifact-to-challenge coverage explicitly. The recall sweep must name and check these solved-state targets before closing a public-file exposure: `Deprecated Interface` (`package.json.bak` / `package-lock.json.bak`), `Easter Egg` and `Nested Easter Egg` (easter-egg route or hidden media/file references), `Forgotten Developer Backup`, `Forgotten Sales Backup`, `Misplaced Signature File`, `Exposed Metrics`, `Poison Null Byte`, and `NFT Takeover` when Web3/NFT artifacts or routes are discovered.
+- If `package.json.bak`, `package-lock.json.bak`, signature/backup files, or other Juice Shop `/ftp` artifacts return 403/blocked, immediately preserve a narrowed bypass follow-up instead of treating the carrier as done. Include exact candidates such as `%2500.md` poison-null-byte suffixes, adjacent `.sig` files, backup filenames from the listing, and the concrete `/metrics` route when it was discovered. This protects `Deprecated Interface`, `Forgotten Developer Backup`, `Forgotten Sales Backup`, `Misplaced Signature File`, `Poison Null Byte`, and `Exposed Metrics` from regressing when the first direct artifact request is blocked.
+- For Web3/NFT discoveries, do not stop at the first authenticated route or sandbox proof. Preserve a concrete follow-up for the NFT/contract artifact or route consumer and verify solved-state for `NFT Takeover` separately from generic Web3 access.
+- For API or database responses containing `password`, `hash`, `email`, `role`, `securityAnswer`, `totp`, `deluxeToken`, or JWT claim material, run the hash/secret scan above and preserve a narrowed follow-up for the consumer workflow instead of closing on a generic exposure note.
+- After each bounded artifact access, blocked-artifact bypass, or extraction, check challenge solved-state evidence (`/api/Challenges` or the Score Board route) and record the challenge name when it changes. If the named challenge remains unsolved, requeue the exact artifact, route, or consumer action still needed; when a bypass is the concrete next step, requeue the exact artifact, route, bypass, or consumer action. If the file is blocked, requeue the exact blocked path with the HTTP status/body clue and the next bypass candidate. Do not collapse it into a broad `/ftp` duplicate.
+- Keep these follow-ups separate from the initial disclosure finding: a public KeePass vault or backup finding can be valid while Password Hash Leak, Deprecated Interface, Forgotten backups, Confidential Document, or other low-difficulty recall triggers still need an exact artifact/action pass.
 
 ## Luhn Checksum Validation
 

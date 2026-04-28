@@ -4,6 +4,10 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/lib/time.sh"
+# shellcheck source=/dev/null
+source "$SCRIPT_DIR/lib/scope.sh"
+
+EMIT_RUNTIME_EVENT="${EMIT_RUNTIME_EVENT:-$SCRIPT_DIR/emit_runtime_event.sh}"
 
 ENG_DIR="${1:?usage: finalize_engagement.sh <engagement_dir>}"
 SCOPE_FILE="$ENG_DIR/scope.json"
@@ -85,6 +89,16 @@ mark_scope_in_progress_for_observation() {
       | .phases_completed = (((.phases_completed // []) + ["report"]) | unique)
     ' "$SCOPE_FILE" >"$tmp_scope"
     mv "$tmp_scope" "$SCOPE_FILE"
+    if [[ -f "$EMIT_RUNTIME_EVENT" ]]; then
+        bash "$EMIT_RUNTIME_EVENT" \
+            "phase.entered" \
+            "report" \
+            "phase-transition" \
+            "operator" \
+            "entering report phase" \
+            --kind phase_enter \
+            --payload-json '{"phase":"report"}' || true
+    fi
 }
 
 mark_log_in_progress_for_observation() {
@@ -133,6 +147,17 @@ mark_report_in_progress_for_observation() {
     mv "$tmp_report" "$REPORT_FILE"
 }
 
+append_observation_hold_log_entry() {
+    local interval target
+    interval="$(observation_interval_seconds)"
+    target="$(jq -r '.target // empty' "$SCOPE_FILE" 2>/dev/null || true)"
+    if [[ -x "$SCRIPT_DIR/append_log_entry.sh" ]]; then
+        "$SCRIPT_DIR/append_log_entry.sh" "$ENG_DIR" operator "Observation hold active" \
+            "entered continuous observation hold" \
+            "runtime attached for ${target:-unknown target}; heartbeat every ${interval}s" >/dev/null 2>&1 || true
+    fi
+}
+
 continuous_observation_loop() {
     local target interval
     target="$(jq -r '.target // empty' "$SCOPE_FILE" 2>/dev/null || true)"
@@ -152,6 +177,7 @@ if continuous_target_matches; then
     mark_scope_in_progress_for_observation
     mark_log_in_progress_for_observation
     mark_report_in_progress_for_observation
+    append_observation_hold_log_entry
     continuous_observation_loop
     exit 0
 fi
@@ -172,6 +198,17 @@ jq --arg end_time "$END_TIME" '
   | .phases_completed = (((.phases_completed // []) + ["report"]) | unique)
 ' "$SCOPE_FILE" >"$tmp_scope"
 mv "$tmp_scope" "$SCOPE_FILE"
+
+if [[ -f "$EMIT_RUNTIME_EVENT" ]]; then
+    bash "$EMIT_RUNTIME_EVENT" \
+        "phase.entered" \
+        "complete" \
+        "phase-transition" \
+        "operator" \
+        "entering complete phase" \
+        --kind phase_enter \
+        --payload-json '{"phase":"complete"}' || true
+fi
 
 tmp_log="$(mktemp "${TMPDIR:-/tmp}/log-finalize.XXXXXX")"
 awk '

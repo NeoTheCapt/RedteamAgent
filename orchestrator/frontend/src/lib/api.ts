@@ -11,14 +11,24 @@ export type Project = {
   id: number;
   name: string;
   slug: string;
-  root_path: string;
+  root_path?: string;
   provider_id: string;
   model_id: string;
   small_model_id: string;
   base_url: string;
-  api_key_configured: boolean;
-  auth_configured: boolean;
-  env_configured: boolean;
+  // Sensitive fields returned only in certain contexts (e.g. edit modal).
+  api_key?: string;
+  // Legacy boolean indicators — kept for backward-compat, new code uses the
+  // string fields above when available.
+  api_key_configured?: boolean;
+  auth_configured?: boolean;
+  env_configured?: boolean;
+  auth_json?: string;
+  env_json?: string;
+  crawler_json: string;
+  parallel_json: string;
+  agents_json: string;
+  created_at?: string;
 };
 
 export type Run = {
@@ -102,7 +112,22 @@ export type RunSummary = {
     task_name: string;
     summary: string;
     updated_at: string;
+    parallel_count?: number;
   }>;
+  dispatches: {
+    total: number;
+    active: number;
+    done: number;
+    failed: number;
+  };
+  cases: {
+    total: number;
+    done: number;
+    running: number;
+    queued: number;
+    error: number;
+    findings: number;
+  };
 };
 
 export type EventRecord = {
@@ -113,6 +138,9 @@ export type EventRecord = {
   agent_name: string;
   summary: string;
   created_at: string;
+  kind?: string | null;
+  level?: string | null;
+  payload?: Record<string, unknown> | null;
 };
 
 export type Artifact = {
@@ -138,6 +166,59 @@ export type ObservedPathRecord = {
   status: string;
   assigned_agent: string;
   source: string;
+};
+
+export type Dispatch = {
+  id: string;
+  phase: string;
+  round: number;
+  agent: string;
+  slot: string;
+  task: string | null;
+  state: string;
+  started_at: number | null;
+  finished_at: number | null;
+  error: string | null;
+};
+
+export type Case = {
+  case_id: number;
+  method: string;
+  path: string;
+  category: string | null;
+  dispatch_id: string | null;
+  state: string;
+  result: string | null;
+  finding_id: string | null;
+  started_at: number | null;
+  finished_at: number | null;
+  duration_ms: number | null;
+};
+
+export type CaseListFilter = {
+  state?: string;
+  method?: string;
+  category?: string;
+};
+
+export type DocumentEntry = {
+  name: string;
+  path: string;
+  size: number;
+  mtime: number;
+};
+
+export type DocumentTree = {
+  findings: DocumentEntry[];
+  reports: DocumentEntry[];
+  intel: DocumentEntry[];
+  surface: DocumentEntry[];
+  other: DocumentEntry[];
+};
+
+export type DocumentContent = {
+  path: string;
+  content: string;
 };
 
 export class ApiError extends Error {
@@ -249,16 +330,42 @@ export type ProjectConfigInput = {
   clear_auth_json?: boolean;
   env_json?: string;
   clear_env_json?: boolean;
+  crawler_json?: string;
+  parallel_json?: string;
+  agents_json?: string;
 };
 
-export function createProject(token: string, name: string, config: ProjectConfigInput = {}) {
+// Input shape when creating a project (name required, all else optional).
+export type ProjectInput = {
+  name: string;
+  provider_id?: string;
+  model_id?: string;
+  small_model_id?: string;
+  api_key?: string;
+  base_url?: string;
+  auth_json?: string;
+  env_json?: string;
+  crawler_json?: string;
+  parallel_json?: string;
+  agents_json?: string;
+};
+
+// All optional; undefined means "don't change".
+export type ProjectUpdate = Partial<Omit<ProjectInput, "name">> & { name?: string };
+
+export function createProject(token: string, input: ProjectInput | string, config: ProjectConfigInput = {}) {
+  // Support both new-style createProject(token, { name, ...fields }) and
+  // legacy createProject(token, name, config) so existing callers keep working.
+  const body = typeof input === "string"
+    ? JSON.stringify({ name: input, ...config })
+    : JSON.stringify(input);
   return request<Project>("/projects", {
     method: "POST",
-    body: JSON.stringify({ name, ...config }),
+    body,
   }, token);
 }
 
-export function updateProject(token: string, projectId: number, config: ProjectConfigInput) {
+export function updateProject(token: string, projectId: number, config: ProjectConfigInput | ProjectUpdate) {
   return request<Project>(`/projects/${projectId}`, {
     method: "PATCH",
     body: JSON.stringify(config),
@@ -286,6 +393,14 @@ export function deleteRun(token: string, projectId: number, runId: number) {
   return request<void>(`/projects/${projectId}/runs/${runId}`, {
     method: "DELETE",
   }, token);
+}
+
+export function stopRun(token: string, projectId: number, runId: number): Promise<Run> {
+  return request<Run>(
+    `/projects/${projectId}/runs/${runId}/status`,
+    { method: "POST", body: JSON.stringify({ status: "stopped" }) },
+    token,
+  );
 }
 
 export function listEvents(token: string, projectId: number, runId: number) {
@@ -319,4 +434,84 @@ export function runWebSocketUrl(projectId: number, runId: number, ticket: string
   );
   httpUrl.protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
   return httpUrl.toString();
+}
+
+export function listDispatches(
+  token: string,
+  projectId: number,
+  runId: number,
+  phase?: string,
+) {
+  const query = phase ? `?phase=${encodeURIComponent(phase)}` : "";
+  return request<Dispatch[]>(
+    `/projects/${projectId}/runs/${runId}/dispatches${query}`,
+    {},
+    token,
+  );
+}
+
+export function listCases(
+  token: string,
+  projectId: number,
+  runId: number,
+  filter: CaseListFilter = {},
+) {
+  const params = new URLSearchParams();
+  if (filter.state) {
+    params.set("state", filter.state);
+  }
+  if (filter.method) {
+    params.set("method", filter.method);
+  }
+  if (filter.category) {
+    params.set("category", filter.category);
+  }
+  const query = params.toString();
+  const suffix = query ? `?${query}` : "";
+  return request<Case[]>(
+    `/projects/${projectId}/runs/${runId}/cases${suffix}`,
+    {},
+    token,
+  );
+}
+
+export function getCase(
+  token: string,
+  projectId: number,
+  runId: number,
+  caseId: number,
+) {
+  return request<Case>(
+    `/projects/${projectId}/runs/${runId}/cases/${caseId}`,
+    {},
+    token,
+  );
+}
+
+export function listDocuments(token: string, projectId: number, runId: number) {
+  return request<DocumentTree>(
+    `/projects/${projectId}/runs/${runId}/documents`,
+    {},
+    token,
+  );
+}
+
+export function getDocument(
+  token: string,
+  projectId: number,
+  runId: number,
+  path: string,
+) {
+  // Backend route is /documents/{path:path}; percent-encode each segment so
+  // interior "/" separators are preserved for nested paths like
+  // "runtime/process.log" while spaces / special chars are safely escaped.
+  const encodedPath = path
+    .split("/")
+    .map((segment) => encodeURIComponent(segment))
+    .join("/");
+  return request<DocumentContent>(
+    `/projects/${projectId}/runs/${runId}/documents/${encodedPath}`,
+    {},
+    token,
+  );
 }

@@ -24,7 +24,7 @@ import re
 import sqlite3
 import sys
 from pathlib import Path
-from urllib.parse import urlparse, urlunparse, quote
+from urllib.parse import urlparse, urlunparse, quote, parse_qs, parse_qsl
 
 eng_dir = Path(sys.argv[1])
 updates_path = Path(sys.argv[2])
@@ -55,8 +55,11 @@ if surfaces_file.exists():
         rows.append(json.loads(raw))
 
 source_analysis_dir = eng_dir / "scans" / "source-analysis"
+browser_flow_dir = eng_dir / "scans" / "browser-flow"
 synthetic_route_surfaces = []
+synthetic_browser_surfaces = []
 seen_synthetic_route_targets = set()
+seen_synthetic_browser_targets = set()
 
 
 def normalize_source_analysis_route(route: str | None) -> str | None:
@@ -69,18 +72,28 @@ def normalize_source_analysis_route(route: str | None) -> str | None:
         return None
     if value.startswith(("http://", "https://")):
         parsed = urlparse(value)
-        value = parsed.fragment.strip() or parsed.path.strip()
+        path = parsed.path.strip() or "/"
+        if parsed.query:
+            path = f"{path}?{parsed.query}"
+        if parsed.fragment:
+            fragment = parsed.fragment.strip()
+            if fragment.startswith("/"):
+                value = fragment
+            else:
+                return f"{path}#{fragment}" if fragment else path
+        else:
+            value = path
         if not value:
             return None
     if value.startswith("/#/"):
-        value = "/#" + value[len("/#/"):]
-    elif value.startswith("#/"):
-        value = "/#" + value[len("#/"):]
-    elif value.startswith("/"):
-        value = "/#" + value
-    else:
-        value = "/#" + value.lstrip('#/')
-    return value
+        return value
+    if value.startswith("#/"):
+        return "/" + value
+    if "#" in value and value.startswith("/"):
+        return value
+    if value.startswith("/"):
+        return "/#" + value
+    return "/#/" + value.lstrip('#/')
 
 
 if source_analysis_dir.exists():
@@ -108,7 +121,127 @@ if source_analysis_dir.exists():
                 }
             )
 
+
+def normalize_browser_hint_reference(reference: str | None) -> str | None:
+    value = str(reference or "").strip()
+    if not value:
+        return None
+    if value.startswith("../"):
+        return None
+    if value.startswith("./"):
+        value = "/" + value[2:].lstrip("/")
+    if value.startswith("#/") or value.startswith("/#/"):
+        return normalize_source_analysis_route(value)
+    if value.startswith("/"):
+        return value
+    return None
+
+
+def browser_route_semantic_key(reference: str) -> str:
+    normalized = normalize_browser_hint_reference(reference) or reference
+    if normalized.startswith("/#/"):
+        return "/" + normalized.split("/#/", 1)[1].lstrip("/")
+    return normalized
+
+
+def prefer_browser_route_candidates(route_hints: list[str]) -> list[str]:
+    preferred: dict[str, str] = {}
+    for route in route_hints:
+        normalized = normalize_browser_hint_reference(route)
+        if not normalized:
+            continue
+        key = browser_route_semantic_key(normalized)
+        existing = preferred.get(key)
+        if existing is None:
+            preferred[key] = normalized
+            continue
+        if normalized.startswith("/#/") and not existing.startswith("/#/"):
+            preferred[key] = normalized
+    return list(preferred.values())
+
+
+_INTERESTING_ASSET_EXTENSIONS = (
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".gif",
+    ".webp",
+    ".svg",
+    ".pdf",
+    ".zip",
+    ".7z",
+    ".rar",
+    ".tar",
+    ".gz",
+    ".mp4",
+    ".mov",
+    ".avi",
+    ".mkv",
+    ".webm",
+)
+
+
+def normalize_browser_asset_hint(reference: str | None) -> str | None:
+    value = str(reference or "").strip()
+    if not value:
+        return None
+    if value.startswith("../"):
+        return None
+    if value.startswith("./"):
+        value = "/" + value[2:].lstrip("/")
+    if not value.startswith("/"):
+        return None
+    lower = value.lower()
+    if not any(lower.endswith(ext) for ext in _INTERESTING_ASSET_EXTENSIONS):
+        return None
+    return value
+
+
+if browser_flow_dir.exists():
+    for summary_path in sorted(browser_flow_dir.glob("*/summary.json")):
+        try:
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        dom_summary = summary.get("dom_summary") or {}
+        evidence_ref = str(summary_path.relative_to(eng_dir))
+
+        for route in prefer_browser_route_candidates(dom_summary.get("route_hints") or [])[:12]:
+            target = f"GET {route}"
+            if target in seen_synthetic_browser_targets:
+                continue
+            seen_synthetic_browser_targets.add(target)
+            synthetic_browser_surfaces.append(
+                {
+                    "surface_type": "dynamic_render",
+                    "target": target,
+                    "source": "browser-flow-summary",
+                    "rationale": "browser-flow summary exposed an unexercised internal route hint from live DOM evidence",
+                    "evidence_ref": evidence_ref,
+                    "status": "discovered",
+                }
+            )
+
+        for asset in (normalize_browser_asset_hint(item) for item in (dom_summary.get("asset_hints") or [])):
+            if not asset:
+                continue
+            target = f"GET {asset}"
+            if target in seen_synthetic_browser_targets:
+                continue
+            seen_synthetic_browser_targets.add(target)
+            synthetic_browser_surfaces.append(
+                {
+                    "surface_type": "file_handling",
+                    "target": target,
+                    "source": "browser-flow-summary",
+                    "rationale": "browser-flow summary exposed an interesting same-origin asset hint from live DOM evidence",
+                    "evidence_ref": evidence_ref,
+                    "status": "discovered",
+                }
+            )
+
 rows.extend(synthetic_route_surfaces)
+rows.extend(synthetic_browser_surfaces)
 
 conn = sqlite3.connect(str(eng_dir / "cases.db"))
 conn.row_factory = sqlite3.Row
@@ -121,6 +254,8 @@ all_case_keys = set()
 done_case_keys = set()
 done_paths = set()
 done_query_keys = set()
+done_case_keys_with_query = set()
+all_case_keys_with_query = set()
 known_locale_prefixes = []
 seen_locale_prefixes = set()
 
@@ -147,11 +282,17 @@ for row in case_rows:
         query_obj = {}
     case_key = (method, url_path)
     all_case_keys.add(case_key)
+    if query_obj:
+        query_key_set = frozenset(str(k) for k in query_obj.keys())
+        all_case_keys_with_query.add((method, url_path, query_key_set))
     if row["status"] == "done":
         done_case_keys.add(case_key)
         done_paths.add(url_path)
         for key in query_obj.keys():
             done_query_keys.add((method, url_path, str(key)))
+        if query_obj:
+            query_key_set = frozenset(str(k) for k in query_obj.keys())
+            done_case_keys_with_query.add((method, url_path, query_key_set))
 
 for row in rows:
     target = " ".join(str(row.get("target") or "").strip().split())
@@ -283,10 +424,19 @@ def case_done(method: str, path: str, locale_scoped: bool = False) -> bool:
         if "{" in clean_path or "}" in clean_path:
             continue
         if query and "{" in query and "}" in query:
+            # Placeholder query (e.g. ?token={value}): match on (method, path, param-key)
             key = query.split("=", 1)[0].strip()
             if (method, clean_path, key) in done_query_keys:
                 return True
             continue
+        if query:
+            # Concrete query: require a done case that exercised the same parameter set
+            surface_keys = frozenset(k for k, _ in parse_qsl(query, keep_blank_values=True))
+            if surface_keys and (method, clean_path, surface_keys) in done_case_keys_with_query:
+                return True
+            # No matching done case with this query — do NOT fall through to path-only
+            continue
+        # No query on the surface: path-only match is sufficient
         if (method, clean_path) in done_case_keys:
             return True
     return False
@@ -294,8 +444,14 @@ def case_done(method: str, path: str, locale_scoped: bool = False) -> bool:
 
 def case_exists(method: str, path: str, locale_scoped: bool = False) -> bool:
     for candidate in candidate_paths(path, locale_scoped=locale_scoped):
-        clean_path, _ = split_path_query(candidate)
+        clean_path, query = split_path_query(candidate)
         if "{" in clean_path or "}" in clean_path:
+            continue
+        if query:
+            # Concrete query: require an existing case that has the same parameter set
+            surface_keys = frozenset(k for k, _ in parse_qsl(query, keep_blank_values=True))
+            if surface_keys and (method, clean_path, surface_keys) in all_case_keys_with_query:
+                return True
             continue
         if (method, clean_path) in all_case_keys:
             return True
@@ -348,10 +504,18 @@ def parse_target_request(target: str):
         path = parsed.path or "/"
         if parsed.query:
             path = f"{path}?{parsed.query}"
+        if parsed.fragment:
+            path = f"{path}#{parsed.fragment}"
         return method or "GET", path, rest, (parsed.hostname or "").lower(), locale_scoped
 
     if method:
         return method, rest, None, None, locale_scoped
+
+    if rest.startswith("#/"):
+        return "GET", "/" + rest, None, None, locale_scoped
+
+    if rest.startswith("/"):
+        return "GET", rest, None, None, locale_scoped
 
     return None, None, None, None, locale_scoped
 
@@ -391,6 +555,9 @@ def finding_mentions(*needles: str) -> bool:
 def followup_type(method: str, path: str) -> str:
     if path.endswith("/file-upload") or path == "/file-upload":
         return "upload"
+    lowered_path = path.lower()
+    if any(lowered_path.endswith(ext) for ext in _INTERESTING_ASSET_EXTENSIONS):
+        return "data"
     if method != "GET":
         return "api"
     api_prefixes = (
@@ -429,10 +596,9 @@ def build_followup(method: str, path: str, target: str, absolute_url: str | None
         "notes": f"surface coverage follow-up for {target}",
     }
     if query:
-        query_obj = {}
-        key, _, value = query.partition("=")
-        query_obj[key] = value
-        item["query_params"] = query_obj
+        query_obj = dict(parse_qsl(query, keep_blank_values=True))
+        if query_obj:
+            item["query_params"] = query_obj
     return item
 
 
@@ -440,6 +606,7 @@ updates = []
 followups = []
 remaining = []
 seen_followups = set()
+browser_flow_summaries = list((eng_dir / "scans" / "browser-flow").glob("**/summary.json")) if (eng_dir / "scans" / "browser-flow").is_dir() else []
 
 for row in rows:
     target = normalize_target(str(row.get("target") or ""))
@@ -454,12 +621,9 @@ for row in rows:
     decision = None
     reason = None
 
-    if target.startswith("GET /#/"):
-        decision = "not_applicable"
-        reason = "client-side fragment route; already represented by reviewed SPA shell/bundle and not requestable as a distinct server path"
-    elif surface_type == "dynamic_render" and target.startswith("SPA routes ") and (("GET", "/main.js") in done_case_keys or ("GET", "/") in done_case_keys):
+    if surface_type == "dynamic_render" and target.startswith("SPA routes ") and browser_flow_summaries:
         decision = "covered"
-        reason = "source analysis already reviewed the SPA bundle that disclosed these client-side routes"
+        reason = "SPA bundle reviewed and at least one live browser-flow execution recorded"
     elif absolute_host and not host_in_scope(absolute_host):
         decision = "not_applicable"
         reason = f"surface references out-of-scope host {absolute_host}"

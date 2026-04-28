@@ -31,9 +31,22 @@ def create_event_for_run(
     task_name: str,
     agent_name: str,
     summary: str,
+    kind: str = "legacy",
+    level: str = "info",
+    payload_json: str = "{}",
 ) -> Event:
     run = _run_or_404(project_id, run_id, user)
-    return db.create_event(run.id, event_type, phase, task_name, agent_name, summary)
+    return db.create_event(
+        run.id,
+        event_type,
+        phase,
+        task_name,
+        agent_name,
+        summary,
+        kind=kind,
+        level=level,
+        payload_json=payload_json,
+    )
 
 
 def _agent_phase(agent_name: str | None) -> str:

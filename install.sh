@@ -269,7 +269,7 @@ else
     if [ -d "$INSTALL_DIR/skills" ] || [ -d "$INSTALL_DIR/.opencode" ] || [ -d "$INSTALL_DIR/.claude" ] || [ -d "$INSTALL_DIR/.codex" ] || [ -d "$INSTALL_DIR/agent" ] || [ -f "$INSTALL_DIR/run.sh" ]; then
         warn "Existing installation detected in $INSTALL_DIR — upgrading"
         # Preserve engagement data and .env (user config)
-        for keep in engagements .env auth.json workspace opencode-home; do
+        for keep in engagements .env auth.json workspace opencode-home opencode-config opencode-state; do
             [ -e "$INSTALL_DIR/$keep" ] && mv "$INSTALL_DIR/$keep" "/tmp/redteam-preserve-$keep" 2>/dev/null
         done
         # Remove old files
@@ -279,7 +279,7 @@ else
                "$INSTALL_DIR/.env.example" "$INSTALL_DIR/agent" "$INSTALL_DIR/run.sh" \
                "$INSTALL_DIR/install.sh"
         # Restore preserved data
-        for keep in engagements .env auth.json workspace opencode-home; do
+        for keep in engagements .env auth.json workspace opencode-home opencode-config opencode-state; do
             [ -e "/tmp/redteam-preserve-$keep" ] && mv "/tmp/redteam-preserve-$keep" "$INSTALL_DIR/$keep" 2>/dev/null
         done
         ok "Old installation cleaned (state + .env preserved)"
@@ -375,22 +375,25 @@ else
         info "Installing Docker all-in-one runtime files..."
         (
           cd "$REPO_ROOT"
-          git ls-files install.sh agent docker/redteam-allinone | while IFS= read -r path; do
+          git ls-files install.sh agent | while IFS= read -r path; do
             mkdir -p "$INSTALL_DIR/$(dirname "$path")"
             cp "$REPO_ROOT/$path" "$INSTALL_DIR/$path"
           done
         )
-        cp "$REPO_ROOT/docker/redteam-allinone/run.sh.tpl" "$INSTALL_DIR/run.sh"
+        cp "$REPO_ROOT/agent/docker/redteam-allinone/run.sh.tpl" "$INSTALL_DIR/run.sh"
         chmod +x "$INSTALL_DIR/run.sh"
-        cp "$INSTALL_DIR/docker/redteam-allinone/.env.example" "$INSTALL_DIR/.env.example"
+        cp "$INSTALL_DIR/agent/docker/redteam-allinone/.env.example" "$INSTALL_DIR/.env.example"
         if [ -f "$INSTALL_DIR/.env" ]; then
             ok ".env preserved"
         else
             cp "$INSTALL_DIR/.env.example" "$INSTALL_DIR/.env"
             warn "Created $INSTALL_DIR/.env from Docker template — update API keys before running ./run.sh"
         fi
-        mkdir -p "$INSTALL_DIR/workspace" "$INSTALL_DIR/opencode-home"
-        ok "Docker runtime files (agent/, docker/redteam-allinone/, run.sh, .env)"
+        mkdir -p "$INSTALL_DIR/workspace" \
+                 "$INSTALL_DIR/opencode-home" \
+                 "$INSTALL_DIR/opencode-config" \
+                 "$INSTALL_DIR/opencode-state"
+        ok "Docker runtime files (agent/, run.sh, .env)"
         ;;
     esac
 
@@ -418,7 +421,7 @@ else
     if [ "$PRODUCT" = "docker" ]; then
         if $FORCE_REBUILD; then
             info "Force rebuilding redteam-allinone..."
-            if run_build docker build --pull --no-cache -t redteam-allinone:latest -f docker/redteam-allinone/Dockerfile .; then
+            if run_build docker build --pull --no-cache -t redteam-allinone:latest -f agent/docker/redteam-allinone/Dockerfile .; then
                 ok "redteam-allinone"
             else
                 fail "Failed to build redteam-allinone"; ERRORS=$((ERRORS + 1))
@@ -427,7 +430,7 @@ else
             ok "redteam-allinone (already exists)"
         else
             info "Building redteam-allinone (this may take several minutes)..."
-            if run_build docker build -t redteam-allinone:latest -f docker/redteam-allinone/Dockerfile .; then
+            if run_build docker build -t redteam-allinone:latest -f agent/docker/redteam-allinone/Dockerfile .; then
                 ok "redteam-allinone"
             else
                 fail "Failed to build redteam-allinone"; ERRORS=$((ERRORS + 1))
@@ -610,6 +613,6 @@ case "$PRODUCT" in
   opencode) echo "    .opencode/  skills/  references/  scripts/  docker/" ;;
   claude)   echo "    .claude/    skills/  references/  scripts/  docker/  CLAUDE.md" ;;
   codex)    echo "    .codex/     skills/  references/  scripts/  docker/  AGENTS.md" ;;
-  docker)   echo "    agent/  docker/redteam-allinone/  run.sh  .env  workspace/  opencode-home/" ;;
+  docker)   echo "    agent/  run.sh  .env  workspace/  opencode-home/  opencode-config/  opencode-state/" ;;
 esac
 echo ""

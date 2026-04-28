@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import contextlib
+import fnmatch
 import json
 import os
 import re
@@ -127,6 +129,10 @@ RUN_STALL_TIMEOUT_SECONDS = 900
 PROCESSING_AGENT_MISMATCH_GRACE_SECONDS = 120
 PENDING_QUEUE_DISPATCH_GRACE_SECONDS = 120
 PERMISSION_REQUEST_GRACE_SECONDS = 60
+AUTO_RESUME_STALL_GRACE_SECONDS = max(
+    PROCESSING_AGENT_MISMATCH_GRACE_SECONDS,
+    PENDING_QUEUE_DISPATCH_GRACE_SECONDS,
+)
 # Real targets can spend several minutes in autonomous initialization/recon before the
 # first queue item or observed path lands. Keep the live launcher watchdog aligned with
 # the API reconciler so we do not fail healthy slow-start recon while subagent dispatch
@@ -163,10 +169,13 @@ def _copy_sqlite_snapshot(path: Path, snapshot_dir: Path) -> Path:
 
 
 def _read_sqlite_snapshot(path: Path, reader, default):
+    # See note in run_summary._read_sqlite_snapshot — sqlite3.Connection's
+    # context manager does NOT close. Wrap every connect() with
+    # contextlib.closing to avoid fd leaks under Dashboard polling load.
     try:
         with tempfile.TemporaryDirectory(prefix="launcher-sqlite-") as temp_dir:
             snapshot_path = _copy_sqlite_snapshot(path, Path(temp_dir))
-            with _connect_sqlite_readonly(snapshot_path) as connection:
+            with contextlib.closing(_connect_sqlite_readonly(snapshot_path)) as connection:
                 return reader(connection)
     except (OSError, sqlite3.Error):
         return default
@@ -178,7 +187,7 @@ def _read_sqlite_with_fallback(path: Path, reader, default):
 
     for _ in range(5):
         try:
-            with sqlite3.connect(path, timeout=1.0) as connection:
+            with contextlib.closing(sqlite3.connect(path, timeout=1.0)) as connection:
                 connection.execute("PRAGMA busy_timeout = 1000")
                 return reader(connection)
         except sqlite3.OperationalError as exc:
@@ -189,7 +198,7 @@ def _read_sqlite_with_fallback(path: Path, reader, default):
                 return default
 
         try:
-            with _connect_sqlite_readonly(path) as connection:
+            with contextlib.closing(_connect_sqlite_readonly(path)) as connection:
                 return reader(connection)
         except sqlite3.OperationalError as exc:
             if not _is_sqlite_transient_error(exc) and not _is_sqlite_corruption_error(exc):
@@ -449,6 +458,11 @@ def _normalize_scope_file(scope_path: Path, *, run: Run | None = None) -> dict[s
             payload["phases_completed"] = normalized
             changed = True
 
+    if _promote_completed_scope_from_artifacts(scope_path, payload):
+        changed = True
+        current_phase = _canonical_phase_name(payload.get("current_phase"))
+        status_name = _canonical_scope_status(payload.get("status"))
+
     if status_name == "complete" and not str(payload.get("end_time") or "").strip():
         ended_at = str(getattr(run, "updated_at", "") or "").strip()
         if ended_at:
@@ -528,11 +542,37 @@ def _heartbeat_context(run: Run) -> tuple[str, str]:
     return (phase, f"Runtime active in {phase}; waiting for new agent output.")
 
 
+# Stages that are TERMINAL in the streaming pipeline. A case at one of these
+# stages has finished its journey through the queue even if its `status`
+# column wasn't flipped to `done` (which happens, for example, when the
+# operator transitions a case via `set-stage` instead of `done --stage`, or
+# when a subagent's terminal-stage handoff didn't get translated to a `done`
+# call). Counting these as "pending undispatched work" produces false
+# `incomplete_stop` / `queue_stalled` failures (observed on run 730).
+_TERMINAL_CASE_STAGES = ("source_analyzed", "api_tested", "clean", "exploited", "errored")
+
+
+def _stage_column_present(connection: sqlite3.Connection) -> bool:
+    cols = {
+        row[1]
+        for row in connection.execute("PRAGMA table_info(cases)").fetchall()
+    }
+    return "stage" in cols
+
+
 def _count_remaining_cases(cases_db: Path) -> tuple[int, int]:
     def _reader(connection: sqlite3.Connection) -> tuple[int, int]:
-        pending = connection.execute(
-            "SELECT COUNT(*) FROM cases WHERE status = 'pending'"
-        ).fetchone()
+        if _stage_column_present(connection):
+            terminal_placeholders = ",".join("?" * len(_TERMINAL_CASE_STAGES))
+            pending = connection.execute(
+                "SELECT COUNT(*) FROM cases WHERE status = 'pending' "
+                f"AND stage NOT IN ({terminal_placeholders})",
+                _TERMINAL_CASE_STAGES,
+            ).fetchone()
+        else:
+            pending = connection.execute(
+                "SELECT COUNT(*) FROM cases WHERE status = 'pending'"
+            ).fetchone()
         processing = connection.execute(
             "SELECT COUNT(*) FROM cases WHERE status = 'processing'"
         ).fetchone()
@@ -1013,9 +1053,18 @@ def _load_running_queue_state(engagement_dir: Path | None) -> tuple[str, int, in
 
     def _reader(connection: sqlite3.Connection) -> tuple[int, int, int]:
         total_row = connection.execute("SELECT COUNT(*) FROM cases").fetchone()
-        pending_row = connection.execute(
-            "SELECT COUNT(*) FROM cases WHERE status = 'pending'"
-        ).fetchone()
+        # Stage-aware pending — see _count_remaining_cases comment.
+        if _stage_column_present(connection):
+            terminal_placeholders = ",".join("?" * len(_TERMINAL_CASE_STAGES))
+            pending_row = connection.execute(
+                "SELECT COUNT(*) FROM cases WHERE status = 'pending' "
+                f"AND stage NOT IN ({terminal_placeholders})",
+                _TERMINAL_CASE_STAGES,
+            ).fetchone()
+        else:
+            pending_row = connection.execute(
+                "SELECT COUNT(*) FROM cases WHERE status = 'pending'"
+            ).fetchone()
         processing_row = connection.execute(
             "SELECT COUNT(*) FROM cases WHERE status = 'processing'"
         ).fetchone()
@@ -1031,6 +1080,20 @@ def _load_running_queue_state(engagement_dir: Path | None) -> tuple[str, int, in
         (0, 0, 0),
     )
     return (current_phase, total_cases, pending_cases, processing_cases)
+
+
+_SLOT_SUFFIX_RE = re.compile(r":s\d+$")
+
+
+def _base_agent_name(raw: str) -> str:
+    """Strip the `:sN` slot suffix that parallel_dispatch.sh appends to
+    `assigned_agent`. The stall detector needs to compare processing-case
+    agent tags against bare runtime-agent names; without stripping, a
+    parallel dispatch like `source-analyzer:s0` / `:s1` never matches the
+    bare `source-analyzer` runtime agent and the run is mis-flagged as
+    `queue_stalled` (observed in runs #482, #483).
+    """
+    return _SLOT_SUFFIX_RE.sub("", raw) if raw else raw
 
 
 def _load_running_processing_agents(engagement_dir: Path | None) -> set[str]:
@@ -1081,7 +1144,10 @@ def _stale_processing_agents(
     now = time.time()
     latest_consumed_at: dict[str, float] = {}
     for agent_name, consumed_at in rows:
-        if not agent_name or agent_name in active_runtime_agents:
+        # The assigned_agent column may carry a slot suffix (":s0", ":s1",
+        # ...) when parallel_dispatch.sh fetched the batch. The runtime
+        # active set uses bare names, so compare by base name.
+        if not agent_name or _base_agent_name(agent_name) in active_runtime_agents:
             continue
         parsed = _parse_runtime_activity_timestamp(consumed_at)
         if not _runtime_activity_candidate_is_valid(parsed):
@@ -1109,13 +1175,20 @@ def _recover_orphaned_processing_cases(run: Run, engagement_dir: Path | None) ->
     if not processing_agents:
         return (0, set())
 
+    # Compare BASE agent names (without `:sN` slot suffix) against the runtime
+    # active set; then map orphan base-names back to the slot-tagged raw values
+    # we need for the UPDATE WHERE-clause.
     active_runtime_agents = _active_runtime_agents(run)
-    orphaned_agents = processing_agents.difference(active_runtime_agents)
+    base_processing = {_base_agent_name(a) for a in processing_agents}
+    orphaned_bases = base_processing.difference(active_runtime_agents)
+    if not orphaned_bases:
+        return (0, set())
+    orphaned_agents = {a for a in processing_agents if _base_agent_name(a) in orphaned_bases}
     if not orphaned_agents:
         return (0, set())
 
     try:
-        with sqlite3.connect(cases_db, timeout=5.0) as connection:
+        with contextlib.closing(sqlite3.connect(cases_db, timeout=5.0)) as connection:
             connection.execute("PRAGMA busy_timeout = 5000")
             column_rows = connection.execute("PRAGMA table_info(cases)").fetchall()
             column_names = {str(row[1]) for row in column_rows if len(row) > 1}
@@ -1191,17 +1264,42 @@ def _latest_runtime_metadata_activity_at(run: Run) -> float | None:
     return latest
 
 
+def _auto_resume_stall_guard_active(run: Run) -> bool:
+    value = _read_run_metadata(run).get("auto_resume_started_at")
+    try:
+        started_at = float(value or 0.0)
+    except (TypeError, ValueError):
+        return False
+    if started_at <= 0:
+        return False
+    return (time.time() - started_at) < AUTO_RESUME_STALL_GRACE_SECONDS
+
+
+def _has_live_runtime_work_agent(active_runtime_agents: set[str], *, has_current_task: bool) -> bool:
+    if has_current_task:
+        return True
+    return any(agent_name != "operator" for agent_name in active_runtime_agents)
+
+
 def _running_container_stall_reason(run: Run) -> tuple[str, str, str] | None:
     engagement_dir = _active_engagement_dir(run)
     current_phase, total_cases, pending_cases, processing_cases = _load_running_queue_state(engagement_dir)
 
     workflow_activity_at = _latest_running_workflow_activity_at(engagement_dir)
+    active_runtime_agents = _active_runtime_agents(run)
+    has_current_task = _run_metadata_has_current_task(run)
+    has_live_runtime_work_agent = _has_live_runtime_work_agent(
+        active_runtime_agents,
+        has_current_task=has_current_task,
+    )
     workflow_age = (time.time() - workflow_activity_at) if workflow_activity_at is not None else None
     if workflow_age is not None:
         if (
             current_phase not in EARLY_PHASE_STALL_PHASES
             and processing_cases > 0
             and workflow_age >= RUN_STALL_TIMEOUT_SECONDS
+            and not active_runtime_agents
+            and not has_current_task
         ):
             return (
                 current_phase,
@@ -1213,6 +1311,8 @@ def _running_container_stall_reason(run: Run) -> tuple[str, str, str] | None:
             and pending_cases > 0
             and processing_cases == 0
             and workflow_age >= RUN_STALL_TIMEOUT_SECONDS
+            and not active_runtime_agents
+            and not has_current_task
         ):
             return (
                 current_phase,
@@ -1222,8 +1322,7 @@ def _running_container_stall_reason(run: Run) -> tuple[str, str, str] | None:
 
     runtime_activity_at = _latest_running_runtime_activity_at(run)
     metadata_activity_at = _latest_runtime_metadata_activity_at(run)
-    active_runtime_agents = _active_runtime_agents(run)
-    has_current_task = _run_metadata_has_current_task(run)
+    auto_resume_guard_active = _auto_resume_stall_guard_active(run)
     processing_agents = _load_running_processing_agents(engagement_dir)
     opencode_logs_root = opencode_home_root_for(run) / "log"
     permission_log_paths = [process_log_path_for(run)]
@@ -1249,7 +1348,8 @@ def _running_container_stall_reason(run: Run) -> tuple[str, str, str] | None:
         current_phase not in EARLY_PHASE_STALL_PHASES
         and pending_cases > 0
         and processing_cases == 0
-        and not active_runtime_agents
+        and not has_live_runtime_work_agent
+        and not auto_resume_guard_active
         and workflow_age is not None
         and workflow_age >= PENDING_QUEUE_DISPATCH_GRACE_SECONDS
     ):
@@ -1259,11 +1359,17 @@ def _running_container_stall_reason(run: Run) -> tuple[str, str, str] | None:
             "Pending queue items remained undispatched with no active runtime agent after dispatch grace period elapsed.",
         )
 
+    # `orphaned_fetch.agent` comes from a parallel_dispatch log line and is
+    # already a bare agent name (no ":sN"); normalize processing_agents to
+    # base names for the membership check so a fetch whose matching task
+    # hasn't dispatched gets detected even when cases.db rows carry slots.
+    base_processing_for_fetch = {_base_agent_name(a) for a in processing_agents}
     if (
         current_phase not in EARLY_PHASE_STALL_PHASES
         and orphaned_fetch is not None
-        and str(orphaned_fetch.get("agent") or "") in processing_agents
+        and str(orphaned_fetch.get("agent") or "") in base_processing_for_fetch
         and str(orphaned_fetch.get("agent") or "") not in active_runtime_agents
+        and not auto_resume_guard_active
         and (time.time() - float(orphaned_fetch.get("timestamp") or 0.0)) >= PROCESSING_AGENT_MISMATCH_GRACE_SECONDS
     ):
         batch_type = str(orphaned_fetch.get("batch_type") or "queue")
@@ -1289,8 +1395,7 @@ def _running_container_stall_reason(run: Run) -> tuple[str, str, str] | None:
         and total_cases > 0
         and pending_cases == 0
         and processing_cases == 0
-        and not active_runtime_agents
-        and not has_current_task
+        and not has_live_runtime_work_agent
         and orphan_activity_at is not None
         and (time.time() - orphan_activity_at) >= RUN_STALL_TIMEOUT_SECONDS
     ):
@@ -1310,9 +1415,8 @@ def _running_container_stall_reason(run: Run) -> tuple[str, str, str] | None:
         stale_processing_activity_at is None or metadata_activity_at > stale_processing_activity_at
     ):
         stale_processing_activity_at = metadata_activity_at
-    recent_processing_handoff = (
-        not active_runtime_agents
-        and stale_processing_activity_at is not None
+    recent_processing_handoff = auto_resume_guard_active or (
+        stale_processing_activity_at is not None
         and (time.time() - stale_processing_activity_at) < PROCESSING_AGENT_MISMATCH_GRACE_SECONDS
     )
     if current_phase not in EARLY_PHASE_STALL_PHASES and stale_processing_agents and not recent_processing_handoff:
@@ -1340,11 +1444,12 @@ def _running_container_stall_reason(run: Run) -> tuple[str, str, str] | None:
         if workflow_activity_at is not None and workflow_activity_at > mismatch_activity_at:
             mismatch_activity_at = workflow_activity_at
         mismatch_age = time.time() - mismatch_activity_at
+        base_processing = {_base_agent_name(a) for a in processing_agents}
         if (
             current_phase not in EARLY_PHASE_STALL_PHASES
             and processing_agents
             and mismatch_age >= PROCESSING_AGENT_MISMATCH_GRACE_SECONDS
-            and processing_agents.isdisjoint(active_runtime_agents)
+            and base_processing.isdisjoint(active_runtime_agents)
         ):
             assigned = ", ".join(sorted(processing_agents))
             if active_runtime_agents:
@@ -1390,22 +1495,122 @@ def _running_container_stall_reason(run: Run) -> tuple[str, str, str] | None:
     return None
 
 
-def _surface_completion_ok(surface_file: Path) -> bool:
+_SURFACE_STATUS_RANK = {
+    "discovered": 0,
+    "deferred": 1,
+    "not_applicable": 2,
+    "covered": 3,
+}
+_SURFACE_COMPLETION_LOOPBACK_HOSTS = _LOOPBACK_RUNTIME_HOSTS | {_RUNTIME_HOST_GATEWAY_ALIAS}
+
+
+def _surface_default_port(parsed) -> int | None:
+    if parsed.port is not None:
+        return parsed.port
+    if parsed.scheme == "http":
+        return 80
+    if parsed.scheme == "https":
+        return 443
+    return None
+
+
+def _normalize_surface_fragment_path(value: str) -> str:
+    fragment = value.strip()
+    if fragment.startswith("/#/"):
+        return fragment
+    if fragment.startswith("#/"):
+        return "/" + fragment
+    if fragment.startswith("/"):
+        return "/#" + fragment
+    return "/#/" + fragment.lstrip("#/")
+
+
+def _split_surface_target_spec(value: str) -> tuple[str | None, str]:
+    parts = value.split(None, 1)
+    if len(parts) == 2 and parts[0].upper() in {"GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"}:
+        return parts[0].upper(), parts[1].strip()
+    return None, value
+
+
+def _canonicalize_surface_target_for_scope(value: str, scope_target: str) -> str:
+    normalized_value = " ".join(str(value or "").strip().split())
+    if not normalized_value:
+        return normalized_value
+
+    method, remainder = _split_surface_target_spec(normalized_value)
+    parsed_scope = urlsplit(scope_target) if scope_target else None
+    scope_host = (parsed_scope.hostname or "").strip().lower().strip("[]") if parsed_scope else ""
+
+    if remainder.startswith(("http://", "https://")):
+        parsed = urlsplit(remainder)
+        candidate_host = (parsed.hostname or "").strip().lower().strip("[]")
+        candidate_port = _surface_default_port(parsed)
+        scope_port = _surface_default_port(parsed_scope) if parsed_scope else None
+        same_scope_host = bool(
+            parsed_scope
+            and parsed.scheme == parsed_scope.scheme
+            and candidate_port == scope_port
+            and (
+                candidate_host == scope_host
+                or (candidate_host in _SURFACE_COMPLETION_LOOPBACK_HOSTS and scope_host in _SURFACE_COMPLETION_LOOPBACK_HOSTS)
+            )
+        )
+        if same_scope_host:
+            if parsed.fragment:
+                normalized_path = _normalize_surface_fragment_path(parsed.fragment)
+            else:
+                normalized_path = parsed.path or "/"
+                if parsed.query:
+                    normalized_path = f"{normalized_path}?{parsed.query}"
+            return f"{method or 'GET'} {normalized_path}"
+        return f"{method + ' ' if method else ''}{remainder}"
+
+    if remainder.startswith(("/#/", "#/")):
+        return f"{method or 'GET'} {_normalize_surface_fragment_path(remainder)}"
+    if remainder.startswith("/"):
+        return f"{method or 'GET'} {remainder}"
+    return f"{method + ' ' if method else ''}{remainder}"
+
+
+def _surface_completion_ok(surface_file: Path, scope: dict[str, object] | None = None) -> bool:
     if not surface_file.exists():
         return True
     try:
         rows = [json.loads(line) for line in surface_file.read_text(encoding="utf-8").splitlines() if line.strip()]
     except json.JSONDecodeError:
         return False
+
+    scope_target = ""
+    if isinstance(scope, dict):
+        scope_target = str(scope.get("target") or "").strip()
+
     strict_deferred_types = {
         "account_recovery",
         "dynamic_render",
         "object_reference",
         "privileged_write",
     }
+    aggregated: dict[tuple[str, str], dict[str, str]] = {}
+
     for row in rows:
-        status_name = str(row.get("status") or "").strip()
-        surface_type = str(row.get("surface_type") or "").strip()
+        surface_type = _normalize_surface_type(str(row.get("surface_type") or "").strip())
+        status_name = str(row.get("status") or "discovered").strip().lower().replace("-", "_")
+        if status_name not in _VALID_SURFACE_STATUSES:
+            status_name = "discovered"
+        key = (
+            surface_type,
+            _canonicalize_surface_target_for_scope(str(row.get("target") or ""), scope_target),
+        )
+        current = aggregated.get(key)
+        if current is None or _SURFACE_STATUS_RANK[status_name] >= _SURFACE_STATUS_RANK[current["status"]]:
+            aggregated[key] = {
+                "surface_type": surface_type,
+                "status": status_name,
+            }
+
+    for row in aggregated.values():
+        status_name = row["status"]
+        surface_type = row["surface_type"]
         if status_name == "discovered":
             return False
         if status_name == "deferred" and surface_type in strict_deferred_types:
@@ -1432,13 +1637,68 @@ def _last_logged_stop_reason(log_path: Path) -> str:
     return _last_logged_stop_metadata(log_path)[1]
 
 
-_REPORT_REQUIRED_SECTIONS = (
-    "## Executive Summary",
-    "## Scope and Methodology",
-    "## Findings",
-    "## Attack Narrative",
-    "## Recommendations",
-    "## Appendix",
+def _promote_completed_scope_from_artifacts(scope_path: Path, payload: dict[str, object]) -> bool:
+    status_name = _canonical_scope_status(payload.get("status"))
+
+    current_phase = _canonical_phase_name(payload.get("current_phase"))
+    phases_completed_raw = payload.get("phases_completed")
+    if isinstance(phases_completed_raw, list):
+        phases_completed = [
+            _canonical_phase_name(item)
+            for item in phases_completed_raw
+            if _canonical_phase_name(item)
+        ]
+    else:
+        phases_completed = []
+
+    if current_phase == "complete" and "report" in phases_completed:
+        return False
+
+    engagement_dir = scope_path.parent
+    log_path = engagement_dir / "log.md"
+    report_path = engagement_dir / "report.md"
+    cases_db = engagement_dir / "cases.db"
+    surfaces_path = engagement_dir / "surfaces.jsonl"
+
+    reason_code, _reason_text = _last_logged_stop_metadata(log_path)
+    # A stale earlier Run stop entry must not block finalization once scope.json
+    # itself is complete and the durable report/queue/surface artifacts below
+    # prove the engagement finished. This happens when an autonomous run resumes
+    # after a mid-run pause and later reaches report completion.
+    if reason_code and reason_code != "completed" and status_name != "complete":
+        return False
+    if not report_path.exists():
+        return False
+    if not _report_has_substantive_content(report_path.read_text(encoding="utf-8", errors="replace")):
+        return False
+
+    pending_cases, processing_cases = _count_remaining_cases(cases_db)
+    if pending_cases or processing_cases:
+        return False
+    if not _surface_completion_ok(surfaces_path, payload):
+        return False
+
+    changed = False
+    if status_name != "complete":
+        payload["status"] = "complete"
+        changed = True
+    if current_phase != "complete":
+        payload["current_phase"] = "complete"
+        changed = True
+    if "report" not in phases_completed:
+        phases_completed.append("report")
+        payload["phases_completed"] = phases_completed
+        changed = True
+    return changed
+
+
+_REPORT_REQUIRED_SECTION_GROUPS = (
+    ("## Executive Summary",),
+    ("## Scope and Methodology", "## Methodology"),
+    ("## Findings",),
+    ("## Attack Narrative", "## Attack Path Narrative"),
+    ("## Recommendations",),
+    ("## Appendix",),
 )
 _FINDING_SECTION_PATTERN = re.compile(
     r"^## \[(?P<id>[^\]]+)\] (?P<title>.+?)\n(?P<body>.*?)(?=^## \[|\Z)",
@@ -1452,12 +1712,18 @@ def _report_has_substantive_content(text: str) -> bool:
     stripped = text.strip()
     if not stripped or len(stripped) < 400:
         return False
-    matched_sections = sum(1 for section in _REPORT_REQUIRED_SECTIONS if section in stripped)
+    matched_sections = sum(
+        1
+        for section_group in _REPORT_REQUIRED_SECTION_GROUPS
+        if any(section in stripped for section in section_group)
+    )
     if matched_sections < 4:
         return False
     if "## Findings" not in stripped:
         return False
     if re.search(r"^### \[FINDING-\d{3}\] ", stripped, flags=re.MULTILINE):
+        return True
+    if re.search(r"^### FINDING-\d{3}:", stripped, flags=re.MULTILINE):
         return True
     return "No confirmed findings" in stripped
 
@@ -1546,7 +1812,7 @@ def _synthesize_completion_report(engagement_dir: Path, scope: dict[str, object]
     total_cases = 0
     if cases_db.exists():
         try:
-            with sqlite3.connect(cases_db) as connection:
+            with contextlib.closing(sqlite3.connect(cases_db)) as connection:
                 row = connection.execute("SELECT COUNT(*) FROM cases").fetchone()
             total_cases = int(row[0]) if row else 0
         except sqlite3.Error:
@@ -1672,15 +1938,19 @@ def engagement_completion_state(run: Run) -> tuple[bool, str]:
     current_phase = _canonical_phase_name(scope.get("current_phase"))
     completed_phases = {_canonical_phase_name(item) for item in scope.get("phases_completed", [])}
 
+    if status_name != "complete" and _promote_completed_scope_from_artifacts(scope_path, scope):
+        scope_path.write_text(json.dumps(scope, indent=2) + "\n", encoding="utf-8")
+        status_name = _canonical_scope_status(scope.get("status"))
+        current_phase = _canonical_phase_name(scope.get("current_phase"))
+        completed_phases = {_canonical_phase_name(item) for item in scope.get("phases_completed", [])}
+
     if status_name != "complete":
+        if _continuous_observation_report_hold_active(run, engagement_dir=engagement_dir, scope=scope):
+            return (False, "Continuous observation hold active.")
         logged_reason = _last_logged_stop_reason(log_path)
         if logged_reason:
             return (False, logged_reason)
         return (False, f"Engagement status is {status_name or 'unknown'}.")
-    if current_phase != "complete":
-        return (False, f"Current phase is {current_phase or 'unknown'}.")
-    if "report" not in completed_phases:
-        return (False, "Report phase is not marked complete.")
     if not report_path.exists():
         return (False, "report.md is missing.")
     report_text = report_path.read_text(encoding="utf-8", errors="replace")
@@ -1694,8 +1964,19 @@ def engagement_completion_state(run: Run) -> tuple[bool, str]:
             f"Queue still has pending={pending_cases} processing={processing_cases}.",
         )
 
-    if not _surface_completion_ok(surfaces_path):
+    if not _surface_completion_ok(surfaces_path, scope):
         return (False, "Surface coverage is still unresolved.")
+
+    if current_phase != "complete" or "report" not in completed_phases:
+        if _promote_completed_scope_from_artifacts(scope_path, scope):
+            current_phase = _canonical_phase_name(scope.get("current_phase"))
+            completed_phases = {_canonical_phase_name(item) for item in scope.get("phases_completed", [])}
+            scope_path.write_text(json.dumps(scope, indent=2) + "\n", encoding="utf-8")
+
+    if current_phase != "complete":
+        return (False, f"Current phase is {current_phase or 'unknown'}.")
+    if "report" not in completed_phases:
+        return (False, "Report phase is not marked complete.")
 
     return (True, "Engagement completed and finalized.")
 
@@ -1897,7 +2178,7 @@ def _normalize_cases_db(path: Path, context: dict[str, str] | None) -> None:
     if context is None or not path.exists():
         return
     try:
-        with sqlite3.connect(path, timeout=1.0) as connection:
+        with contextlib.closing(sqlite3.connect(path, timeout=1.0)) as connection:
             connection.execute("PRAGMA busy_timeout = 1000")
             column_rows = connection.execute("PRAGMA table_info(cases)").fetchall()
             column_names = {str(row[1]) for row in column_rows}
@@ -2324,6 +2605,141 @@ def _clear_run_terminal_reason(run: Run) -> None:
     metadata_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
+def _continuous_observation_target_matches(run: Run) -> bool:
+    env_path = seed_root_for(run) / "env.json"
+    if not env_path.exists():
+        return False
+    try:
+        payload = json.loads(env_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return False
+    if not isinstance(payload, dict):
+        return False
+
+    configured = str(
+        payload.get("REDTEAM_CONTINUOUS_TARGETS")
+        or payload.get("CONTINUOUS_OBSERVATION_TARGETS")
+        or ""
+    ).strip()
+    if not configured:
+        return False
+
+    candidates: set[str] = set()
+    target = str(getattr(run, "target", "") or "").strip()
+    if target:
+        candidates.add(target)
+        parsed_target = urlsplit(target if "://" in target else f"https://{target}")
+        if parsed_target.hostname:
+            candidates.add(parsed_target.hostname)
+
+    engagement_dir = _active_engagement_dir(run)
+    scope = _normalize_scope_file(engagement_dir / "scope.json", run=run) if engagement_dir is not None else None
+    if isinstance(scope, dict):
+        scope_target = str(scope.get("target") or "").strip()
+        scope_hostname = str(scope.get("hostname") or "").strip()
+        if scope_target:
+            candidates.add(scope_target)
+            parsed_scope_target = urlsplit(scope_target if "://" in scope_target else f"https://{scope_target}")
+            if parsed_scope_target.hostname:
+                candidates.add(parsed_scope_target.hostname)
+        if scope_hostname:
+            candidates.add(scope_hostname)
+
+    patterns = [rule.strip() for rule in re.split(r"[;,]", configured) if rule.strip()]
+    return any(_matches_continuous_target(candidate, patterns) for candidate in candidates)
+
+
+def _matches_continuous_target(hostname: str, patterns: list[str]) -> bool:
+    """Return True if ``hostname`` matches any of the configured target patterns.
+
+    Supports three match modes, mirroring the shell logic in
+    ``agent/scripts/lib/scope.sh``:
+    - ``re:<regex>``  — Python ``re.search`` against hostname
+    - glob (``*``, ``?``, ``[…]``) — ``fnmatch.fnmatch``
+    - plain string   — exact equality
+    """
+    for pattern in patterns:
+        if not pattern:
+            continue
+        if pattern.startswith("re:"):
+            try:
+                if re.search(pattern[3:], hostname):
+                    return True
+            except re.error:
+                continue
+        elif any(c in pattern for c in ("*", "?", "[")):
+            if fnmatch.fnmatch(hostname, pattern):
+                return True
+        elif hostname == pattern:
+            return True
+    return False
+
+
+def _continuous_observation_log_hold_active(run: Run, engagement_dir: Path) -> bool:
+    """Detect the operator's post-report continuous-observation hold from logs.
+
+    Some long-running fixed-target engagements intentionally enter an
+    observation hold after the final report is written while the historical
+    ``scope.json`` still says ``consume_test``/``in_progress`` and the queue may
+    retain low-priority backlog.  In that state a clean runtime exit should be
+    auto-resumed instead of consuming the normal three incomplete-exit retries
+    and ending as ``engagement_incomplete``.
+    """
+    if not _continuous_observation_target_matches(run):
+        return False
+
+    report_path = engagement_dir / "report.md"
+    if not report_path.exists():
+        return False
+    if not _report_has_substantive_content(report_path.read_text(encoding="utf-8", errors="replace")):
+        return False
+
+    log_path = engagement_dir / "log.md"
+    if not log_path.exists():
+        return False
+    tail = log_path.read_text(encoding="utf-8", errors="replace")[-12000:]
+    return "Observation hold active" in tail and "runtime attached" in tail
+
+
+def _continuous_observation_report_hold_active(
+    run: Run,
+    *,
+    engagement_dir: Path | None = None,
+    scope: dict[str, object] | None = None,
+) -> bool:
+    if not _continuous_observation_target_matches(run):
+        return False
+
+    engagement_dir = engagement_dir or _active_engagement_dir(run)
+    if engagement_dir is None:
+        return False
+
+    if _continuous_observation_log_hold_active(run, engagement_dir):
+        return True
+
+    if scope is None:
+        scope = _normalize_scope_file(engagement_dir / "scope.json", run=run)
+    if not isinstance(scope, dict):
+        return False
+
+    if _canonical_phase_name(scope.get("current_phase")) != "report":
+        return False
+
+    report_path = engagement_dir / "report.md"
+    if not report_path.exists():
+        return False
+    report_text = report_path.read_text(encoding="utf-8", errors="replace")
+    if not _report_has_substantive_content(report_text):
+        return False
+
+    pending_cases, processing_cases = _count_remaining_cases(engagement_dir / "cases.db")
+    if pending_cases or processing_cases:
+        return False
+
+    surfaces_path = engagement_dir / "surfaces.jsonl"
+    return _surface_completion_ok(surfaces_path, scope)
+
+
 def _terminal_reason(
     *,
     succeeded: bool,
@@ -2340,7 +2756,11 @@ def _terminal_reason(
     if disappeared:
         return ("runtime_disappeared", "Runtime container disappeared unexpectedly.", "Runtime container disappeared unexpectedly.")
     if return_code == 0 and completion_reason.startswith("Queue still has"):
-        return ("queue_incomplete", completion_reason, f"Runtime stopped before engagement completed: {completion_reason}")
+        return (
+            "incomplete_stop",
+            "Runtime exited before engagement completed.",
+            "Runtime exited before engagement completed while unfinished queue work remained.",
+        )
     if return_code == 0 and completion_reason == "Surface coverage is still unresolved.":
         return ("surface_coverage_incomplete", completion_reason, f"Runtime stopped before engagement completed: {completion_reason}")
     if return_code == 0 and completion_reason.startswith("Engagement status is"):
@@ -2365,19 +2785,18 @@ def _terminal_reason_from_artifacts(run: Run) -> tuple[bool, str, str, str]:
             init_only_exit=init_only_exit,
         ))
 
-    engagement_dir = _active_engagement_dir(run)
-    queue_reason = ""
-    if engagement_dir is not None:
-        pending_cases, processing_cases = _count_remaining_cases(engagement_dir / "cases.db")
-        if pending_cases or processing_cases:
-            queue_reason = f"Queue still has pending={pending_cases} processing={processing_cases}."
-
-    inferred_reason = queue_reason or completion_reason
-    if init_only_exit or inferred_reason:
+    if init_only_exit:
         return (succeeded, *_terminal_reason(
             succeeded=False,
             return_code=0,
-            completion_reason=inferred_reason,
+            completion_reason=completion_reason,
+            init_only_exit=init_only_exit,
+        ))
+    if completion_reason:
+        return (succeeded, *_terminal_reason(
+            succeeded=False,
+            return_code=0,
+            completion_reason=completion_reason,
             init_only_exit=init_only_exit,
         ))
     return (succeeded, *_terminal_reason(
@@ -2427,6 +2846,10 @@ def prepare_run_runtime(project: Project, run: Run) -> None:
     elif (seed_root_for(run) / "env.json").exists():
         (seed_root_for(run) / "env.json").unlink()
 
+    workspace_env_path = workspace_root_for(run) / ".env"
+    workspace_env_path.parent.mkdir(parents=True, exist_ok=True)
+    workspace_env_path.write_text(_render_workspace_env_file(project), encoding="utf-8")
+
     metadata = {
         "id": run.id,
         "project_id": project.id,
@@ -2450,19 +2873,18 @@ def prepare_run_runtime(project: Project, run: Run) -> None:
     )
 
 
-def _runtime_env(project: Project, run: Run, user: User) -> dict[str, str]:
-    token = create_session_token()
-    db.create_session(user.id, token, session_expiry_timestamp())
-    env = os.environ.copy()
-    env.update(
-        {
-            "OPENCODE_HOME": str(opencode_home_root_for(run)),
-            "ORCHESTRATOR_BASE_URL": settings.orchestrator_container_url,
-            "ORCHESTRATOR_TOKEN": token,
-            "ORCHESTRATOR_PROJECT_ID": str(project.id),
-            "ORCHESTRATOR_RUN_ID": str(run.id),
-        }
-    )
+_CRAWLER_ALLOWED_KEYS = (
+    "KATANA_CRAWL_DEPTH", "KATANA_CRAWL_DURATION",
+    "KATANA_TIMEOUT_SECONDS", "KATANA_CONCURRENCY",
+    "KATANA_PARALLELISM", "KATANA_RATE_LIMIT",
+    "KATANA_STRATEGY",
+    "KATANA_ENABLE_HYBRID", "KATANA_ENABLE_XHR",
+    "KATANA_ENABLE_HEADLESS", "KATANA_ENABLE_JSLUICE",
+    "KATANA_ENABLE_PATH_CLIMB",
+)
+
+
+def _inject_model_provider_env(env: dict[str, str], project) -> None:
     provider_id = project.provider_id.strip().lower()
     model_id = project.model_id.strip()
     small_model_id = project.small_model_id.strip()
@@ -2501,6 +2923,99 @@ def _runtime_env(project: Project, run: Run, user: User) -> dict[str, str]:
         if model_id:
             env["OPENAI_MODEL"] = model_id
 
+
+def _render_workspace_env_file(project) -> str:
+    """Render `<engagement_root>/workspace/.env` from project config.
+
+    In-container agent scripts and `docker run --env-file` expect plain
+    KEY=VALUE lines. Only project-scoped keys land here; per-run secrets
+    (session tokens, runtime paths) stay in the process env built by
+    `_runtime_env` and are passed via explicit `-e` flags instead.
+    """
+    lines: list[str] = []
+    payload: dict[str, str] = {}
+
+    if project.env_json and project.env_json.strip():
+        try:
+            env_payload = json.loads(project.env_json)
+        except json.JSONDecodeError:
+            env_payload = {}
+        if isinstance(env_payload, dict):
+            for key, value in env_payload.items():
+                if not isinstance(key, str) or value is None:
+                    continue
+                payload[key] = str(value)
+
+    _inject_model_provider_env(payload, project)
+    _inject_project_config_env(payload, project)
+
+    for key in sorted(payload):
+        value = payload[key]
+        if "\n" in value or "\r" in value:
+            value = value.replace("\n", " ").replace("\r", " ")
+        lines.append(f"{key}={value}")
+    return "\n".join(lines) + ("\n" if lines else "")
+
+
+def _inject_project_config_env(env: dict, project) -> None:
+    """Parse project.crawler_json / parallel_json / agents_json and fold
+    relevant values into `env` in-place. Malformed JSON is silently ignored
+    (the API validates on write)."""
+    crawler_raw = (project.crawler_json or "").strip()
+    if crawler_raw:
+        try:
+            crawler = json.loads(crawler_raw)
+        except json.JSONDecodeError:
+            crawler = {}
+        if isinstance(crawler, dict):
+            for key in _CRAWLER_ALLOWED_KEYS:
+                if key in crawler:
+                    value = crawler[key]
+                    if value in (None, ""):
+                        continue
+                    env[key] = str(value)
+
+    parallel_raw = (project.parallel_json or "").strip()
+    if parallel_raw:
+        try:
+            parallel = json.loads(parallel_raw)
+        except json.JSONDecodeError:
+            parallel = {}
+        if isinstance(parallel, dict):
+            max_batches = parallel.get("REDTEAM_MAX_PARALLEL_BATCHES")
+            if max_batches not in (None, ""):
+                env["REDTEAM_MAX_PARALLEL_BATCHES"] = str(max_batches)
+
+    agents_raw = (project.agents_json or "").strip()
+    if agents_raw:
+        try:
+            agents = json.loads(agents_raw)
+        except json.JSONDecodeError:
+            agents = {}
+        if isinstance(agents, dict):
+            disabled = sorted(
+                name for name, enabled in agents.items()
+                if enabled is False
+            )
+            if disabled:
+                env["REDTEAM_DISABLED_AGENTS"] = ",".join(disabled)
+
+
+def _runtime_env(project: Project, run: Run, user: User) -> dict[str, str]:
+    token = create_session_token()
+    db.create_session(user.id, token, session_expiry_timestamp())
+    env = os.environ.copy()
+    env.update(
+        {
+            "OPENCODE_HOME": str(opencode_home_root_for(run)),
+            "ORCHESTRATOR_BASE_URL": settings.orchestrator_container_url,
+            "ORCHESTRATOR_TOKEN": token,
+            "ORCHESTRATOR_PROJECT_ID": str(project.id),
+            "ORCHESTRATOR_RUN_ID": str(run.id),
+        }
+    )
+    _inject_model_provider_env(env, project)
+
     if project.env_json.strip():
         try:
             env_payload = json.loads(project.env_json)
@@ -2513,6 +3028,7 @@ def _runtime_env(project: Project, run: Run, user: User) -> dict[str, str]:
                 if value is None:
                     continue
                 env[key] = str(value)
+    _inject_project_config_env(env, project)
     return env
 
 
@@ -2609,6 +3125,55 @@ def _read_run_metadata(run: Run) -> dict[str, object]:
 def _update_run_metadata(run: Run, **fields: object) -> None:
     payload = _read_run_metadata(run)
     payload.update(fields)
+    metadata_path_for(run).write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _clear_terminal_runtime_metadata(run: Run) -> None:
+    payload = _read_run_metadata(run)
+    if not payload:
+        return
+
+    reason_text = str(payload.get("stop_reason_text") or "").strip()
+    ended_at = payload.get("ended_at")
+    current_phase = str(payload.get("current_phase") or payload.get("phase") or "").strip()
+
+    payload["active_agents"] = 0
+    payload["current_agent"] = None
+    payload["current_task"] = None
+    payload["current_agent_name"] = ""
+    payload["current_task_name"] = ""
+    if reason_text:
+        payload["current_summary"] = reason_text
+
+    current_action = payload.get("current_action")
+    if isinstance(current_action, dict):
+        current_action["agent_name"] = ""
+        current_action["task_name"] = ""
+        if reason_text:
+            current_action["summary"] = reason_text
+
+    for agent in payload.get("agents") or []:
+        if not isinstance(agent, dict):
+            continue
+        if str(agent.get("status") or "").strip().lower() != "active":
+            continue
+        agent["status"] = "idle"
+        agent["parallel_count"] = 0
+        if reason_text:
+            agent["summary"] = reason_text
+        if ended_at:
+            agent["updated_at"] = ended_at
+
+    for phase in payload.get("phase_waterfall") or []:
+        if not isinstance(phase, dict):
+            continue
+        phase["active_agents"] = 0
+        phase_name = str(phase.get("phase") or "").strip()
+        if phase_name == current_phase and str(phase.get("state") or "").strip().lower() == "active":
+            phase["state"] = "pending"
+            if reason_text:
+                phase["latest_summary"] = reason_text
+
     metadata_path_for(run).write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
@@ -2801,6 +3366,14 @@ def _runtime_log_follower_pids(container_name: str | None) -> list[int]:
     return follower_pids
 
 
+def _terminate_runtime_log_followers(container_name: str | None) -> None:
+    for follower_pid in _runtime_log_follower_pids(container_name):
+        try:
+            os.kill(follower_pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+
+
 def locate_runtime_pid(run: Run) -> int | None:
     metadata_path = process_metadata_path_for(run)
     payload: dict[str, object] = {}
@@ -2877,11 +3450,7 @@ def stop_run_runtime(run: Run) -> None:
             stderr=subprocess.DEVNULL,
             check=False,
         )
-        for follower_pid in _runtime_log_follower_pids(container_name):
-            try:
-                os.kill(follower_pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
+        _terminate_runtime_log_followers(container_name)
 
     pid = locate_runtime_pid(run)
     if isinstance(pid, int) and pid > 0:
@@ -2910,6 +3479,9 @@ def stop_run_runtime(run: Run) -> None:
                     stderr=subprocess.DEVNULL,
                     check=False,
                 )
+
+    if str(getattr(run, "status", "") or "").strip().lower() in {"stopped", "failed", "completed"}:
+        _clear_terminal_runtime_metadata(run)
 
 
 def _drain_runtime_log_follower(log_follower: subprocess.Popen[bytes] | None, *, timeout: int = 5) -> None:
@@ -2955,6 +3527,7 @@ def _runtime_log_follow_command(run: Run) -> list[str]:
 
 
 def _spawn_runtime_log_follower(run: Run, log_handle) -> subprocess.Popen[bytes]:
+    _terminate_runtime_log_followers(runtime_container_name(run))
     return subprocess.Popen(
         _runtime_log_follow_command(run),
         cwd=str(run.engagement_root),
@@ -3074,6 +3647,19 @@ def _maybe_auto_resume_run(
     if reason_code not in _AUTO_RESUME_REASON_CODES:
         return False
 
+    # Critical check: if the run was already user-stopped (or otherwise
+    # terminal) in the DB, the supervisor thread is racing with the user's
+    # intent. Never auto-resume a user-stopped run. Without this guard, the
+    # supervisor sees its container go away after stop_run_runtime fires,
+    # classifies that as an "incomplete" exit, and calls auto-resume — which
+    # flips DB status back to running and launches a fresh container.
+    # Verified: cycle 20260423T114752Z and 4 prior cycles all recorded
+    # ui-07 STOP transition as failed because the API kept reporting
+    # running within 5-10s of the user clicking STOP.
+    latest = db.get_run_by_id(run.id)
+    if latest is not None and latest.status in {"stopped", "failed", "completed"}:
+        return False
+
     engagement_dir = _active_engagement_dir(run)
     if engagement_dir is None:
         return False
@@ -3081,7 +3667,15 @@ def _maybe_auto_resume_run(
     phase_name = _canonical_phase_name(phase)
     scope = _normalize_scope_file(engagement_dir / "scope.json", run=run) or {}
     scope_phase = _canonical_phase_name(scope.get("current_phase")) if isinstance(scope, dict) else "unknown"
-    if phase_name in {"report", "complete"} or scope_phase in {"report", "complete"}:
+    continuous_observation = _continuous_observation_target_matches(run)
+    continuous_report_hold = _continuous_observation_report_hold_active(
+        run,
+        engagement_dir=engagement_dir,
+        scope=scope if isinstance(scope, dict) else None,
+    )
+    if (
+        phase_name in {"report", "complete"} or scope_phase in {"report", "complete"}
+    ) and not continuous_observation:
         return False
 
     attempt = _current_auto_resume_count(run)
@@ -3094,7 +3688,7 @@ def _maybe_auto_resume_run(
     ):
         attempt = 0
 
-    if attempt >= _AUTO_RESUME_LIMIT:
+    if attempt >= _AUTO_RESUME_LIMIT and not continuous_report_hold:
         return False
 
     recovery_note = ""
@@ -3109,13 +3703,15 @@ def _maybe_auto_resume_run(
             )
 
     next_attempt = attempt + 1
+    _update_run_metadata(run, auto_resume_started_at=time.time())
     _set_auto_resume_count(run, next_attempt)
     _set_auto_resume_progress(run, resolved_count)
+    attempt_label = f"{next_attempt}/∞" if continuous_report_hold else f"{next_attempt}/{_AUTO_RESUME_LIMIT}"
     _append_runtime_event(
         run,
         "run.resumed",
         phase,
-        f"Relaunching /resume after {reason_code} ({next_attempt}/{_AUTO_RESUME_LIMIT}): {reason_text}{recovery_note}",
+        f"Relaunching /resume after {reason_code} ({attempt_label}): {reason_text}{recovery_note}",
     )
     resumed = db.get_run_by_id(run.id) or run
     if resumed.status != "running":
@@ -3245,6 +3841,20 @@ def _supervise_container(
             phase, summary = _heartbeat_context(run)
             _append_runtime_event(run, "run.heartbeat", phase, summary)
             _refresh_live_run_metadata_projection(run, project, user)
+            normalize_active_scope(run)
+            completion_ok, _ = engagement_completion_state(run)
+            if completion_ok:
+                reason_code, reason_text, completion_summary = _terminal_reason(
+                    succeeded=True,
+                    return_code=0,
+                    completion_reason="",
+                    init_only_exit=False,
+                )
+                stop_run_runtime(run)
+                _append_runtime_event(run, "run.completed", phase, completion_summary)
+                terminal = db.update_run_status(run.id, "completed")
+                _write_run_terminal_reason(terminal, reason_code=reason_code, reason_text=reason_text)
+                break
 
             live_stall = _running_container_stall_reason(run)
             if live_stall is not None:
@@ -3283,6 +3893,12 @@ def _supervise_container(
             break
         if status == "exited":
             _drain_runtime_log_follower(log_follower)
+            # Honor user-initiated stop: if the DB already says stopped, the
+            # supervisor's job is done — don't overwrite with "failed".
+            latest = db.get_run_by_id(run.id)
+            if latest is not None and latest.status in {"stopped", "completed", "failed"}:
+                _close_log_streams(log_follower, log_handle)
+                return
             exit_code = _container_exit_code(container_name)
             phase, _ = _heartbeat_context(run)
             normalize_active_scope(run)
@@ -3316,6 +3932,11 @@ def _supervise_container(
             break
         if status is None:
             _drain_runtime_log_follower(log_follower)
+            # Same user-stop honor as the "exited" branch above.
+            latest = db.get_run_by_id(run.id)
+            if latest is not None and latest.status in {"stopped", "completed", "failed"}:
+                _close_log_streams(log_follower, log_handle)
+                return
             phase, _ = _heartbeat_context(run)
             succeeded, reason_code, reason_text, summary = _terminal_reason_from_artifacts(run)
             if not succeeded and _maybe_auto_resume_run(

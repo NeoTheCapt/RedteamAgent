@@ -55,6 +55,9 @@ def create_project_for_user(
     base_url: str = "",
     auth_json: str = "",
     env_json: str = "",
+    crawler_json: str = "{}",
+    parallel_json: str = "{}",
+    agents_json: str = "{}",
 ) -> Project:
     slug = slugify_project_name(name)
     root_path = project_root_for(user, slug)
@@ -74,11 +77,21 @@ def create_project_for_user(
         base_url=base_url.strip(),
         auth_json=normalize_json_object(auth_json, "auth_json"),
         env_json=normalize_json_object(env_json, "env_json"),
+        crawler_json=normalize_json_object(crawler_json, "crawler_json") or "{}",
+        parallel_json=normalize_json_object(parallel_json, "parallel_json") or "{}",
+        agents_json=normalize_json_object(agents_json, "agents_json") or "{}",
     )
 
 
 def list_projects_for_user(user: User) -> list[Project]:
     return db.list_projects_for_user(user.id)
+
+
+def get_project_for_user(user: User, project_id: int) -> Project:
+    project = db.get_project_by_id(project_id)
+    if project is None or project.user_id != user.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+    return project
 
 
 def update_project_config_for_user(
@@ -128,6 +141,49 @@ def update_project_config_for_user(
         auth_json=next_auth_json,
         env_json=next_env_json,
     )
+
+
+def update_project_for_user(user: User, project_id: int, **fields: str) -> Project:
+    """Partial-update a project — only the supplied fields are changed.
+
+    Validates JSON fields and, if *name* is changed, regenerates the slug
+    and checks for collisions.  An empty *fields* dict is a no-op that
+    returns the current project state.
+    """
+    project = db.get_project_by_id(project_id)
+    if project is None or project.user_id != user.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+
+    if not fields:
+        return project
+
+    # Validate JSON fields
+    for json_field in ("auth_json", "env_json", "crawler_json", "parallel_json", "agents_json"):
+        if json_field in fields and fields[json_field]:
+            try:
+                json.loads(fields[json_field])
+            except json.JSONDecodeError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"{json_field} must be valid JSON: {exc}",
+                ) from exc
+
+    # If name is being changed, regenerate slug and check for collision
+    if "name" in fields and fields["name"].strip():
+        new_name = fields["name"].strip()
+        new_slug = slugify_project_name(new_name)
+        fields = dict(fields)
+        fields["name"] = new_name
+        if new_slug != project.slug:
+            collision = db.get_project_by_user_and_slug(user.id, new_slug)
+            if collision is not None and collision.id != project.id:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Another project already uses this name",
+                )
+            fields["slug"] = new_slug
+
+    return db.update_project(project_id, **fields)
 
 
 def delete_project_for_user(user: User, project_id: int) -> None:

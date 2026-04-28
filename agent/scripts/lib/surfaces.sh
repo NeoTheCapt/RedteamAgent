@@ -65,7 +65,7 @@ surface_canonical_status() {
     local status="${1:?status required}"
     status="$(printf '%s' "$status" | tr '[:upper:]' '[:lower:]' | tr '-' '_')"
     case "$status" in
-        candidate|new|open|follow_up|followup)
+        candidate|new|open|pending|unresolved|follow_up|followup)
             printf '%s\n' "discovered"
             ;;
         *)

@@ -65,7 +65,7 @@
   },
   "agent": {
     "operator": {
-      "description": "Lead red team operator. Drives pentest methodology, coordinates phases, dispatches subagents.",
+      "description": "Lead red team operator. Drives pentest methodology, coordinates the streaming case-pipeline, dispatches subagents.",
       "mode": "primary",
       "prompt": "{file:prompts/agents/operator.txt}",
       "read": true,
@@ -112,7 +112,7 @@
       }
     },
     "fuzzer": {
-      "description": "High-volume parameter/directory fuzzing, rapid iteration and result parsing.",
+      "description": "High-volume fuzzing with deep wordlists (500+ payloads). Picks up cases at stage=fuzz_pending escalated by vulnerability-analyst.",
       "mode": "subagent",
       "prompt": "{file:prompts/agents/fuzzer.txt}",
       "read": true,
@@ -145,7 +145,7 @@
       "grep": true
     },
     "osint-analyst": {
-      "description": "OSINT intelligence gathering \u2014 CVE/breach/DNS/social research. Dispatched in EXPLOIT phase parallel with exploit-developer.",
+      "description": "OSINT intelligence gathering \u2014 CVE/breach/DNS/social research from intel.md. Dispatched when intel_changed_check.sh writes .osint-respawn-required (idempotent high-water mark on intel.md filled rows).",
       "mode": "subagent",
       "prompt": "{file:prompts/agents/osint-analyst.txt}",
       "read": true,

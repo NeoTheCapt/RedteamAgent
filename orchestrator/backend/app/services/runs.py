@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import json
 import shutil
 import sqlite3
@@ -20,6 +21,7 @@ from .launcher import (
     RUNTIME_PID_LOOKUP_UNAVAILABLE,
     _active_engagement_dir,
     _clear_run_terminal_reason,
+    _continuous_observation_report_hold_active,
     _last_logged_stop_metadata,
     _latest_process_log_activity_at,
     _latest_undispatched_batch_fetch,
@@ -41,9 +43,10 @@ from .launcher import (
     _latest_runtime_metadata_activity_at,
     _run_metadata_has_current_task,
     _stale_processing_agents,
+    _auto_resume_stall_guard_active,
 )
 
-ALLOWED_STATUSES = {"queued", "running", "completed", "failed"}
+ALLOWED_STATUSES = {"queued", "running", "completed", "failed", "stopped"}
 RUN_STARTUP_GRACE_SECONDS = 90
 # The local fixed-target optimization loop only treats a live run as stale after
 # 15 minutes of confirmed buggy behavior. Keep the backend watchdog aligned with
@@ -51,7 +54,11 @@ RUN_STARTUP_GRACE_SECONDS = 90
 # early.
 RUN_STALL_TIMEOUT_SECONDS = 900
 PROCESSING_AGENT_MISMATCH_GRACE_SECONDS = 120
-PENDING_QUEUE_DISPATCH_GRACE_SECONDS = 120
+# Pending-but-idle consume-test gaps can occur between autonomous turns while
+# the runtime is still preparing the next dispatch.  Use the full run-stall
+# window here; the shorter processing-agent mismatch grace is only safe once a
+# concrete fetched/processing assignment exists.
+PENDING_QUEUE_DISPATCH_GRACE_SECONDS = RUN_STALL_TIMEOUT_SECONDS
 PERMISSION_REQUEST_GRACE_SECONDS = 60
 # Real targets can spend several minutes in autonomous initialization/recon before the
 # first queue item or observed path lands. Keep the early watchdog long enough to avoid
@@ -88,10 +95,12 @@ def _copy_sqlite_snapshot(path: Path, snapshot_dir: Path) -> Path:
 
 
 def _read_sqlite_snapshot(path: Path, reader, default):
+    # Close explicitly — sqlite3.Connection's context manager commits but
+    # does NOT close, so bare `with` leaks a file descriptor per call.
     try:
         with tempfile.TemporaryDirectory(prefix="runs-sqlite-") as temp_dir:
             snapshot_path = _copy_sqlite_snapshot(path, Path(temp_dir))
-            with _connect_sqlite_readonly(snapshot_path) as connection:
+            with contextlib.closing(_connect_sqlite_readonly(snapshot_path)) as connection:
                 return reader(connection)
     except (OSError, sqlite3.Error):
         return default
@@ -103,7 +112,7 @@ def _read_sqlite_with_fallback(path: Path, reader, default):
 
     for _ in range(5):
         try:
-            with sqlite3.connect(path, timeout=1.0) as connection:
+            with contextlib.closing(sqlite3.connect(path, timeout=1.0)) as connection:
                 connection.execute("PRAGMA busy_timeout = 1000")
                 return reader(connection)
         except sqlite3.OperationalError as exc:
@@ -114,7 +123,7 @@ def _read_sqlite_with_fallback(path: Path, reader, default):
                 return default
 
         try:
-            with _connect_sqlite_readonly(path) as connection:
+            with contextlib.closing(_connect_sqlite_readonly(path)) as connection:
                 return reader(connection)
         except sqlite3.OperationalError as exc:
             if not _is_sqlite_transient_error(exc) and not _is_sqlite_corruption_error(exc):
@@ -292,11 +301,29 @@ def _load_queue_state(scope_path: Path | None) -> tuple[str, int, int, int, str]
     if not cases_db.exists():
         return (current_phase, total_cases, pending_cases, processing_cases, queue_health)
 
+    # Stages that are terminal in the streaming pipeline; rows at these stages
+    # don't count as pending undispatched work even if `status` wasn't flipped
+    # to `done`. Mirrors `launcher._TERMINAL_CASE_STAGES` to avoid an import
+    # cycle (this module already imports from .runs in launcher.py path checks).
+    terminal_stages = ("source_analyzed", "api_tested", "clean", "exploited", "errored")
+
     def _reader(connection: sqlite3.Connection) -> tuple[int, int, int]:
         total_row = connection.execute("SELECT COUNT(*) FROM cases").fetchone()
-        pending_row = connection.execute(
-            "SELECT COUNT(*) FROM cases WHERE status = 'pending'"
-        ).fetchone()
+        cols = {
+            row[1]
+            for row in connection.execute("PRAGMA table_info(cases)").fetchall()
+        }
+        if "stage" in cols:
+            placeholders = ",".join("?" * len(terminal_stages))
+            pending_row = connection.execute(
+                "SELECT COUNT(*) FROM cases WHERE status = 'pending' "
+                f"AND stage NOT IN ({placeholders})",
+                terminal_stages,
+            ).fetchone()
+        else:
+            pending_row = connection.execute(
+                "SELECT COUNT(*) FROM cases WHERE status = 'pending'"
+            ).fetchone()
         processing_row = connection.execute(
             "SELECT COUNT(*) FROM cases WHERE status = 'processing'"
         ).fetchone()
@@ -312,7 +339,7 @@ def _load_queue_state(scope_path: Path | None) -> tuple[str, int, int, int, str]
         return (current_phase, total_cases, pending_cases, processing_cases, queue_health)
 
     try:
-        with sqlite3.connect(cases_db, timeout=1.0) as connection:
+        with contextlib.closing(sqlite3.connect(cases_db, timeout=1.0)) as connection:
             connection.execute("PRAGMA busy_timeout = 1000")
             total_cases, pending_cases, processing_cases = _reader(connection)
     except sqlite3.Error as exc:
@@ -380,6 +407,16 @@ def _reattach_live_runtime_supervisor(
 
 
 def _reconcile_run_status(run: Run, project: Project | None = None, user: User | None = None) -> Run:
+    # Reconciliation can be called with a stale in-memory Run object (for example,
+    # a long-lived supervisor callback that captured the row before a user clicked
+    # STOP). Refresh from the DB first so a later terminal transition cannot be
+    # overwritten by stale runtime liveness checks.
+    latest = db.get_run_by_id(run.id)
+    if latest is not None:
+        run = latest
+    # User-initiated stops must never be overwritten by reconciliation logic.
+    if run.status == "stopped":
+        return run
     normalize_active_scope(run)
     pid = locate_runtime_pid(run)
     completion_ok, completion_reason = engagement_completion_state(run)
@@ -409,12 +446,16 @@ def _reconcile_run_status(run: Run, project: Project | None = None, user: User |
             stop_run_runtime(failed)
             return failed
         workflow_activity_at = _latest_workflow_activity_at(run, scope_path)
+        active_runtime_agents = _active_runtime_agents(run)
+        has_current_task = _run_metadata_has_current_task(run)
         if workflow_activity_at is not None:
             workflow_age = _utc_now_naive() - workflow_activity_at
             if (
                 current_phase.replace("_", "-") not in EARLY_PHASE_STALL_PHASES
                 and processing_cases > 0
                 and workflow_age >= timedelta(seconds=RUN_STALL_TIMEOUT_SECONDS)
+                and not active_runtime_agents
+                and not has_current_task
             ):
                 failed = db.update_run_status(run.id, "failed")
                 _write_run_terminal_reason(
@@ -433,6 +474,8 @@ def _reconcile_run_status(run: Run, project: Project | None = None, user: User |
                 and pending_cases > 0
                 and processing_cases == 0
                 and workflow_age >= timedelta(seconds=RUN_STALL_TIMEOUT_SECONDS)
+                and not active_runtime_agents
+                and not has_current_task
             ):
                 failed = db.update_run_status(run.id, "failed")
                 _write_run_terminal_reason(
@@ -446,7 +489,7 @@ def _reconcile_run_status(run: Run, project: Project | None = None, user: User |
                 stop_run_runtime(failed)
                 return failed
 
-        active_runtime_agents = _active_runtime_agents(run)
+        auto_resume_guard_active = _auto_resume_stall_guard_active(run)
         processing_agents = _load_processing_agents(scope_path)
         opencode_logs_root = opencode_home_root_for(run) / "log"
         permission_log_paths = [process_log_path_for(run)]
@@ -480,6 +523,7 @@ def _reconcile_run_status(run: Run, project: Project | None = None, user: User |
             and pending_cases > 0
             and processing_cases == 0
             and not active_runtime_agents
+            and not auto_resume_guard_active
             and workflow_activity_at is not None
             and (_utc_now_naive() - workflow_activity_at) >= timedelta(seconds=PENDING_QUEUE_DISPATCH_GRACE_SECONDS)
         ):
@@ -497,6 +541,7 @@ def _reconcile_run_status(run: Run, project: Project | None = None, user: User |
             and orphaned_fetch is not None
             and str(orphaned_fetch.get("agent") or "") in processing_agents
             and str(orphaned_fetch.get("agent") or "") not in active_runtime_agents
+            and not auto_resume_guard_active
             and (_utc_now_naive() - _utc_datetime_from_timestamp(float(orphaned_fetch.get("timestamp") or 0.0)))
             >= timedelta(seconds=PROCESSING_AGENT_MISMATCH_GRACE_SECONDS)
         ):
@@ -559,9 +604,8 @@ def _reconcile_run_status(run: Run, project: Project | None = None, user: User |
             stale_processing_activity_at is None or metadata_activity > stale_processing_activity_at
         ):
             stale_processing_activity_at = metadata_activity
-        recent_processing_handoff = (
-            not active_runtime_agents
-            and stale_processing_activity_at is not None
+        recent_processing_handoff = auto_resume_guard_active or (
+            stale_processing_activity_at is not None
             and (_utc_now_naive() - stale_processing_activity_at)
             < timedelta(seconds=PROCESSING_AGENT_MISMATCH_GRACE_SECONDS)
         )
@@ -694,13 +738,20 @@ def _reconcile_run_status(run: Run, project: Project | None = None, user: User |
 
     if run.status == "running":
         engagement_dir = _active_engagement_dir(run)
+        continuous_report_hold = (
+            engagement_dir is not None and _continuous_observation_report_hold_active(run, engagement_dir=engagement_dir)
+        )
         logged_reason_code = ""
         logged_reason_text = ""
-        if engagement_dir is not None:
+        if engagement_dir is not None and not continuous_report_hold:
             logged_reason_code, logged_reason_text = _last_logged_stop_metadata(engagement_dir / "log.md")
 
-        reason_code = logged_reason_code or "runtime_disappeared"
-        reason_text = logged_reason_text or "Runtime supervisor disappeared before the engagement reached a terminal state."
+        if continuous_report_hold:
+            reason_code = "runtime_disappeared"
+            reason_text = "continuous observation hold detached"
+        else:
+            reason_code = logged_reason_code or "runtime_disappeared"
+            reason_text = logged_reason_text or "Runtime supervisor disappeared before the engagement reached a terminal state."
         if project is not None and user is not None:
             scope_path = _active_scope_path(run)
             current_phase, _, _, _, _ = _load_queue_state(scope_path)
@@ -757,6 +808,21 @@ def update_run_status(project_id: int, run_id: int, user: User, status_value: st
     run = db.get_run_by_id(run_id)
     if run is None or run.project_id != project.id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
+
+    if status_value == "stopped":
+        # Only a running run can transition to stopped.
+        # Already-terminal states (completed, failed, stopped) are no-ops.
+        # Queued runs never started, so there's nothing to stop — treat as no-op.
+        if run.status != "running":
+            return run
+        updated = db.update_run_status(run_id, "stopped")
+        _write_run_terminal_reason(
+            updated,
+            reason_code="user_stopped",
+            reason_text="Run stopped by operator.",
+        )
+        stop_run_runtime(updated)
+        return updated
 
     return db.update_run_status(run_id, status_value)
 

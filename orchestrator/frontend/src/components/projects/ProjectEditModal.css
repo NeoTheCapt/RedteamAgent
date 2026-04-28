@@ -1,0 +1,181 @@
+/* ── Modal backdrop + shell ── */
+.pem-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.pem {
+  background: var(--c-panel);
+  color: var(--c-text);
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-md);
+  width: 640px;
+  max-width: calc(100vw - var(--sp-6));
+  max-height: calc(100vh - var(--sp-6));
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5);
+}
+
+/* ── Header ── */
+.pem__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--sp-3) var(--sp-4);
+  border-bottom: 1px solid var(--c-border);
+}
+
+.pem__title {
+  margin: 0;
+  font-size: var(--fs-md);
+  color: var(--c-text);
+}
+
+.pem__close {
+  background: transparent;
+  border: none;
+  color: var(--c-text-dim);
+  font-size: 24px;
+  cursor: pointer;
+  padding: 0 6px;
+  line-height: 1;
+}
+.pem__close:hover { color: var(--c-text); }
+
+/* ── Tab bar ── */
+.pem__tabs {
+  display: flex;
+  gap: 2px;
+  padding: 0 var(--sp-3);
+  border-bottom: 1px solid var(--c-border);
+  background: var(--c-panel-strong);
+}
+
+.pem__tab {
+  background: transparent;
+  border: none;
+  color: var(--c-text-dim);
+  padding: 8px 14px;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  font-size: var(--fs-sm);
+}
+.pem__tab:hover { color: var(--c-text); }
+.pem__tab--active {
+  color: var(--c-accent);
+  border-bottom-color: var(--c-accent);
+}
+
+/* ── Body ── */
+.pem__body {
+  padding: var(--sp-4);
+  overflow-y: auto;
+  flex: 1;
+}
+
+/* ── Error banner ── */
+.pem__error {
+  color: var(--c-red);
+  padding: 0 var(--sp-4) var(--sp-2);
+  margin: 0;
+  font-size: var(--fs-sm);
+}
+
+/* ── Footer ── */
+.pem__foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-4);
+  border-top: 1px solid var(--c-border);
+}
+
+.pem__cancel,
+.pem__save {
+  padding: 6px 14px;
+  border-radius: var(--r-sm);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+  border: 1px solid var(--c-border);
+}
+
+.pem__cancel {
+  background: var(--c-panel-soft);
+  color: var(--c-text);
+}
+
+.pem__save {
+  background: var(--c-accent);
+  color: var(--c-bg);
+  border-color: var(--c-accent);
+}
+.pem__save:disabled { opacity: 0.6; cursor: not-allowed; }
+
+/* ── ProjectForms field classes ── */
+.pforms {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.pforms__field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.pforms__field--grow { flex: 1; }
+
+.pforms__field--checkbox {
+  flex-direction: row;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.pforms__label {
+  font-size: var(--fs-xs);
+  color: var(--c-text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  font-weight: var(--fw-semibold);
+}
+
+.pforms__label-inline {
+  font-size: var(--fs-sm);
+  color: var(--c-text);
+  font-family: var(--font-mono);
+}
+
+.pforms__input {
+  background: var(--c-panel-soft);
+  border: 1px solid var(--c-border);
+  color: var(--c-text);
+  padding: 6px 10px;
+  border-radius: var(--r-sm);
+  font-size: var(--fs-sm);
+  font-family: inherit;
+}
+
+.pforms__textarea {
+  font-family: var(--font-mono);
+  resize: vertical;
+  min-height: 120px;
+}
+
+.pforms__error {
+  color: var(--c-red);
+  font-size: var(--fs-xs);
+  margin: 0;
+}
+
+.pforms__hint {
+  font-size: var(--fs-xs);
+  color: var(--c-text-dim);
+  margin: 0 0 var(--sp-2);
+}

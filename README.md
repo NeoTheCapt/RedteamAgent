@@ -11,7 +11,7 @@
     <img src="https://img.shields.io/badge/platform-macOS%20|%20Linux-blue" alt="Platform">
     <img src="https://img.shields.io/badge/tools-Docker%20containerized-blue" alt="Docker">
     <img src="https://img.shields.io/badge/agents-8%20specialized-orange" alt="Agents">
-    <img src="https://img.shields.io/badge/skills-32%20attack%20methodologies-red" alt="Skills">
+    <img src="https://img.shields.io/badge/skills-31%20attack%20methodologies-red" alt="Skills">
     <img src="https://img.shields.io/badge/references-79%20files-green" alt="References">
   </p>
 </p>
@@ -24,11 +24,11 @@ An autonomous red team simulation agent that works with **Claude Code**, **OpenC
 
 ![RedTeam Agent demo (fast)](docs/redteam-agent-demo-fast.gif)
 
-![RedTeam Agent GUI screenshot](docs/screenshot-20260331-181406.png)
+![RedTeam Agent GUI screenshot](docs/screenshot-20260429-045700.png)
 
 **Key Features:**
 - **Multi-CLI support** — works with Claude Code, OpenCode, and Codex out of the box
-- **Autonomous workflow** — 5-phase methodology (Recon → Collect → Test → Exploit+OSINT → Report) runs with minimal user interaction
+- **Autonomous workflow** — 5-phase methodology (Recon → Collect → Test → Exploit+OSINT → Report) runs with minimal user interaction; the Test phase is a streaming, stage-based case pipeline with serialized dispatch (one fetch + one subagent task per turn)
 - **Orchestrator GUI** — local web UI for projects, live runs, artifacts, timelines, and terminal run metadata
 - **Intelligence collection** — `intel.md` accumulates tech stack, people, domains, credentials from recon through exploitation; OSINT agent enriches with CVE, breach, DNS history, and social data
 - **8 specialized agents** — operator, recon-specialist, source-analyzer, vulnerability-analyst, exploit-developer, fuzzer, osint-analyst, report-writer
@@ -85,8 +85,8 @@ cd ~/redteam-docker
 
 **Notes**
 - This is the cleanest runtime path: the image bundles OpenCode, Redteam Agent, and the pentest toolchain.
-- `run.sh` starts from the image-baked clean template, persists engagement files in `workspace/`, and persists the full OpenCode state directory in `opencode-home/`.
-- Use `./run.sh --ephemeral-opencode` if you do not want to persist OpenCode state outside the container.
+- `run.sh` starts from the image-baked clean template, persists engagement files in `workspace/`, and persists the OpenCode XDG dirs across restarts: `opencode-home/` (auth tokens), `opencode-config/` (model selection), `opencode-state/` (TUI state).
+- Use `./run.sh --ephemeral-opencode` if you do not want to persist any OpenCode state outside the container (you'll have to reconfigure the model each run).
 - Use `./run.sh --rebuild` to force a clean image rebuild after install.
 
 ### OpenCode (Recommended)
@@ -235,13 +235,19 @@ Phase 1: RECON ─── recon-specialist + source-analyzer (parallel)
     │
 Phase 2: COLLECT ─ Import endpoints → SQLite queue, start Katana crawler
     │
-Phase 3: TEST ──── Consume queue → vulnerability-analyst + source-analyzer
-    │               exploit-developer runs in parallel for HIGH/MEDIUM findings
-    │               (continuous loop with progress display)
+Phase 3: TEST ──── Stage-based case pipeline (replaces strict phase gates):
+    │               cases carry a `stage` column independent of `status`.
+    │               Routing by stage+type:
+    │                 ingested + {api,form,graphql,upload,websocket} → vuln-analyst
+    │                 ingested + {javascript,page,stylesheet,data,unknown,api-spec} → source-analyzer
+    │                 vuln_confirmed                                 → exploit-developer
+    │                 fuzz_pending                                   → fuzzer (deep wordlists, >500 entries)
+    │               Consume-test dispatch is SERIALIZED: one fetch + one task() per turn.
 Phase 4: EXPLOIT ── osint-analyst + exploit-developer (parallel)
     │               osint-analyst: CVE/breach/DNS/social intel from intel.md
     │               exploit-developer: chain analysis, impact assessment
-    │               OSINT high-value intel → 2nd round exploitation
+    │               osint-respawn: operator runs `intel_changed_check.sh` per
+    │               loop tick; flag triggers a fresh osint correlation pass.
 Phase 5: REPORT ── report-writer with coverage statistics + intelligence summary
 ```
 
@@ -321,25 +327,29 @@ RedteamOpencode/                ← dev workspace (git root)
 ├── install.sh                  ← installs agent/ to ~/redteam-agent
 ├── README.md                   ← project docs
 │
-└── agent/                      ← ALL runtime files (what gets installed)
-    ├── CLAUDE.md               ← operator prompt (Claude Code)
-    ├── AGENTS.md               ← operator prompt (Codex)
-    ├── .opencode/              ← OpenCode config + single source of truth
-    │   ├── opencode.json       ← agent metadata, skills, commands, plugins
-    │   ├── prompts/agents/     ← 8 agent prompts (.txt) — SINGLE SOURCE
-    │   ├── commands/           ← 19 slash commands (.md) — SINGLE SOURCE
-    │   └── plugins/            ← engagement hooks (TypeScript)
-    ├── .claude/                ← Claude Code config (agents + commands generated)
-    │   └── settings.json       ← hooks (scope check + auto-logging)
-    ├── .codex/                 ← Codex config (agents generated)
-    ├── scripts/
-    │   ├── install-time generators ← install.sh builds .claude/agents + .codex/agents + .claude/commands
-    │   ├── dispatcher.sh       ← case queue management
-    │   └── ...                 ← ingest, hooks, shared libraries
-    ├── skills/                 ← 32 attack methodology skills
-    ├── references/             ← 78 reference files (OWASP, tools, tactics, AD)
-    ├── docker/                 ← Dockerfiles + docker-compose.yml
-    └── engagements/            ← per-engagement output (created at runtime)
+├── agent/                      ← ALL agent runtime files (what gets installed)
+│   ├── CLAUDE.md               ← operator prompt (Claude Code)
+│   ├── AGENTS.md               ← operator prompt (Codex)
+│   ├── .opencode/              ← OpenCode config + single source of truth
+│   │   ├── opencode.json       ← agent metadata, skills, commands, plugins
+│   │   ├── prompts/agents/     ← 8 agent prompts (.txt) — SINGLE SOURCE
+│   │   ├── commands/           ← 19 slash commands (.md) — SINGLE SOURCE
+│   │   └── plugins/            ← engagement hooks (TypeScript)
+│   ├── .claude/                ← Claude Code config (agents + commands generated)
+│   │   └── settings.json       ← hooks (scope check + auto-logging)
+│   ├── .codex/                 ← Codex config (agents generated)
+│   ├── scripts/
+│   │   ├── install-time generators ← install.sh builds .claude/agents + .codex/agents + .claude/commands
+│   │   ├── dispatcher.sh       ← case queue management
+│   │   └── ...                 ← ingest, hooks, shared libraries
+│   ├── skills/                 ← 31 attack methodology skills
+│   ├── references/             ← 79 reference files (OWASP, tools, tactics, AD)
+│   ├── docker/                 ← Dockerfiles + docker-compose.yml
+│   └── engagements/            ← per-engagement output (created at runtime)
+│
+└── orchestrator/               ← optional web UI (FastAPI backend + React frontend)
+    ├── backend/                ← Python API; reads from agent/ via agent_source_dir
+    └── frontend/               ← React shell (Documents / Events / Progress / Cases tabs)
 ```
 
 ## CLI Compatibility
@@ -377,12 +387,53 @@ Add files to `agent/references/<category>/` and update `agent/references/INDEX.m
 
 Edit `model` in `agent/.opencode/opencode.json`. Supports Anthropic, OpenAI, Google, Ollama.
 
+### Per-Project Configuration
+
+Each project stores its own config, inherited by every run launched under it. Configure via the **Edit project** button in the Sidebar or NewRunForm, which opens the Project Edit modal with 6 tabs:
+
+| Tab | Fields | Env vars injected into run container |
+|-----|--------|--------------------------------------|
+| **Model** | provider_id, model_id, small_model_id, api_key, base_url | `REDTEAM_OPENCODE_MODEL`, `REDTEAM_OPENCODE_SMALL_MODEL`, `OPENAI_API_KEY`, `OPENAI_BASE_URL` (or `ANTHROPIC_*`) |
+| **Auth** | JSON blob for cookies / headers / tokens | Written to `auth.json` in seed dir |
+| **Env** | Free-form JSON `{"VAR": "value"}` | Merged into container env |
+| **Crawler** | Katana crawl parameters | `KATANA_CRAWL_DEPTH`, `KATANA_CRAWL_DURATION`, `KATANA_TIMEOUT_SECONDS`, `KATANA_CONCURRENCY`, `KATANA_PARALLELISM`, `KATANA_RATE_LIMIT`, `KATANA_STRATEGY`, `KATANA_ENABLE_HYBRID`, `KATANA_ENABLE_XHR`, `KATANA_ENABLE_HEADLESS`, `KATANA_ENABLE_JSLUICE`, `KATANA_ENABLE_PATH_CLIMB` |
+| **Parallel** | Concurrency ceiling | `REDTEAM_MAX_PARALLEL_BATCHES` |
+| **Agents** | Enable/disable per subagent | `REDTEAM_DISABLED_AGENTS` (comma-separated list of disabled agent IDs when any are off) |
+
+**Defaults**: Empty JSON `{}` for every config category. When a key is absent, the runtime falls back to the value baked into `.env` or the agent defaults. Fields only override when explicitly set.
+
+**Precedence**: `crawler_json` / `parallel_json` / `agents_json` win over free-form `env_json`. To clear a field, set it to `""` (empty string), not `null`.
+
 ## Development
 
-This repo has two layers:
+### Directory Convention (READ BEFORE CONTRIBUTING)
 
-- **Root** (`RedteamOpencode/`): dev workspace with install script and README. Run your CLI here for development tasks.
-- **Agent** (`agent/`): all runtime files that get installed to `~/redteam-agent`. Run your CLI inside `agent/` (or `~/redteam-agent/`) for engagements.
+This repo has a **strict three-layer split** — do not cross the lines:
+
+| Layer | Purpose | Examples |
+|-------|---------|----------|
+| **Repo root** | Meta only — install script, docs, CI | `install.sh`, `README*.md`, `.gitignore`, `docs/` |
+| **`agent/`** | ALL agent runtime (**canonical**) | `.opencode/`, `scripts/`, `skills/`, `references/`, `docker/`, prompts, operator core |
+| **`orchestrator/`** | Optional web UI (reads `agent/`, never copies from root) | `backend/` (FastAPI), `frontend/` (React) |
+
+**Rule**: `agent/` is the single source of truth for the agent runtime. The orchestrator backend hardcodes `agent_source_dir = REPO_ROOT / "agent"` (`orchestrator/backend/app/config.py:17`) and syncs from there into each engagement's workspace. `install.sh` also installs from `agent/` into the target dir.
+
+**DO NOT** create root-level `/.opencode/`, `/scripts/`, `/skills/`, `/references/`, or `/docker/`. Edit the `agent/`-scoped copy instead.
+
+Two guards are in place:
+
+1. **`.gitignore`** blocks those paths at `git add` time.
+2. **Pre-commit hook** at `agent/scripts/hooks/block-root-dup-dirs.sh` refuses the commit if the paths slip through. Install once per clone:
+
+   ```bash
+   cp agent/scripts/hooks/block-root-dup-dirs.sh .git/hooks/pre-commit
+   chmod +x .git/hooks/pre-commit
+   ```
+
+### Where to run your CLI
+
+- **Root** (`RedteamOpencode/`): dev workspace. Run CLI here for repo-level tooling (tests, docs work, orchestrator dev).
+- **`agent/`**: runtime home. Run CLI inside `agent/` (or the installed target `~/redteam-agent/`) to drive engagements.
 
 ### Single-Source Architecture
 

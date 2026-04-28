@@ -29,6 +29,35 @@ ENG_DIR=$(resolve_engagement_dir "$(pwd)" || true)
 [ -z "$ENG_DIR" ] && exit 0
 [ ! -f "$ENG_DIR/log.md" ] && exit 0
 
+repair_continuous_target_completion() {
+  continuous_target_matches "$ENG_DIR" || return 0
+
+  local status current_phase target summary
+  status=$(jq -r '.status // empty' "$ENG_DIR/scope.json" 2>/dev/null || true)
+  current_phase=$(jq -r '.current_phase // empty' "$ENG_DIR/scope.json" 2>/dev/null || true)
+  if [[ "$status" != "complete" && "$current_phase" != "complete" ]]; then
+    return 0
+  fi
+
+  target=$(scope_target_url "$ENG_DIR")
+  jq '
+    .status = "in_progress"
+    | .current_phase = "report"
+    | del(.end_time)
+  ' "$ENG_DIR/scope.json" > "$ENG_DIR/.scope.guard.tmp"
+  mv "$ENG_DIR/.scope.guard.tmp" "$ENG_DIR/scope.json"
+
+  summary="continuous_target_guard reopened report phase for ${target:-unknown target}"
+  if ! tail -n 40 "$ENG_DIR/log.md" 2>/dev/null | grep -Fq "$summary"; then
+    {
+      printf '\n## [%s] runtime-guard — Scope Guard\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+      printf '**Summary**: %s\n' "$summary"
+    } >> "$ENG_DIR/log.md"
+  fi
+}
+
+repair_continuous_target_completion
+
 # Check scope.json status
 STATUS=$(jq -r '.status // "unknown"' "$ENG_DIR/scope.json" 2>/dev/null || echo "unknown")
 [ "$STATUS" != "in_progress" ] && exit 0

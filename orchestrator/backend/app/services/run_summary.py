@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import json
 import re
 import shutil
@@ -18,7 +19,15 @@ from ..models.project import Project
 from ..models.run import Run
 from ..models.user import User
 from .events import list_events_for_run
-from .launcher import _loopback_display_context, _rewrite_artifact_value, normalize_active_scope
+from .launcher import (
+    _SURFACE_STATUS_RANK,
+    _VALID_SURFACE_STATUSES,
+    _canonicalize_surface_target_for_scope,
+    _loopback_display_context,
+    _normalize_surface_type,
+    _rewrite_artifact_value,
+    normalize_active_scope,
+)
 from .runs import _latest_workflow_activity_at, _project_or_404, _reconcile_run_status
 
 PHASE_ORDER = ["recon", "collect", "consume-test", "exploit", "report"]
@@ -40,7 +49,7 @@ AGENT_PHASES = {
     "report-writer": "report",
 }
 DEFAULT_SUBAGENT_ROSTER = tuple(AGENT_PHASES.keys())
-TERMINAL_RUN_STATUSES = {"failed", "completed"}
+TERMINAL_RUN_STATUSES = {"failed", "completed", "stopped"}
 OVERVIEW_FUTURE_SKEW = timedelta(minutes=5)
 
 
@@ -91,6 +100,8 @@ class RunSummary:
     current: dict
     phases: list[dict]
     agents: list[dict]
+    dispatches: dict
+    cases: dict
 
 
 @dataclass(frozen=True, slots=True)
@@ -215,10 +226,14 @@ def _copy_sqlite_snapshot(path: Path, snapshot_dir: Path) -> Path:
 
 
 def _read_sqlite_snapshot(path: Path, reader, default):
+    # `with sqlite3.connect(...) as conn:` commits/rollbacks but does NOT
+    # close the connection (python stdlib quirk). Without contextlib.closing
+    # every call leaks a sqlite connection + its -shm fd. Under Dashboard/
+    # Progress polling this exhausts the uvicorn process in ~2 hours.
     try:
         with tempfile.TemporaryDirectory(prefix="run-summary-sqlite-") as temp_dir:
             snapshot_path = _copy_sqlite_snapshot(path, Path(temp_dir))
-            with _connect_sqlite_readonly(snapshot_path) as connection:
+            with contextlib.closing(_connect_sqlite_readonly(snapshot_path)) as connection:
                 return reader(connection)
     except (OSError, sqlite3.Error):
         return default
@@ -239,7 +254,7 @@ def _read_sqlite_with_fallback(path: Path, reader, default):
 
     for _ in range(5):
         try:
-            with sqlite3.connect(path, timeout=1.0) as connection:
+            with contextlib.closing(sqlite3.connect(path, timeout=1.0)) as connection:
                 connection.execute("PRAGMA busy_timeout = 1000")
                 return reader(connection)
         except sqlite3.OperationalError as exc:
@@ -249,7 +264,7 @@ def _read_sqlite_with_fallback(path: Path, reader, default):
             return default
 
         try:
-            with _connect_sqlite_readonly(path) as connection:
+            with contextlib.closing(_connect_sqlite_readonly(path)) as connection:
                 return reader(connection)
         except sqlite3.OperationalError as exc:
             if not _is_sqlite_transient_error(exc):
@@ -529,7 +544,7 @@ def _load_observed_paths(path: Path, context: dict[str, str] | None = None) -> l
     return records
 
 
-def _load_surface_metrics(path: Path) -> dict:
+def _load_surface_metrics(path: Path, scope: dict | None = None) -> dict:
     metrics = {
         "total_surfaces": 0,
         "remaining_surfaces": 0,
@@ -540,10 +555,11 @@ def _load_surface_metrics(path: Path) -> dict:
     if not path.exists():
         return metrics
 
-    status_counts: Counter = Counter()
-    type_counts: Counter = Counter()
-    high_risk_remaining = 0
+    scope_target = ""
+    if isinstance(scope, dict):
+        scope_target = str(scope.get("target") or "").strip()
 
+    aggregated: dict[tuple[str, str], dict[str, str]] = {}
     for line in path.read_text(encoding="utf-8").splitlines():
         stripped = line.strip()
         if not stripped:
@@ -552,10 +568,25 @@ def _load_surface_metrics(path: Path) -> dict:
             payload = json.loads(stripped)
         except json.JSONDecodeError:
             continue
-        status_name = payload.get("status", "unknown")
-        surface_type = payload.get("surface_type", "unknown")
-        status_counts[status_name] += 1
+        surface_type = _normalize_surface_type(str(payload.get("surface_type") or "unknown").strip())
+        status_name = str(payload.get("status") or "discovered").strip().lower().replace("-", "_")
+        if status_name not in _VALID_SURFACE_STATUSES:
+            status_name = "discovered"
+        target = _canonicalize_surface_target_for_scope(str(payload.get("target") or ""), scope_target)
+        key = (surface_type, target)
+        current = aggregated.get(key)
+        if current is None or _SURFACE_STATUS_RANK[status_name] >= _SURFACE_STATUS_RANK[current["status"]]:
+            aggregated[key] = {"surface_type": surface_type, "status": status_name}
+
+    status_counts: Counter = Counter()
+    type_counts: Counter = Counter()
+    high_risk_remaining = 0
+
+    for row in aggregated.values():
+        surface_type = row["surface_type"]
+        status_name = row["status"]
         type_counts[surface_type] += 1
+        status_counts[status_name] += 1
         metrics["total_surfaces"] += 1
         if status_name not in {"covered", "not_applicable"}:
             metrics["remaining_surfaces"] += 1
@@ -604,12 +635,12 @@ def _effective_current_phase(
     if _is_terminal_run_status(run_status):
         return scope_phase
 
+    if _queue_requires_consume_test(scope, events, pending_cases, processing_cases):
+        return "consume-test"
+
     active_task_phase = _latest_active_task_phase(events, scope_phase)
     if active_task_phase != "unknown":
         return active_task_phase
-
-    if _queue_requires_consume_test(scope, events, pending_cases, processing_cases):
-        return "consume-test"
 
     latest_task_phase = next(
         (
@@ -666,11 +697,15 @@ def _build_phase_cards(scope: dict, events: list, agents: list[dict], run_status
         elif getattr(event, "event_type", "") == "phase.started":
             latest_summary.setdefault(phase, getattr(event, "summary", ""))
 
+    # Per-phase count is instance-level too (parallel_count-weighted), so
+    # it agrees with the Dashboard KPI and AgentsPanel totals.
     active_agents_by_phase: Counter = Counter()
     if not terminal:
         for agent in agents:
-            if agent["status"] == "active":
-                active_agents_by_phase[agent["phase"]] += 1
+            if agent["status"] != "active":
+                continue
+            weight = max(int(agent.get("parallel_count") or 0), 1)
+            active_agents_by_phase[agent["phase"]] += weight
 
     cards: list[dict] = []
     for phase in PHASE_ORDER:
@@ -702,6 +737,8 @@ def _resolved_event_phase(event, scope_phase: str) -> str:
     explicit_phase = _normalize_phase(getattr(event, "phase", "unknown"))
     event_type = getattr(event, "event_type", "")
     if explicit_phase != "unknown":
+        if scope_phase == "consume-test" and explicit_phase == "exploit":
+            return scope_phase
         if (
             event_type != "task.completed"
             and scope_phase != "unknown"
@@ -735,6 +772,22 @@ def _build_agent_cards(
         if getattr(event, "event_type", "").startswith("task."):
             latest_task_by_agent[agent_name] = event
 
+    # parallel_count — number of concurrent same-type subagent dispatches.
+    # Primary source: the cases table's `assigned_agent` column via
+    # processing_agents, which reflects actual in-flight parallel work (e.g.
+    # two vulnerability-analyst dispatches processing two separate batches at
+    # the same time). Fallback to 1 for agents that are merely "active" but
+    # have no cases.db concurrency signal (legacy phases, non-queued work).
+    parallel_map: dict[str, int] = {}
+    for entry in processing_agents or []:
+        name = entry.get("agent_name") or ""
+        if not name:
+            continue
+        try:
+            parallel_map[name] = int(entry.get("count") or 0)
+        except (TypeError, ValueError):
+            parallel_map[name] = 0
+
     cards: list[dict] = []
     for agent_name in sorted(latest_by_agent):
         latest_event = latest_by_agent[agent_name]
@@ -751,6 +804,10 @@ def _build_agent_cards(
             elif event_type == "task.completed":
                 status_name = "completed"
 
+        parallel_count = parallel_map.get(agent_name, 0)
+        if parallel_count == 0 and status_name in {"active", "running"}:
+            parallel_count = 1
+
         cards.append(
             {
                 "agent_name": agent_name,
@@ -759,6 +816,7 @@ def _build_agent_cards(
                 "task_name": getattr(status_event, "task_name", ""),
                 "summary": getattr(latest_event, "summary", ""),
                 "updated_at": getattr(latest_event, "created_at", ""),
+                "parallel_count": parallel_count,
             }
         )
 
@@ -775,6 +833,7 @@ def _build_agent_cards(
                 "task_name": agent_name,
                 "summary": f"Processing {processing['count']} queued case(s)",
                 "updated_at": "",
+                "parallel_count": int(processing.get("count") or 0) or 1,
             }
             if existing:
                 existing.update(payload)
@@ -793,6 +852,7 @@ def _build_agent_cards(
                 "task_name": "",
                 "summary": "No activity yet.",
                 "updated_at": "",
+                "parallel_count": 0,
             }
         )
 
@@ -880,7 +940,7 @@ def _build_target_card(run, scope: dict, active_root: Path) -> dict:
     else:
         scope_entries = []
     target_status = normalized_scope.get("status") or run.status
-    if run.status in {"failed", "completed"}:
+    if _is_terminal_run_status(run.status):
         target_status = run.status
     return {
         "target": run.target,
@@ -1086,7 +1146,7 @@ def _summarize_existing_run(run: Run, project: Project, user: User) -> RunSummar
     run_metadata = _load_json(run_root / "run.json")
     cases = _load_cases_metrics(cases_db)
     processing_agents = cases.get("processing_agents", [])
-    surfaces = _load_surface_metrics(active_root / "surfaces.jsonl")
+    surfaces = _load_surface_metrics(active_root / "surfaces.jsonl", scope)
     findings_count = _count_findings(active_root / "findings.md")
     events = list_events_for_run(project.id, run.id, user)
     effective_current_phase = _effective_current_phase(
@@ -1120,7 +1180,18 @@ def _summarize_existing_run(run: Run, project: Project, user: User) -> RunSummar
         ):
             run = db.set_run_updated_at(run.id, overview_updated_at)
     current = _current_activity(events, scope, processing_agents, run.status, str(run_metadata.get("stop_reason_text", "")))
-    active_agents = 0 if _is_terminal_run_status(run.status) else sum(1 for agent in agents if agent["status"] == "active")
+    # active_agents counts concurrent agent *instances*, not distinct agent
+    # types. For consistency with AgentsPanel's "×N parallel" display: when
+    # vulnerability-analyst has parallel_count=3, this returns 3 (not 1).
+    # Falls back to 1 per active agent when parallel_count is 0 (legacy rows).
+    if _is_terminal_run_status(run.status):
+        active_agents = 0
+    else:
+        active_agents = sum(
+            max(int(agent.get("parallel_count") or 0), 1)
+            for agent in agents
+            if agent.get("status") == "active"
+        )
     available_agents = len(agents)
     _sync_run_metadata_projection(
         run,
@@ -1133,6 +1204,57 @@ def _summarize_existing_run(run: Run, project: Project, user: User) -> RunSummar
         active_agents=active_agents,
         available_agents=available_agents,
     )
+
+    dispatch_rows = db.list_dispatches(run.id)
+    case_rows = db.list_cases(run.id)
+    # "failed" buckets both explicit failures and missing_outcomes orphan-recovery
+    # dispatches. These are surfaced separately in the dispatch detail views.
+    _failure_states = {"failed", "missing_outcomes"}
+    dispatch_agg = {
+        "total": len(dispatch_rows),
+        "active": sum(1 for d in dispatch_rows if d.state == "running"),
+        "done": sum(1 for d in dispatch_rows if d.state == "done"),
+        "failed": sum(1 for d in dispatch_rows if d.state in _failure_states),
+    }
+    case_agg = {
+        "total": len(case_rows),
+        "done": sum(1 for c in case_rows if c.state == "done"),
+        "running": sum(1 for c in case_rows if c.state == "running"),
+        "queued": sum(1 for c in case_rows if c.state == "queued"),
+        "error": sum(1 for c in case_rows if c.state == "error"),
+        "findings": sum(1 for c in case_rows if c.state == "finding"),
+    }
+
+    # Partial-structured fallback: if cases.db is present and has a larger
+    # total than the structured table, use cases.db as the authoritative
+    # queue size.  This prevents the dashboard from showing a count that is
+    # lower than the actual number of cases when only some dispatch_start
+    # events were received before the summary was requested.
+    #
+    # Also handles legacy runs where the structured table is empty entirely.
+    cases_db_total = int(cases.get("total_cases", 0))
+    if cases_db_total > case_agg["total"]:
+        # cases.db has more (or all) rows: use its totals as the base.
+        # Preserve structured counts for state buckets that are richer
+        # (done/running/findings) but fill the total from the agent DB.
+        cases_db_agg = {
+            "total":    cases_db_total,
+            "done":     int(cases.get("completed_cases", 0)),
+            "running":  int(cases.get("processing_cases", 0)),
+            "queued":   int(cases.get("pending_cases", 0)),
+            "error":    int(cases.get("error_cases", 0)),
+            "findings": 0,  # not derivable from cases.db
+        }
+        # For state buckets where the structured table has more detail
+        # (e.g. finding state, exact done counts), prefer structured when
+        # its per-bucket total fits within the cases_db total.
+        if case_agg["total"] > 0:
+            cases_db_agg["findings"] = case_agg["findings"]
+            # If structured done > cases_db done, trust structured (cases.db
+            # may lag behind on status updates).
+            if case_agg["done"] > cases_db_agg["done"]:
+                cases_db_agg["done"] = case_agg["done"]
+        case_agg = cases_db_agg
 
     return RunSummary(
         target=_build_target_card(run, scope, active_root),
@@ -1151,6 +1273,8 @@ def _summarize_existing_run(run: Run, project: Project, user: User) -> RunSummar
         current=current,
         phases=phases,
         agents=agents,
+        dispatches=dispatch_agg,
+        cases=case_agg,
     )
 
 

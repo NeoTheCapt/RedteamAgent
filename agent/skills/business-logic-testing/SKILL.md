@@ -178,6 +178,47 @@ run_tool curl -s -X POST "http://target/api/payment" \
   -d '{}'
 ```
 
+### 7. CTF / Juice Shop Recall Contract
+
+When the target fingerprints as OWASP Juice Shop, keep the following challenge-triggering
+logic probes alive until they either produce solved-state evidence or are requeued with the
+exact blocker. Do not retire these as "duplicate" just because a broader endpoint finding
+already exists.
+
+- Feedback workflows: submit and verify both a five-star rating and a forged-feedback path.
+  Exercise `POST /api/Feedbacks/` with `rating: 5` and a forged/alternate `UserId` or
+  author context, then check the scoreboard/challenge evidence before marking the case done.
+- Password-strength recall: after any credential leak, admin token, or account takeover,
+  attempt one bounded weak-password login/change/reset branch for known Juice Shop users
+  (`admin@juice-sh.op`, `bjoern@owasp.org`, `jim@juice-sh.op`) and record whether the
+  Password Strength challenge flips. If only missing credentials block it, return `REQUEUE`
+  with the exact credential source already checked.
+- Database-schema recall: when SQL injection or admin data exposure is confirmed, perform
+  one schema-oriented probe (`sqlite_master`, `information_schema`, ORM metadata, or the
+  equivalent DB error path) and preserve the response artifact. Do not stop at admin login
+  success if schema extraction has not been attempted.
+- If any of Five-Star Feedback, Forged Feedback, Password Strength, or Database Schema is
+  still untested after the relevant endpoint is discovered, emit `REQUEUE` with a concrete
+  `api` or `form` follow-up instead of `DONE STAGE=exhausted`.
+- A functionally successful request is not enough for CTF recall closure. If a five-star
+  feedback POST returns 201, a weak-password login/reset branch reaches the expected
+  endpoint, or a schema/error disclosure path returns data but `/api/Challenges` still shows
+  the named challenge as unsolved, preserve the request/response artifact and return
+  `REQUEUE` with the exact next challenge-triggering payload or browser route to try. Do
+  not let the operator proceed to report on "technical evidence remains" when solved-state
+  evidence disagrees.
+- For Juice Shop weak-password recall, explicitly try the canonical low-risk credential
+  branch (`admin@juice-sh.op` with the known weak-password candidate set from discovered
+  seed/persona evidence, including `admin123` before broader brute force) and record the
+  challenge-state check. If the credential branch is blocked, requeue the exact tested
+  username plus the remaining candidate source instead of closing Password Strength as a
+  duplicate of admin access.
+- For Database Schema recall, after any SQLi/error path or admin data exposure, make the
+  schema probe challenge-specific: attempt a `sqlite_master` extraction through the
+  injection-capable route and then immediately fetch `/api/Challenges` for the Database
+  Schema solved flag. If the probe only produces a generic ORM/stack trace, requeue the
+  exact schema-extraction payload rather than retiring the route as generic error handling.
+
 ## What to Record
 
 - **Workflow step** that was bypassed or abused
