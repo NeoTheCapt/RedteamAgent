@@ -260,6 +260,58 @@ describe("ProgressTab", () => {
     });
   });
 
+  it("uses backend parallel_count when live dispatch rows undercount progress participation", async () => {
+    mockDispatches.mockResolvedValue([
+      { id: "d1", phase: "exploit", round: 3, agent: "exploit-developer", slot: "s0", task: null, state: "running", started_at: 1, finished_at: null, error: null },
+      { id: "d2", phase: "consume", round: 2, agent: "vulnerability-analyst", slot: "s0", task: null, state: "running", started_at: 2, finished_at: null, error: null },
+    ]);
+    mockCases.mockResolvedValue([]);
+    const base = mkSummary();
+
+    render(
+      <ProgressTab
+        token="t"
+        projectId={1}
+        runId={2}
+        currentPhase="exploit"
+        summary={mkSummary({
+          overview: {
+            ...base.overview,
+            active_agents: 1,
+            current_phase: "exploit",
+          },
+          agents: [
+            {
+              agent_name: "exploit-developer",
+              phase: "exploit",
+              status: "active",
+              task_name: "exploit",
+              summary: "Exploit start",
+              updated_at: "2026-04-17 00:12:00",
+              parallel_count: 12,
+            },
+            {
+              agent_name: "vulnerability-analyst",
+              phase: "consume-test",
+              status: "completed",
+              task_name: "triage",
+              summary: "API batch completed",
+              updated_at: "2026-04-17 00:11:00",
+              parallel_count: 10,
+            },
+          ],
+        })}
+      />,
+    );
+
+    await waitFor(() => {
+      const meta = screen.getByLabelText("Agent participation summary");
+      expect(meta).toHaveTextContent("12× exploit-developer");
+      expect(meta).toHaveTextContent("10× vulnerability-analyst");
+      expect(meta).not.toHaveTextContent("1× exploit-developer, 1× vulnerability-analyst");
+    });
+  });
+
   it("keeps the progress-tab participation breakdown visible even after active agents drop to zero", async () => {
     mockDispatches.mockResolvedValue([]);
     mockCases.mockResolvedValue([]);

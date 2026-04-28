@@ -25,8 +25,8 @@ function inferTrackedAgentCount(
   const fromDispatches = parallelByDispatch.get(agent.agent_name) ?? 0;
   const fromBackend = agent.parallel_count ?? 0;
   const touchedRun = agent.status !== "idle" && agent.status !== "";
-  if (fromDispatches > 0) return fromDispatches;
-  if (fromBackend > 0) return fromBackend;
+  const observedParallel = Math.max(fromDispatches, fromBackend);
+  if (observedParallel > 0) return observedParallel;
   return touchedRun ? 1 : 0;
 }
 
@@ -44,18 +44,16 @@ export function summarizeAgentParticipation(
   // activeTotal still reflects live active concurrency; the breakdown text is
   // intentionally historical so Dashboard/Progress keep the per-type context.
   const counts = new Map<string, number>();
-  const runningAgents = new Set<string>();
 
   for (const dispatch of dispatches) {
     if (dispatch.state !== "running") continue;
     counts.set(dispatch.agent, (counts.get(dispatch.agent) ?? 0) + 1);
-    runningAgents.add(dispatch.agent);
   }
 
   for (const agent of summary.agents) {
-    if (runningAgents.has(agent.agent_name)) continue;
     const count = inferTrackedAgentCount(agent, new Map());
-    if (count > 0) counts.set(agent.agent_name, count);
+    const existing = counts.get(agent.agent_name) ?? 0;
+    if (count > existing) counts.set(agent.agent_name, count);
   }
 
   const breakdown = Array.from(counts.entries())
