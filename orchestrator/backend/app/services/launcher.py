@@ -3089,7 +3089,7 @@ def _write_process_metadata(run: Run, process: subprocess.Popen[bytes]) -> None:
             "run",
             "--format",
             "json",
-            f"/autoengage {run.target}",
+            f"/engage --auto {run.target}",
         ],
         "started_at": db.get_run_by_id(run.id).updated_at if db.get_run_by_id(run.id) else None,
     }
@@ -3350,7 +3350,7 @@ def _looks_like_runtime_process(command: str, *, container_name: str | None) -> 
         return False
 
     runtime_markers = (
-        " opencode run --format json /autoengage ",
+        " opencode run --format json /engage --auto ",
         " opencode run --format json /resume ",
         " docker run ",
     )
@@ -3573,7 +3573,7 @@ def _ensure_runtime_log_follower(run: Run, log_follower: subprocess.Popen[bytes]
 def _runtime_command_text(run: Run, *, resume: bool = False) -> str:
     if resume:
         return "/resume"
-    return f"/autoengage {_rewrite_runtime_target(run.target)}"
+    return f"/engage --auto {_rewrite_runtime_target(run.target)}"
 
 
 def _launch_runtime_container(
