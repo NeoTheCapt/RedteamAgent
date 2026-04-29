@@ -34,21 +34,59 @@ directory-fuzzing, parameter-fuzzing
 
 === FUZZING MODES ===
 
+AUTONOMOUS WORDLIST GUARDRAIL: never glob, read, or depend on host-global
+wordlist directories such as `/usr/share/seclists/**`, `/usr/share/wordlists/**`,
+or `/usr/share/dirb/**`. In unattended runs those paths trigger
+`external_directory` permission asks and stall the runtime. Build a bounded
+workspace-local wordlist under the active engagement directory (`$DIR/scans/`)
+from the supplied endpoint, observed parameters, and the inline seeds below; use
+that file with ffuf. If a required corpus is not already inside `/workspace` or
+`$DIR`, return `REQUEUE` with the blocker instead of asking for permission.
+
 1. DIRECTORY / FILE DISCOVERY
    ```
-   ffuf -u <target>/FUZZ -w <wordlist> -fc 404 -t 50 -o results.json -of json
+   cat > "$DIR/scans/path-wordlist.txt" <<'EOF'
+   admin
+   api
+   auth
+   config
+   debug
+   health
+   login
+   logout
+   metrics
+   register
+   status
+   users
+   EOF
+   ffuf -u <target>/FUZZ -w "$DIR/scans/path-wordlist.txt" -fc 404 -t 50 -o results.json -of json
    ```
-   Wordlists (preference order): /usr/share/wordlists/dirb/common.txt (~4600),
-   /usr/share/wordlists/dirbuster/directory-list-2.3-medium.txt,
-   /usr/share/seclists/Discovery/Web-Content/raft-medium-directories.txt
+   Extend the workspace-local wordlist from observed links/routes only.
    Follow-up: -e php,txt,bak,old,conf,html,js,json,xml,zip; recursive one level at a time.
 
 2. PARAMETER DISCOVERY
    ```
-   ffuf -u <target>?FUZZ=test -w <param-wordlist> -fs <baseline-size>
-   ffuf -u <target> -X POST -d "FUZZ=test" -H "Content-Type: application/x-www-form-urlencoded" -w <wordlist> -fs <baseline-size>
+   cat > "$DIR/scans/param-wordlist.txt" <<'EOF'
+   id
+   user
+   userId
+   account
+   token
+   redirect
+   url
+   next
+   returnUrl
+   callback
+   amount
+   orderId
+   currency
+   symbol
+   page
+   limit
+   EOF
+   ffuf -u <target>?FUZZ=test -w "$DIR/scans/param-wordlist.txt" -fs <baseline-size>
+   ffuf -u <target> -X POST -d "FUZZ=test" -H "Content-Type: application/x-www-form-urlencoded" -w "$DIR/scans/param-wordlist.txt" -fs <baseline-size>
    ```
-   Wordlist: /usr/share/seclists/Discovery/Web-Content/burp-parameter-names.txt
    ALWAYS establish baseline first (known-invalid param → record size/words/lines).
 
 3. VALUE FUZZING / BRUTE FORCE

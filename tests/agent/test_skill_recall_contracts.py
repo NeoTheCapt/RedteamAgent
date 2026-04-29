@@ -11,6 +11,7 @@ XSS_SKILL = REPO_ROOT / "agent" / "skills" / "xss-testing" / "SKILL.md"
 BUSINESS_LOGIC_SKILL = REPO_ROOT / "agent" / "skills" / "business-logic-testing" / "SKILL.md"
 XXE_SKILL = REPO_ROOT / "agent" / "skills" / "xxe-testing" / "SKILL.md"
 PARAMETER_FUZZING_SKILL = REPO_ROOT / "agent" / "skills" / "parameter-fuzzing" / "SKILL.md"
+FUZZER_PROMPT = REPO_ROOT / "agent" / ".opencode" / "prompts" / "agents" / "fuzzer.txt"
 OPERATOR_CORE = REPO_ROOT / "agent" / "operator-core.md"
 
 
@@ -175,3 +176,16 @@ def test_parameter_fuzzing_uses_workspace_local_wordlists_in_autonomous_runs() -
     assert "return `REQUEUE` with that blocker" in skill
     assert '-w "$PARAM_WORDLIST"' in skill
     assert "-w /usr/share" not in skill
+
+
+def test_fuzzer_prompt_never_requests_external_wordlists_in_autonomous_runs() -> None:
+    prompt = FUZZER_PROMPT.read_text(encoding="utf-8")
+    guardrail = prompt[prompt.index("AUTONOMOUS WORDLIST GUARDRAIL"):]
+
+    assert "external_directory" in guardrail
+    assert "$DIR/scans/path-wordlist.txt" in guardrail
+    assert "$DIR/scans/param-wordlist.txt" in guardrail
+    assert "return `REQUEUE` with the blocker" in guardrail
+    assert "-w /usr/share" not in prompt
+    assert "/usr/share/seclists/Discovery/Web-Content/burp-parameter-names.txt" not in prompt
+    assert "glob" in guardrail and "never" in guardrail.lower()
