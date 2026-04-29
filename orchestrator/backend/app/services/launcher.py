@@ -1248,8 +1248,12 @@ def _active_runtime_agents(run: Run) -> set[str]:
 
 def _run_metadata_has_current_task(run: Run) -> bool:
     payload = _read_run_metadata(run)
-    current_task_name = str(payload.get("current_task_name") or "").strip()
-    current_agent_name = str(payload.get("current_agent_name") or "").strip()
+    current_task_name = str(payload.get("current_task_name") or payload.get("current_task") or "").strip()
+    current_agent_name = str(payload.get("current_agent_name") or payload.get("current_agent") or "").strip()
+    current_action = payload.get("current_action")
+    if isinstance(current_action, dict):
+        current_task_name = current_task_name or str(current_action.get("task_name") or "").strip()
+        current_agent_name = current_agent_name or str(current_action.get("agent_name") or "").strip()
     return bool(current_task_name or current_agent_name)
 
 
