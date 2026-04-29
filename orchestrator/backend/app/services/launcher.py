@@ -2948,6 +2948,7 @@ def _render_workspace_env_file(project) -> str:
 
     _inject_model_provider_env(payload, project)
     _inject_project_config_env(payload, project)
+    _inject_metasploit_mcp_env(payload)
 
     for key in sorted(payload):
         value = payload[key]
@@ -3001,6 +3002,29 @@ def _inject_project_config_env(env: dict, project) -> None:
                 env["REDTEAM_DISABLED_AGENTS"] = ",".join(disabled)
 
 
+def _inject_metasploit_mcp_env(env: dict[str, str]) -> None:
+    """Ensure workspace-launched Metasploit MCP sees non-blank defaults.
+
+    Engagement workspaces are immutable snapshots. A prior fix made the current
+    launcher script normalize blank OpenCode placeholders, but post-fix runs can
+    still contain an older copied ``scripts/start_metasploit_mcp.sh``. Seeding
+    the workspace ``.env`` and runtime process env gives both old and new
+    launcher scripts the same sane defaults while preserving explicit project
+    overrides.
+    """
+
+    defaults = {
+        "MSF_USER": "msf",
+        "MSF_PASSWORD": "msf",
+        "MSF_SERVER": "127.0.0.1",
+        "MSF_PORT": "55553",
+        "MSF_SSL": "false",
+    }
+    for key, value in defaults.items():
+        if not str(env.get(key, "")).strip():
+            env[key] = value
+
+
 def _runtime_env(project: Project, run: Run, user: User) -> dict[str, str]:
     token = create_session_token()
     db.create_session(user.id, token, session_expiry_timestamp())
@@ -3029,6 +3053,7 @@ def _runtime_env(project: Project, run: Run, user: User) -> dict[str, str]:
                     continue
                 env[key] = str(value)
     _inject_project_config_env(env, project)
+    _inject_metasploit_mcp_env(env)
     return env
 
 
