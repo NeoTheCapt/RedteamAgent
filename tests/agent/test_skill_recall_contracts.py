@@ -10,6 +10,7 @@ SOURCE_ANALYSIS_SKILL = REPO_ROOT / "agent" / "skills" / "source-analysis" / "SK
 XSS_SKILL = REPO_ROOT / "agent" / "skills" / "xss-testing" / "SKILL.md"
 BUSINESS_LOGIC_SKILL = REPO_ROOT / "agent" / "skills" / "business-logic-testing" / "SKILL.md"
 XXE_SKILL = REPO_ROOT / "agent" / "skills" / "xxe-testing" / "SKILL.md"
+PARAMETER_FUZZING_SKILL = REPO_ROOT / "agent" / "skills" / "parameter-fuzzing" / "SKILL.md"
 OPERATOR_CORE = REPO_ROOT / "agent" / "operator-core.md"
 
 
@@ -163,3 +164,14 @@ def test_xxe_skill_preserves_juice_shop_xxe_data_access_recall() -> None:
     assert "SVG/XML payload" in skill
     assert "XXE Data Access" in skill
     assert "return `REQUEUE` with the exact XML-capable endpoint" in skill
+
+
+def test_parameter_fuzzing_uses_workspace_local_wordlists_in_autonomous_runs() -> None:
+    skill = PARAMETER_FUZZING_SKILL.read_text(encoding="utf-8")
+
+    assert "Autonomous wordlist guardrail" in skill
+    assert "external_directory" in skill
+    assert "$DIR/scans/param-wordlist.txt" in skill
+    assert "return `REQUEUE` with that blocker" in skill
+    assert '-w "$PARAM_WORDLIST"' in skill
+    assert "-w /usr/share" not in skill
