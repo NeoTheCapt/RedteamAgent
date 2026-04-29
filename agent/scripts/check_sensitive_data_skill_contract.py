@@ -12,6 +12,7 @@ required_phrases = [
     "challenge=<name> status=solved|blocked|requeued evidence=<path or response> next=<exact concrete action>",
     "A generic phrase such as \"ftp artifact closure\", \"metrics checked\", or \"Web3 route inspected\" is not sufficient.",
     "emit `REQUEUE` with the exact path or workflow as the next case instead of `DONE STAGE=exhausted`",
+    "When validated credentials land, do not treat auth respawn as bookkeeping separate from recall.",
 ]
 
 required_challenges = [
