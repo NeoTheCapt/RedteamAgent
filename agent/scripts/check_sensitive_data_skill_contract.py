@@ -10,7 +10,8 @@ text = SKILL.read_text(encoding="utf-8")
 required_phrases = [
     "Treat the named recall targets as a closure checklist",
     "challenge=<name> status=solved|blocked|requeued evidence=<path or response> next=<exact concrete action>",
-    "A generic phrase such as \"ftp artifact closure\", \"metrics checked\", or \"Web3 route inspected\" is not sufficient.",
+    "A generic phrase such as \"ftp artifact closure\", \"metrics checked\", \"schema replayed\", \"credential rows dumped\", or \"Web3 route inspected\" is not sufficient.",
+    "do not close the branch as an environment mismatch in the same handoff",
     "emit `REQUEUE` with the exact path or workflow as the next case instead of `DONE STAGE=exhausted`",
     "When validated credentials land, do not treat auth respawn as bookkeeping separate from recall.",
 ]
@@ -22,6 +23,9 @@ required_challenges = [
     "Forged Feedback",
     "Easter Egg",
     "Forgotten Sales Backup",
+    "Database Schema",
+    "Misplaced Signature File",
+    "User Credentials",
 ]
 
 missing = []
