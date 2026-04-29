@@ -747,11 +747,16 @@ def _reconcile_run_status(run: Run, project: Project | None = None, user: User |
             logged_reason_code, logged_reason_text = _last_logged_stop_metadata(engagement_dir / "log.md")
 
         if continuous_report_hold:
-            reason_code = "runtime_disappeared"
-            reason_text = "continuous observation hold detached"
-        else:
-            reason_code = logged_reason_code or "runtime_disappeared"
-            reason_text = logged_reason_text or "Runtime supervisor disappeared before the engagement reached a terminal state."
+            completed = db.update_run_status(run.id, "completed")
+            _clear_run_terminal_reason(completed)
+            if project is not None and user is not None:
+                from .run_summary import refresh_run_metadata_projection
+
+                refresh_run_metadata_projection(completed, project, user)
+            return completed
+
+        reason_code = logged_reason_code or "runtime_disappeared"
+        reason_text = logged_reason_text or "Runtime supervisor disappeared before the engagement reached a terminal state."
         if project is not None and user is not None:
             scope_path = _active_scope_path(run)
             current_phase, _, _, _, _ = _load_queue_state(scope_path)
