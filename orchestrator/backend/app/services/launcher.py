@@ -1729,7 +1729,12 @@ def _report_has_substantive_content(text: str) -> bool:
         return True
     if re.search(r"^### FINDING-\d{3}:", stripped, flags=re.MULTILINE):
         return True
-    return "No confirmed findings" in stripped
+    no_finding_phrases = (
+        "No confirmed findings",
+        "No confirmed vulnerabilities",
+        "No confirmed vulnerabilities were recorded",
+    )
+    return any(phrase in stripped for phrase in no_finding_phrases)
 
 
 def _parse_findings_markdown(text: str) -> list[dict[str, str]]:
