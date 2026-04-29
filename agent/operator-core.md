@@ -269,17 +269,29 @@ When ANY agent discovers credentials:
 
 **Mechanical respawn check (run every operator tick):**
 
+First run only the local flag check in bash:
+
 ```bash
 ./scripts/auth_respawn_check.sh "$DIR"
 if [[ -f "$DIR/.auth-respawn-required" ]]; then
-  # NEW validated credential(s) landed since last check — re-dispatch
-  # recon-specialist + source-analyzer with the auth context so the
-  # newly-authenticated surface gets discovered. Then clear the flag.
-  task @recon-specialist "$DIR with auth.json validated_credentials"
-  task @source-analyzer "$DIR with auth.json validated_credentials"
-  rm "$DIR/.auth-respawn-required"
+  printf '%s\n' "AUTH_RESPAWN_REQUIRED=1"
+else
+  printf '%s\n' "AUTH_RESPAWN_REQUIRED=0"
 fi
 ```
+
+If `AUTH_RESPAWN_REQUIRED=1`, the very next assistant action(s) MUST be real subagent `task(...)` dispatches, not a shell command that merely describes `task @...` text. Dispatch both:
+- `recon-specialist` with the exact active `$DIR`, `auth.json` validated credential context, and a bounded authenticated surface-refresh objective
+- `source-analyzer` with the exact active `$DIR`, `auth.json` validated credential context, and a bounded authenticated route/API extraction objective
+
+Only after both task calls have actually been issued and returned may you run:
+
+```bash
+rm -f "$DIR/.auth-respawn-required"
+./scripts/update_phase_from_stages.sh "$DIR"
+```
+
+Never clear `.auth-respawn-required` before the real task calls. Never put pseudo-dispatch lines such as `task @recon-specialist ...` inside a bash block; in autonomous orchestrated runs that is bookkeeping-only text, can trigger permission/approval handling, and leaves the runtime with no real advancing subagent dispatch.
 
 The check is idempotent: it only flags when `validated_credentials.length` increases since the last run. Without this hook, agent runs landed creds in 30% of cycles but only re-recon'd in <10% — the rest forgot, leaving authenticated surface unexplored.
 
