@@ -12,6 +12,8 @@ REQUIRED_RECALL_CONTRACTS = [
     "Bjoern's Favorite Pet",
     "Reset Bjoern's Password",
     'Bjoern-specific recovery/reset follow-up',
+    'final-report blocker ledger',
+    'completed-with-blockers',
 ]
 
 
