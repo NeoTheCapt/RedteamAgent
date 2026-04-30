@@ -152,6 +152,10 @@ def test_operator_core_blocks_final_report_until_ctf_recall_closure() -> None:
     assert "must return either solved-state evidence or `REQUEUE`" in core
     assert "not a concrete blocker" in core
     assert "current lab solved-state mismatch" in core
+    assert "fresh live `/api/Challenges` / Score Board solved-state snapshot" in core
+    assert "Do not use a saved `/api/Challenges` artifact as the passing evidence" in core
+    assert "a log entry citing only saved challenge evidence" in core
+    assert "fresh live solved-state evidence path/route" in core
     assert "Immediately after every exploit-developer closure handoff" in core
     assert "record `REQUEUE` (not `DONE`)" in core
     assert "or concrete blockers are logged" not in core
