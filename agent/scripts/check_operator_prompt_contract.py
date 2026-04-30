@@ -19,8 +19,11 @@ REQUIRED_SNIPPETS = [
     '"no multi-step attack path"',
     'credential hashes were exfiltrated but `User Credentials` did not flip',
     'Before dispatching `report-writer` on a local Juice Shop run',
-    'treat that handoff as incomplete: reopen or requeue the exact challenge branch',
-    'blocked `/ftp` artifact+bypass path for forgotten backup/signature/easter-egg challenges',
+    'hard pre-report gate, not a hint and not dependent on the latest handoff wording',
+    'If ANY peak-solved challenge remains false, CTF recall closure is NOT satisfied',
+    'append a `CTF recall gate` log entry naming every false peak challenge',
+    'blocked `/ftp` artifact+bypass path for forgotten backup/signature/easter-egg/deprecated-interface challenges',
+    'Do not transition to `report`, dispatch `report-writer`, or finalize the run until this explicit gate action is visible in `log.md`',
 ]
 
 
