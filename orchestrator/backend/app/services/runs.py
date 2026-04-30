@@ -38,6 +38,7 @@ from .launcher import (
     process_metadata_path_for,
     start_run_runtime,
     stop_run_runtime,
+    metadata_path_for,
     _active_runtime_agents,
     _active_runtime_metadata_agents,
     _latest_runtime_metadata_activity_at,
@@ -65,6 +66,17 @@ PERMISSION_REQUEST_GRACE_SECONDS = 60
 # killing active slow-start recon just as the first subagent/task dispatch begins.
 EARLY_PHASE_STALL_TIMEOUT_SECONDS = 300
 EARLY_PHASE_STALL_PHASES = {"unknown", "recon", "collect"}
+
+
+def _metadata_stop_reason_code(run: Run) -> str:
+    path = metadata_path_for(run)
+    if not path.exists():
+        return ""
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return ""
+    return str(payload.get("stop_reason_code") or "")
 
 
 def _is_sqlite_corruption_error(exc: sqlite3.Error) -> bool:
@@ -720,6 +732,14 @@ def _reconcile_run_status(run: Run, project: Project | None = None, user: User |
         return run
 
     if run.status == "completed":
+        engagement_dir = _active_engagement_dir(run)
+        if engagement_dir is not None and _continuous_observation_report_hold_active(run, engagement_dir=engagement_dir):
+            _clear_run_terminal_reason(run)
+            if project is not None and user is not None:
+                from .run_summary import refresh_run_metadata_projection
+
+                refresh_run_metadata_projection(run, project, user)
+            return run
         failed = db.update_run_status(run.id, "failed")
         _write_run_terminal_reason(
             failed,
@@ -728,6 +748,17 @@ def _reconcile_run_status(run: Run, project: Project | None = None, user: User |
         )
         stop_run_runtime(failed)
         return failed
+
+    if run.status == "failed" and _metadata_stop_reason_code(run) == "incomplete_terminal_state":
+        engagement_dir = _active_engagement_dir(run)
+        if engagement_dir is not None and _continuous_observation_report_hold_active(run, engagement_dir=engagement_dir):
+            completed = db.update_run_status(run.id, "completed")
+            _clear_run_terminal_reason(completed)
+            if project is not None and user is not None:
+                from .run_summary import refresh_run_metadata_projection
+
+                refresh_run_metadata_projection(completed, project, user)
+            return completed
 
     # New runs can briefly lack visible runtime metadata while the container and
     # docker client process are still bootstrapping. Do not immediately mark
