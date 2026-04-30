@@ -156,6 +156,11 @@ def test_operator_core_blocks_final_report_until_ctf_recall_closure() -> None:
     assert "Do not use a saved `/api/Challenges` artifact as the passing evidence" in core
     assert "a log entry citing only saved challenge evidence" in core
     assert "fresh live solved-state evidence path/route" in core
+    assert "The CTF recall gate is exhaustive, not sample-based" in core
+    assert "minimum peak-retention checklist" in core
+    assert "Naming only a subset of false peak challenges is incomplete" in core
+    assert "Admin Registration" in core
+    assert "Zero Stars" in core
     assert "Immediately after every exploit-developer closure handoff" in core
     assert "record `REQUEUE` (not `DONE`)" in core
     assert "or concrete blockers are logged" not in core
