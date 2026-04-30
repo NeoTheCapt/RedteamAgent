@@ -177,7 +177,7 @@ These rules from the prior phase flow still apply per-stage:
 
 Before declaring the cycle complete, run `./scripts/reconcile_surface_coverage.sh "$DIR" --ingest-followups` and then `./scripts/check_surface_coverage.sh "$DIR"`. If `reconcile_surface_coverage.sh` adds follow-up cases (which land at stage `ingested`), stay in the loop and process them.
 
-If coverage still fails, mark the surface with `./scripts/append_surface.sh "$DIR" <surface_type> <target> <source> <rationale> [evidence_ref] covered|not_applicable|deferred` using existing evidence, OR dispatch exactly one bounded surface-coverage follow-up batch.
+If coverage still fails, mark the surface with `./scripts/append_surface.sh "$DIR" <surface_type> <target> <source> <rationale> [evidence_ref] covered|not_applicable|deferred` using existing evidence, OR dispatch exactly one bounded surface-coverage follow-up batch. A `surface_coverage_incomplete` stop is forbidden while the log still says unresolved surfaces "need another bounded coverage pass": the same assistant turn must either ingest/fetch/dispatch that follow-up work or downgrade each concrete surface to `covered`, `not_applicable`, or evidence-backed `deferred` first. Do not transition to `report`, emit `incomplete_stop`, or end the run just because the active-stage queue is drained when high-risk surface coverage remains unresolved.
 
 Reuse existing evidence before issuing new probes. Any ad-hoc in-scope HTTP validation MUST stay bounded: at most 1-2 representative probes per surface; every `run_tool curl` MUST include `--connect-timeout 5` and `--max-time 20`. Never launch long multi-endpoint bundles, unbounded loops, or background probes.
 
