@@ -193,6 +193,13 @@ already exists.
   (`admin@juice-sh.op`, `bjoern@owasp.org`, `jim@juice-sh.op`) and record whether the
   Password Strength challenge flips. If only missing credentials block it, return `REQUEUE`
   with the exact credential source already checked.
+- Admin-registration recall: when the registration API or form is available on Juice Shop,
+  run one bounded account-creation mutation that explicitly attempts the admin-role trigger
+  (`POST /api/Users/` or the native register workflow with `role=admin` / equivalent role
+  field) and then check `/api/Challenges` for `registerAdminChallenge`. If the API strips the
+  role or the UI omits the field, return `REQUEUE` with the exact request body, observed
+  response, and remaining role-injection surface instead of closing registration as generic
+  create-account coverage.
 - Database-schema recall: when SQL injection or admin data exposure is confirmed, perform
   one schema-oriented probe (`sqlite_master`, `information_schema`, ORM metadata, or the
   equivalent DB error path) and preserve the response artifact. Do not stop at admin login
@@ -218,6 +225,11 @@ already exists.
   injection-capable route and then immediately fetch `/api/Challenges` for the Database
   Schema solved flag. If the probe only produces a generic ORM/stack trace, requeue the
   exact schema-extraction payload rather than retiring the route as generic error handling.
+- User Credentials and Database Schema are sibling recall closures, not substitutes. If
+  `/api/Users`, authentication-details, or cracked-hash evidence is present but both
+  `databaseSchemaChallenge` and `userCredentialsChallenge` remain false, requeue one exact
+  SQLi/schema payload path and one exact credential-bearing consumer path before report;
+  do not rely on admin login, user roster enumeration, or masked-password rows as closure.
 
 ## What to Record
 

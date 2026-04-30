@@ -33,6 +33,7 @@ run_tool hydra -l root -P passwords.txt target ssh -t 4
 - Host header injection: `Host: attacker.com` in reset request
 - Parameter pollution: `email=victim@mail.com&email=attacker@mail.com`
 - CTF/Juice Shop-style recovery chains: when `/rest/user/security-question`, `/rest/user/reset-password`, or exposed backup/source artifacts exist, do not stop at "unknown answer". Correlate answers from source bundles, `/ftp` backups, incident files, leaked credentials, and OSINT hints; replay reset for high-value users such as `admin@juice-sh.op`, `bjoern@owasp.org`, support/admin accounts, then immediately verify login and record the solved challenge/finding evidence.
+- For Juice Shop `Bjoern's Favorite Pet` / Bjoern reset recall, treat a single wrong answer (for example one `Zatschi` attempt) as incomplete. Before closure, enumerate candidate pet answers from source bundles, comments, profile metadata, `/ftp` documents, and OSINT snippets, try the highest-confidence candidate set in a bounded pass, and if still blocked return `REQUEUE` with the exact candidate list and artifacts checked.
 - If reset remains blocked, emit an explicit `REQUEUE_CANDIDATE` naming the missing answer source and the exact endpoints/artifacts already checked, so a later source-analysis or exploit pass can finish the chain instead of retiring it silently.
 
 ### 4. Session Management

@@ -9,6 +9,7 @@ SENSITIVE_DATA_SKILL = REPO_ROOT / "agent" / "skills" / "sensitive-data-detectio
 SOURCE_ANALYSIS_SKILL = REPO_ROOT / "agent" / "skills" / "source-analysis" / "SKILL.md"
 XSS_SKILL = REPO_ROOT / "agent" / "skills" / "xss-testing" / "SKILL.md"
 BUSINESS_LOGIC_SKILL = REPO_ROOT / "agent" / "skills" / "business-logic-testing" / "SKILL.md"
+AUTH_BYPASS_SKILL = REPO_ROOT / "agent" / "skills" / "auth-bypass" / "SKILL.md"
 XXE_SKILL = REPO_ROOT / "agent" / "skills" / "xxe-testing" / "SKILL.md"
 PARAMETER_FUZZING_SKILL = REPO_ROOT / "agent" / "skills" / "parameter-fuzzing" / "SKILL.md"
 FUZZER_PROMPT = REPO_ROOT / "agent" / ".opencode" / "prompts" / "agents" / "fuzzer.txt"
@@ -94,6 +95,9 @@ def test_xss_skill_requires_juice_shop_browser_flow_recall_contract() -> None:
     assert "CTF / Juice Shop recall contract" in skill
     assert "do not close XSS-capable surfaces with API-only probes" in skill
     assert "/#/search?q=<iframe" in skill
+    assert 'javascript:alert(`xss`)' in skill
+    assert "localXssChallenge=false" in skill
+    assert "Score Board refresh" in skill
     assert "/rest/products/search" in skill
     assert "Zero Stars feedback" in skill
     assert "return `REQUEUE` with a concrete `dynamic_render` or `form` follow-up" in skill
@@ -106,7 +110,13 @@ def test_business_logic_skill_preserves_regressed_juice_shop_logic_recall() -> N
     assert "Five-Star Feedback" in skill
     assert "Forged Feedback" in skill
     assert "Password Strength" in skill
+    assert "Admin-registration recall" in skill
+    assert "registerAdminChallenge" in skill
+    assert "role=admin" in skill
     assert "Database Schema" in skill
+    assert "User Credentials and Database Schema are sibling recall closures" in skill
+    assert "databaseSchemaChallenge" in skill
+    assert "userCredentialsChallenge" in skill
     assert "POST /api/Feedbacks/" in skill
     assert "sqlite_master" in skill
     assert "emit `REQUEUE` with a concrete" in skill
@@ -115,6 +125,24 @@ def test_business_logic_skill_preserves_regressed_juice_shop_logic_recall() -> N
     assert "admin123" in skill
     assert "challenge-specific" in skill
     assert "schema-extraction payload" in skill
+
+
+def test_auth_bypass_skill_requires_bjoern_pet_candidate_requeue() -> None:
+    skill = AUTH_BYPASS_SKILL.read_text(encoding="utf-8")
+
+    assert "Bjoern's Favorite Pet" in skill
+    assert "single wrong answer" in skill
+    assert "candidate pet answers" in skill
+    assert "exact candidate list and artifacts checked" in skill
+
+
+def test_sensitive_data_peak_sweep_names_current_lost_recall_triggers() -> None:
+    skill = SENSITIVE_DATA_SKILL.read_text(encoding="utf-8")
+
+    assert 'javascript:alert(`xss`)' in skill
+    assert "DOM XSS" in skill
+    assert "admin-role registration request" in skill
+    assert "Admin Registration" in skill
 
 
 def test_operator_core_blocks_final_report_until_ctf_recall_closure() -> None:
