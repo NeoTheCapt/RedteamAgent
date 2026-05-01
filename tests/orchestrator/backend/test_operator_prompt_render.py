@@ -88,6 +88,17 @@ def test_rendered_operator_prompt_blocks_failed_recall_replay_retirement(tmp_pat
     assert "It may not retire the case as clean and proceed to `report-writer`" in rendered
 
 
+def test_rendered_operator_prompt_blocks_below_peak_recall_report_completion(tmp_path: Path) -> None:
+    _render_repo(tmp_path)
+
+    rendered = (tmp_path / ".opencode" / "prompts" / "agents" / "operator.txt").read_text(encoding="utf-8")
+
+    assert "recall-blocker ledger" in rendered
+    assert "NOT permission to dispatch `report-writer`, finalize the run, or mark the engagement completed" in rendered
+    assert "preventing below-peak completed runs from being scored as successful closures" in rendered
+    assert "Only after writing that ledger may the operator dispatch `report-writer`" not in rendered
+
+
 def test_rendered_operator_prompt_blocks_surface_coverage_incomplete_stop(tmp_path: Path) -> None:
     _render_repo(tmp_path)
 
