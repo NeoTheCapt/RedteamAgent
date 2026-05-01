@@ -164,12 +164,18 @@ def test_operator_core_blocks_final_report_until_ctf_recall_closure() -> None:
         "NFT Takeover",
         "Web3 Sandbox",
         "Five-Star Feedback",
+        "Zero Stars",
+        "Admin Registration",
         "Password Strength",
         "Database Schema",
         "Upload Type",
         "User Credentials",
+        "Missing Encoding",
     ]:
         assert challenge in core
+    assert "rating: 0" in core
+    assert "registerAdminChallenge" in core
+    assert "missingEncodingChallenge" in core
     assert "low-friction recall branch" in core
     assert "canonical public document paths" in core
     assert "exact peak-solved artifact branches" in core
