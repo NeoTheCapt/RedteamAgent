@@ -66,6 +66,10 @@ Version: `SELECT version()` (MySQL/PG), `SELECT @@version` (MySQL/MSSQL), `SELEC
 ' UNION SELECT NULL,CONCAT(username,':',password),NULL FROM users--
 ```
 
+### Juice Shop recall closure
+
+When OWASP Juice Shop is the local benchmark target, generic SQLi proof or admin roster access is not enough for the `Database Schema` and `User Credentials` recall branches. If `databaseSchemaChallenge` remains false, requeue one exact native injection workflow (login/search or the route that already showed SQLi signal) with a `sqlite_master` extraction payload, save the response artifact, and immediately fetch `/api/Challenges` or visit Score Board. If `userCredentialsChallenge` remains false after `/api/Users` or JWT metadata, requeue a credential-bearing dump (`Users.password`, `Users.email,password`, signed `/rest/user/authentication-details/`, or an equivalent backup/database artifact) and solved-check that branch separately. Do not close either branch as a generic SQL finding until the handoff records `challenge=<Database Schema|User Credentials> status=solved|requeued evidence=<artifact> next=<exact action>`.
+
 ### Blind Boolean
 ```
 ' AND SUBSTRING(version(),1,1)='5'--
