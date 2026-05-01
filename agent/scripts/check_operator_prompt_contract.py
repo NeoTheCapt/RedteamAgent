@@ -24,6 +24,9 @@ REQUIRED_SNIPPETS = [
     'append a `CTF recall gate` log entry naming every false peak challenge',
     'blocked `/ftp` artifact+bypass path for forgotten backup/signature/easter-egg/deprecated-interface challenges',
     'Do not transition to `report`, dispatch `report-writer`, or finalize the run until this explicit gate action is visible in `log.md`',
+    'Never emit status-only text such as `[operator] Continuing closure batch.` after a non-empty closure fetch',
+    'promotion, non-empty `fetch_batch_to_file.sh`, and exploit-developer handoff are inseparable',
+    'A closure branch with `BATCH_COUNT>0` sitting in `processing` without the matching exploit-developer task is a queue-stall bug',
 ]
 
 
