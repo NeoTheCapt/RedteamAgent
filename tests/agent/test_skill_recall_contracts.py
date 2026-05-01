@@ -171,6 +171,7 @@ def test_operator_core_blocks_final_report_until_ctf_recall_closure() -> None:
         "Upload Type",
         "User Credentials",
         "Missing Encoding",
+        "Password Hash Leak",
     ]:
         assert challenge in core
     assert "rating: 0" in core
