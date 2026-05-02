@@ -752,13 +752,24 @@ def _reconcile_run_status(run: Run, project: Project | None = None, user: User |
     if run.status == "failed" and _metadata_stop_reason_code(run) == "incomplete_terminal_state":
         engagement_dir = _active_engagement_dir(run)
         if engagement_dir is not None and _continuous_observation_report_hold_active(run, engagement_dir=engagement_dir):
-            completed = db.update_run_status(run.id, "completed")
-            _clear_run_terminal_reason(completed)
-            if project is not None and user is not None:
-                from .run_summary import refresh_run_metadata_projection
+            # 1153261 originally re-promoted any failed-incomplete row with an
+            # active continuous-observation hold to completed. Refined
+            # 2026-05-02 (3-day deep meta-audit, finding #1-A): only re-promote
+            # when log.md's last `Run stop — operator` entry is empty or names
+            # a completion-class reason. A detached hold whose log.md still
+            # carries `queue_incomplete`, `runtime_disappeared`, `queue_stalled`,
+            # etc. is NOT actually complete — it was forcibly stopped mid
+            # engagement and belongs in the runtime_disappeared / auto-resume
+            # branch below, where the resume controller can bring it back.
+            logged_reason_code, _ = _last_logged_stop_metadata(engagement_dir / "log.md")
+            if logged_reason_code in ("", "completed", "manual_stop"):
+                completed = db.update_run_status(run.id, "completed")
+                _clear_run_terminal_reason(completed)
+                if project is not None and user is not None:
+                    from .run_summary import refresh_run_metadata_projection
 
-                refresh_run_metadata_projection(completed, project, user)
-            return completed
+                    refresh_run_metadata_projection(completed, project, user)
+                return completed
 
     # New runs can briefly lack visible runtime metadata while the container and
     # docker client process are still bootstrapping. Do not immediately mark
@@ -772,12 +783,24 @@ def _reconcile_run_status(run: Run, project: Project | None = None, user: User |
         continuous_report_hold = (
             engagement_dir is not None and _continuous_observation_report_hold_active(run, engagement_dir=engagement_dir)
         )
+        # log.md's last `Run stop — operator` reason is needed in BOTH branches
+        # below: continuous-hold completion check and the runtime_disappeared /
+        # auto-resume path. Read it once when an engagement dir exists.
         logged_reason_code = ""
         logged_reason_text = ""
-        if engagement_dir is not None and not continuous_report_hold:
+        if engagement_dir is not None:
             logged_reason_code, logged_reason_text = _last_logged_stop_metadata(engagement_dir / "log.md")
 
-        if continuous_report_hold:
+        # Refined 2026-05-02 (3-day deep meta-audit, finding #1-A): a
+        # continuous-observation report hold counts as genuinely "completed"
+        # only when log.md is silent or carries a completion-class reason
+        # (`completed`, `manual_stop`). Detached holds whose log.md shows
+        # `queue_incomplete`, `runtime_disappeared`, `queue_stalled`, etc. are
+        # NOT complete — they fall through to the auto_resume path below so
+        # the resume controller can recover the engagement instead of silently
+        # being marked completed.
+        completion_class_stop = logged_reason_code in ("", "completed", "manual_stop")
+        if continuous_report_hold and completion_class_stop:
             completed = db.update_run_status(run.id, "completed")
             _clear_run_terminal_reason(completed)
             if project is not None and user is not None:
@@ -786,8 +809,20 @@ def _reconcile_run_status(run: Run, project: Project | None = None, user: User |
                 refresh_run_metadata_projection(completed, project, user)
             return completed
 
-        reason_code = logged_reason_code or "runtime_disappeared"
-        reason_text = logged_reason_text or "Runtime supervisor disappeared before the engagement reached a terminal state."
+        if continuous_report_hold:
+            # Detached continuous-observation hold with a stale, non-completion
+            # log.md stop reason (e.g., `queue_incomplete` left over from a
+            # prior resume). The stale reason is misleading; override the auto
+            # resume reason to match the historical "continuous observation
+            # hold detached" wording added by 20e41c47 and removed by d72dec5
+            # when that commit short-circuited holds straight to completed.
+            # With #1-A's gating restored above, holds with stale logs flow
+            # back through this branch and need the original reason_code/text.
+            reason_code = "runtime_disappeared"
+            reason_text = "continuous observation hold detached"
+        else:
+            reason_code = logged_reason_code or "runtime_disappeared"
+            reason_text = logged_reason_text or "Runtime supervisor disappeared before the engagement reached a terminal state."
         if project is not None and user is not None:
             scope_path = _active_scope_path(run)
             current_phase, _, _, _, _ = _load_queue_state(scope_path)
