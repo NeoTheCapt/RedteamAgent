@@ -14,6 +14,9 @@ REQUIRED_RECALL_CONTRACTS = [
     'Bjoern-specific recovery/reset follow-up',
     'final-report blocker ledger',
     'completed-with-blockers',
+    'Auth-respawn dispatch is atomic',
+    'AUTH_RESPAWN_REQUIRED flag set true',
+    'A standalone progress sentence such as "Launching auth-context recon" after the flag is a queue-stall bug',
 ]
 
 
