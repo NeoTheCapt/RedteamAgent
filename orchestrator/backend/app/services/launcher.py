@@ -2756,6 +2756,10 @@ def _completion_reason_is_bounded_blocker(completion_reason: str) -> bool:
         "no bounded non-duplicative queue action is currently available",
         "no further non-duplicative bounded queue dispatch remains",
         "no exact next requestable action remains",
+        "no further exact requestable action remains",
+        "no further exact requestable actions remain",
+        "no further exact requestable actions in the current evidence set",
+        "no further exact self-contained action remains",
     )
     recall_blocker_markers = (
         "fresh recall blocker ledger",
