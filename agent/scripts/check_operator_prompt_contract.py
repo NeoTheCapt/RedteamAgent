@@ -30,6 +30,8 @@ REQUIRED_SNIPPETS = [
     'Never emit status-only text such as `[operator] Continuing closure batch.` after a non-empty closure fetch',
     'promotion, non-empty `fetch_batch_to_file.sh`, and exploit-developer handoff are inseparable',
     'A closure branch with `BATCH_COUNT>0` sitting in `processing` without the matching exploit-developer task is a queue-stall bug',
+    'a `step_finish` or new `step_start` immediately after a non-empty fetch without an intervening matching `task(...)` is a run-failing orphaned batch',
+    'a non-empty fetch for `BATCH_AGENT=vulnerability-analyst` MUST be followed by the vulnerability-analyst task before any file read, queue scan, source batch, status text, or final answer',
     '`Forgotten Developer Backup` (developer backup artifact plus `%2500.md`/blocked-file bypass candidate)',
     '`Five-Star Feedback` (rating=5 feedback via `/api/Feedbacks/` or native feedback route)',
     'signed `/rest/user/authentication-details/` or another hash-bearing consumer over generic `/api/Users` enumeration',
