@@ -30,6 +30,11 @@ REQUIRED_SNIPPETS = [
     'Never emit status-only text such as `[operator] Continuing closure batch.` after a non-empty closure fetch',
     'promotion, non-empty `fetch_batch_to_file.sh`, and exploit-developer handoff are inseparable',
     'A closure branch with `BATCH_COUNT>0` sitting in `processing` without the matching exploit-developer task is a queue-stall bug',
+    'A browser message saying MetaMask/provider is missing is NOT terminal',
+    'provider-emulated browser flow (workspace-local injected `window.ethereum` stub or existing browser_flow wallet shim)',
+    'the next closure action MUST try a second concrete carrier before declaring exhaustion',
+    'native login form SQLi branch with a `sqlite_master` UNION payload',
+    'both raw and percent-encoded hash-route variants',
 ]
 
 
