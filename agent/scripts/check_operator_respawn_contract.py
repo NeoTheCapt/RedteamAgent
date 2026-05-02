@@ -14,7 +14,9 @@ FILES = [
 
 REQUIRED = [
     "AUTH_RESPAWN_REQUIRED=1",
-    "the very next assistant action(s) MUST be real subagent `task(...)` dispatches",
+    "the very next assistant action(s) MUST be real subagent `task(...)` dispatches in the same assistant turn",
+    "Do not emit standalone text such as \"Launching auth-context recon...\" after the flag check",
+    "auth_respawn_dispatch_blocked",
     "Only after both task calls have actually been issued and returned may you run",
     "Never clear `.auth-respawn-required` before the real task calls",
     "Never put pseudo-dispatch lines such as `task @recon-specialist ...` inside a bash block",

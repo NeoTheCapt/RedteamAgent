@@ -207,6 +207,12 @@ already exists.
 - If any of Five-Star Feedback, Forged Feedback, Password Strength, or Database Schema is
   still untested after the relevant endpoint is discovered, emit `REQUEUE` with a concrete
   `api` or `form` follow-up instead of `DONE STAGE=exhausted`.
+- Five-Star Feedback is a peak-retention recall item, not a generic feedback finding. When
+  `/api/Feedbacks/`, the feedback/contact route, or any feedback mutation is discovered,
+  run or requeue one exact `rating=5` feedback submission and immediately solved-check
+  `/api/Challenges` / Score Board for `fiveStarFeedbackChallenge`. If a feedback mutation
+  succeeds but the solved flag remains false, requeue the native feedback route or the
+  exact alternate payload/body rather than closing the branch as already covered.
 - A functionally successful request is not enough for CTF recall closure. If a five-star
   feedback POST returns 201, a weak-password login/reset branch reaches the expected
   endpoint, or a schema/error disclosure path returns data but `/api/Challenges` still shows
