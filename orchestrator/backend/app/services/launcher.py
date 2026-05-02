@@ -2749,6 +2749,15 @@ def _continuous_observation_report_hold_active(
     return _surface_completion_ok(surfaces_path, scope)
 
 
+def _completion_reason_is_bounded_blocker(completion_reason: str) -> bool:
+    normalized = " ".join((completion_reason or "").lower().split())
+    blocker_markers = (
+        "no further non-duplicative bounded queue action remains",
+        "no bounded non-duplicative queue action is currently available",
+    )
+    return any(marker in normalized for marker in blocker_markers)
+
+
 def _terminal_reason(
     *,
     succeeded: bool,
@@ -2759,6 +2768,12 @@ def _terminal_reason(
     never_started: bool = False,
 ) -> tuple[str, str, str]:
     if succeeded:
+        if _completion_reason_is_bounded_blocker(completion_reason):
+            return (
+                "completed_with_blockers",
+                completion_reason,
+                "Runtime finished with an explicit bounded blocker ledger.",
+            )
         return ("completed", "Run completed successfully.", "Runtime finished successfully.")
     if never_started:
         return ("runtime_never_started", "Runtime container never entered a running state.", "Runtime container stayed in created state and never started.")
@@ -2785,7 +2800,7 @@ def _terminal_reason_from_artifacts(run: Run) -> tuple[bool, str, str, str]:
     normalize_active_scope(run)
     completion_ok, completion_reason = engagement_completion_state(run)
     init_only_exit = _init_only_exit(run)
-    succeeded = completion_ok and not init_only_exit
+    succeeded = (completion_ok or _completion_reason_is_bounded_blocker(completion_reason)) and not init_only_exit
     if succeeded:
         return (succeeded, *_terminal_reason(
             succeeded=True,
@@ -3812,7 +3827,8 @@ def _supervise_process(run: Run, process: subprocess.Popen[bytes], log_handle, h
     normalize_active_scope(run)
     completion_ok, completion_reason = engagement_completion_state(run)
     init_only_exit = _init_only_exit(run)
-    succeeded = return_code == 0 and not init_only_exit and completion_ok
+    blocker_completion = _completion_reason_is_bounded_blocker(completion_reason)
+    succeeded = return_code == 0 and not init_only_exit and (completion_ok or blocker_completion)
     reason_code, reason_text, summary = _terminal_reason(
         succeeded=succeeded,
         return_code=return_code,
