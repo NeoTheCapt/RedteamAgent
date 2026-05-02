@@ -2759,11 +2759,23 @@ def _completion_reason_is_bounded_blocker(completion_reason: str) -> bool:
         "no further exact requestable action remains",
         "no further exact requestable actions remain",
         "no further exact requestable actions in the current evidence set",
+        "no further exact requestable actions within the current evidence set",
         "no further exact self-contained action remains",
+        "no further evidence-backed requestable follow-up",
+        "no further requestable follow-up",
     )
     recall_blocker_markers = (
         "fresh recall blocker ledger",
+        "ctf recall blocker ledger",
+        "ctf recall blockers remain",
+    )
+    unresolved_recall_markers = (
         "unresolved peak challenges",
+        "remaining peak-solved challenges",
+    )
+    has_explicit_blocker = any(marker in normalized for marker in blocker_markers)
+    has_recall_blocker = any(marker in normalized for marker in recall_blocker_markers) and (
+        has_explicit_blocker or any(marker in normalized for marker in unresolved_recall_markers)
     )
     auth_blocker_markers = (
         "auth-gated",
@@ -2772,8 +2784,8 @@ def _completion_reason_is_bounded_blocker(completion_reason: str) -> bool:
     )
     real_session_markers = ("requires a real", "requiring a real")
     return (
-        any(marker in normalized for marker in blocker_markers)
-        or all(marker in normalized for marker in recall_blocker_markers)
+        has_explicit_blocker
+        or has_recall_blocker
         or (
             all(marker in normalized for marker in auth_blocker_markers)
             and any(marker in normalized for marker in real_session_markers)
