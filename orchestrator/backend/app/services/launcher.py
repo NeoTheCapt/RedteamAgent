@@ -2765,8 +2765,19 @@ def _completion_reason_is_bounded_blocker(completion_reason: str) -> bool:
         "fresh recall blocker ledger",
         "unresolved peak challenges",
     )
-    return any(marker in normalized for marker in blocker_markers) or all(
-        marker in normalized for marker in recall_blocker_markers
+    auth_blocker_markers = (
+        "auth-gated",
+        "session",
+        "auth.json still has no validated credentials",
+    )
+    real_session_markers = ("requires a real", "requiring a real")
+    return (
+        any(marker in normalized for marker in blocker_markers)
+        or all(marker in normalized for marker in recall_blocker_markers)
+        or (
+            all(marker in normalized for marker in auth_blocker_markers)
+            and any(marker in normalized for marker in real_session_markers)
+        )
     )
 
 
