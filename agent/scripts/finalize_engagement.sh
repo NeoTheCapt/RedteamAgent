@@ -158,6 +158,109 @@ append_observation_hold_log_entry() {
     fi
 }
 
+# Peak-retention recall checklist for the local OWASP Juice Shop benchmark. The
+# operator prompt is the primary control, but finalize is the last safe gate: a
+# local run must not be marked complete while a fresh live challenge snapshot
+# still shows any peak-solved checklist item as unsolved.
+RECALL_FINALIZE_CHECKLIST=(
+    "Admin Registration"
+    "Admin Section"
+    "NFT Takeover"
+    "Web3 Sandbox"
+    "Confidential Document"
+    "DOM XSS"
+    "Database Schema"
+    "Deprecated Interface"
+    "Error Handling"
+    "Five-Star Feedback"
+    "Forged Feedback"
+    "Forgotten Developer Backup"
+    "Login Admin"
+    "Password Strength"
+    "Score Board"
+    "Security Policy"
+    "Upload Type"
+    "User Credentials"
+    "Zero Stars"
+    "Exposed Metrics"
+    "Poison Null Byte"
+    "Exposed credentials"
+    "Missing Encoding"
+    "Password Hash Leak"
+)
+
+is_local_juice_shop_target() {
+    local target host port
+    target="$(jq -r '.target // empty' "$SCOPE_FILE" 2>/dev/null || true)"
+    [[ -n "$target" ]] || return 1
+    read -r host port < <(python3 - <<'PY' "$target"
+from urllib.parse import urlsplit
+import sys
+u = urlsplit(sys.argv[1])
+print((u.hostname or "") + " " + str(u.port or (443 if u.scheme == "https" else 80)))
+PY
+)
+    [[ "$host" == "127.0.0.1" || "$host" == "localhost" || "$host" == "host.docker.internal" ]] || return 1
+    case ",${REDTEAM_RECALL_FINALIZE_GUARD_PORTS:-8000}," in
+        *,"$port",*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+recall_finalize_guard() {
+    local target result status missing
+    [[ "${REDTEAM_SKIP_RECALL_FINALIZE_GUARD:-0}" == "1" ]] && return 0
+    is_local_juice_shop_target || return 0
+
+    target="$(jq -r '.target // empty' "$SCOPE_FILE" 2>/dev/null || true)"
+    result="$(python3 - <<'PY' "$target" "${RECALL_FINALIZE_CHECKLIST[@]}" 2>/dev/null || true
+from urllib.parse import urljoin
+from urllib.request import urlopen
+import json, sys
+base = sys.argv[1].rstrip('/') + '/'
+checklist = sys.argv[2:]
+try:
+    with urlopen(urljoin(base, 'api/Challenges'), timeout=5) as resp:
+        payload = json.load(resp)
+except Exception as exc:
+    print('ERROR\tchallenge snapshot unavailable: ' + str(exc))
+    raise SystemExit(0)
+items = payload.get('data') if isinstance(payload, dict) else payload
+if not isinstance(items, list):
+    print('ERROR\tchallenge snapshot schema did not contain a data list')
+    raise SystemExit(0)
+solved = {}
+for item in items:
+    if not isinstance(item, dict):
+        continue
+    name = str(item.get('name') or '').strip()
+    if name:
+        solved[name] = bool(item.get('solved'))
+missing = [name for name in checklist if solved.get(name) is not True]
+if missing:
+    print('BLOCK\t' + ', '.join(missing))
+else:
+    print('PASS\tall recall finalize checklist items solved')
+PY
+)"
+    status="${result%%$'\t'*}"
+    missing="${result#*$'\t'}"
+    if [[ "$status" == "PASS" ]]; then
+        return 0
+    fi
+
+    if [[ -z "$missing" || "$missing" == "$result" ]]; then
+        missing="challenge snapshot unavailable"
+    fi
+    if [[ -x "$SCRIPT_DIR/append_log_entry.sh" ]]; then
+        "$SCRIPT_DIR/append_log_entry.sh" "$ENG_DIR" operator "Run stop" \
+            "stop_reason=queue_incomplete" \
+            "CTF recall finalize guard blocked completion; unsolved peak checklist items: $missing" >/dev/null 2>&1 || true
+    fi
+    printf 'CTF recall finalize guard blocked completion; unsolved peak checklist items: %s\n' "$missing" >&2
+    exit 2
+}
+
 continuous_observation_loop() {
     local target interval
     target="$(jq -r '.target // empty' "$SCOPE_FILE" 2>/dev/null || true)"
@@ -181,6 +284,8 @@ if continuous_target_matches; then
     continuous_observation_loop
     exit 0
 fi
+
+recall_finalize_guard
 
 END_TIME="$(engagement_now_utc)"
 START_TIME="$(jq -r '.start_time // empty' "$SCOPE_FILE" 2>/dev/null || true)"
