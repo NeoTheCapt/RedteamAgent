@@ -2754,8 +2754,16 @@ def _completion_reason_is_bounded_blocker(completion_reason: str) -> bool:
     blocker_markers = (
         "no further non-duplicative bounded queue action remains",
         "no bounded non-duplicative queue action is currently available",
+        "no further non-duplicative bounded queue dispatch remains",
+        "no exact next requestable action remains",
     )
-    return any(marker in normalized for marker in blocker_markers)
+    recall_blocker_markers = (
+        "fresh recall blocker ledger",
+        "unresolved peak challenges",
+    )
+    return any(marker in normalized for marker in blocker_markers) or all(
+        marker in normalized for marker in recall_blocker_markers
+    )
 
 
 def _terminal_reason(
