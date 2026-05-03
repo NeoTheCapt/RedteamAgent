@@ -2764,9 +2764,12 @@ def _completion_reason_is_bounded_blocker(completion_reason: str) -> bool:
         "no further evidence-backed requestable follow-up",
         "no further requestable follow-up",
         "no stronger concrete requestable follow-up",
+        "no concrete next requestable follow-up",
+        "no concrete requestable follow-up",
     )
     recall_blocker_markers = (
         "fresh recall blocker ledger",
+        "fresh recall blockers still remain",
         "ctf recall blocker ledger",
         "ctf recall blockers remain",
     )
