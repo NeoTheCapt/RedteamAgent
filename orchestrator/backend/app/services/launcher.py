@@ -2763,6 +2763,7 @@ def _completion_reason_is_bounded_blocker(completion_reason: str) -> bool:
         "no further exact self-contained action remains",
         "no further evidence-backed requestable follow-up",
         "no further requestable follow-up",
+        "no stronger concrete requestable follow-up",
     )
     recall_blocker_markers = (
         "fresh recall blocker ledger",
