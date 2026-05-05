@@ -21,6 +21,8 @@ from .launcher import (
     RUNTIME_PID_LOOKUP_UNAVAILABLE,
     _active_engagement_dir,
     _clear_run_terminal_reason,
+    _completion_reason_is_bounded_blocker,
+    _completion_reason_is_continuous_observation_hold_timeout,
     _continuous_observation_report_hold_active,
     _last_logged_stop_metadata,
     _latest_process_log_activity_at,
@@ -732,6 +734,20 @@ def _reconcile_run_status(run: Run, project: Project | None = None, user: User |
         return run
 
     if run.status == "completed":
+        if _completion_reason_is_bounded_blocker(completion_reason):
+            _write_run_terminal_reason(
+                run,
+                reason_code="completed_with_blockers",
+                reason_text=completion_reason,
+            )
+            return run
+        if _completion_reason_is_continuous_observation_hold_timeout(completion_reason):
+            _write_run_terminal_reason(
+                run,
+                reason_code="completed",
+                reason_text="Run completed successfully.",
+            )
+            return run
         engagement_dir = _active_engagement_dir(run)
         if engagement_dir is not None and _continuous_observation_report_hold_active(run, engagement_dir=engagement_dir):
             _clear_run_terminal_reason(run)
@@ -749,7 +765,19 @@ def _reconcile_run_status(run: Run, project: Project | None = None, user: User |
         stop_run_runtime(failed)
         return failed
 
-    if run.status == "failed" and _metadata_stop_reason_code(run) == "incomplete_terminal_state":
+    if run.status == "failed" and _metadata_stop_reason_code(run) in {"incomplete_terminal_state", "incomplete_stop"}:
+        if _completion_reason_is_bounded_blocker(completion_reason):
+            completed = db.update_run_status(run.id, "completed")
+            _write_run_terminal_reason(
+                completed,
+                reason_code="completed_with_blockers",
+                reason_text=completion_reason,
+            )
+            if project is not None and user is not None:
+                from .run_summary import refresh_run_metadata_projection
+
+                refresh_run_metadata_projection(completed, project, user)
+            return completed
         engagement_dir = _active_engagement_dir(run)
         if engagement_dir is not None and _continuous_observation_report_hold_active(run, engagement_dir=engagement_dir):
             # 1153261 originally re-promoted any failed-incomplete row with an
