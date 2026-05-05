@@ -4046,7 +4046,8 @@ def _supervise_container(
             normalize_active_scope(run)
             completion_ok, completion_reason = engagement_completion_state(run)
             init_only_exit = _init_only_exit(run)
-            succeeded = exit_code == 0 and not init_only_exit and completion_ok
+            blocker_completion = _completion_reason_is_bounded_blocker(completion_reason)
+            succeeded = exit_code == 0 and not init_only_exit and (completion_ok or blocker_completion)
             reason_code, reason_text, summary = _terminal_reason(
                 succeeded=succeeded,
                 return_code=exit_code,
