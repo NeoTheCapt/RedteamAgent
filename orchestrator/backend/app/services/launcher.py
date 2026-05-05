@@ -2777,9 +2777,16 @@ def _completion_reason_is_bounded_blocker(completion_reason: str) -> bool:
         "unresolved peak challenges",
         "remaining peak-solved challenges",
     )
+    exhausted_recall_markers = (
+        "exhausted exact closure branches",
+        "exhaustive bounded closure branches",
+        "exhausted bounded closure branches",
+    )
     has_explicit_blocker = any(marker in normalized for marker in blocker_markers)
     has_recall_blocker = any(marker in normalized for marker in recall_blocker_markers) and (
-        has_explicit_blocker or any(marker in normalized for marker in unresolved_recall_markers)
+        has_explicit_blocker
+        or any(marker in normalized for marker in unresolved_recall_markers)
+        or any(marker in normalized for marker in exhausted_recall_markers)
     )
     auth_blocker_markers = (
         "auth-gated",
