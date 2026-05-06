@@ -44,6 +44,9 @@ REQUIRED_SNIPPETS = [
     'the next closure action MUST try a second concrete carrier before declaring exhaustion',
     'native login form SQLi branch with a `sqlite_master` UNION payload',
     'both raw and percent-encoded hash-route variants',
+    'After `./scripts/update_phase_from_stages.sh "$DIR"` prints `phase: consume_test -> complete`',
+    'A standalone final answer such as `[operator] Resume continued... closure work is still ongoing` after queue drain is forbidden',
+    '`surface coverage and CTF recall follow-up still required` / `closure work is still ongoing`',
 ]
 
 
