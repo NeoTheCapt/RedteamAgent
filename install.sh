@@ -104,7 +104,7 @@ elif [ -f ".opencode/opencode.json" ] && [ -d "skills" ]; then
     SOURCE_DIR="$(pwd)"
     info "Running from agent directory"
 else
-    REDTEAM_REF="${REDTEAM_REF:-v0.1.0}"
+    REDTEAM_REF="${REDTEAM_REF:-v0.1.1}"
     echo "Not in project directory. Cloning ref '$REDTEAM_REF' to /tmp/redteam-agent-src ..."
     CLONE_DIR="/tmp/redteam-agent-src"
     rm -rf "$CLONE_DIR"
