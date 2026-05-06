@@ -3821,9 +3821,14 @@ def _maybe_auto_resume_run(
         engagement_dir=engagement_dir,
         scope=scope if isinstance(scope, dict) else None,
     )
+    report_phase_incomplete = (
+        (phase_name == "report" or scope_phase == "report")
+        and reason_code == "engagement_incomplete"
+        and str(reason_text or "").startswith("Engagement status is")
+    )
     if (
         phase_name in {"report", "complete"} or scope_phase in {"report", "complete"}
-    ) and not continuous_observation:
+    ) and not continuous_observation and not report_phase_incomplete:
         return False
 
     attempt = _current_auto_resume_count(run)
