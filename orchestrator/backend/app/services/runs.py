@@ -379,6 +379,30 @@ def _load_processing_agents(scope_path: Path | None) -> set[str]:
     return {agent for agent in raw_agents if agent}
 
 
+def _cases_db_has_stage_column(cases_db: Path) -> bool:
+    def _reader(connection: sqlite3.Connection) -> bool:
+        rows = connection.execute("PRAGMA table_info(cases)").fetchall()
+        return any(str(row[1]) == "stage" for row in rows if len(row) > 1)
+
+    return bool(_read_sqlite_with_fallback(cases_db, _reader, False))
+
+
+def _stale_schema_stop_marker_is_obsolete(
+    engagement_dir: Path,
+    *,
+    logged_reason_code: str,
+    logged_reason_text: str,
+) -> bool:
+    """Return True when an old schema-repair stop marker no longer applies."""
+
+    if str(logged_reason_code or "").strip() != "runtime_error":
+        return False
+    normalized = " ".join(str(logged_reason_text or "").lower().split())
+    if "cases.db" not in normalized or "missing required 'stage' column" not in normalized:
+        return False
+    return _cases_db_has_stage_column(engagement_dir / "cases.db")
+
+
 def _format_db_timestamp(value: datetime) -> str:
     return value.replace(microsecond=0).strftime("%Y-%m-%d %H:%M:%S")
 
@@ -765,6 +789,23 @@ def _reconcile_run_status(run: Run, project: Project | None = None, user: User |
         stop_run_runtime(failed)
         return failed
 
+    if run.status == "failed" and _metadata_stop_reason_code(run) == "runtime_disappeared":
+        engagement_dir = _active_engagement_dir(run)
+        if engagement_dir is not None and _continuous_observation_report_hold_active(run, engagement_dir=engagement_dir):
+            logged_reason_code, logged_reason_text = _last_logged_stop_metadata(engagement_dir / "log.md")
+            if _stale_schema_stop_marker_is_obsolete(
+                engagement_dir,
+                logged_reason_code=logged_reason_code,
+                logged_reason_text=logged_reason_text,
+            ):
+                completed = db.update_run_status(run.id, "completed")
+                _clear_run_terminal_reason(completed)
+                if project is not None and user is not None:
+                    from .run_summary import refresh_run_metadata_projection
+
+                    refresh_run_metadata_projection(completed, project, user)
+                return completed
+
     if run.status == "failed" and _metadata_stop_reason_code(run) in {"incomplete_terminal_state", "incomplete_stop"}:
         if _completion_reason_is_bounded_blocker(completion_reason):
             completed = db.update_run_status(run.id, "completed")
@@ -789,8 +830,12 @@ def _reconcile_run_status(run: Run, project: Project | None = None, user: User |
             # etc. is NOT actually complete — it was forcibly stopped mid
             # engagement and belongs in the runtime_disappeared / auto-resume
             # branch below, where the resume controller can bring it back.
-            logged_reason_code, _ = _last_logged_stop_metadata(engagement_dir / "log.md")
-            if logged_reason_code in ("", "completed", "manual_stop"):
+            logged_reason_code, logged_reason_text = _last_logged_stop_metadata(engagement_dir / "log.md")
+            if logged_reason_code in ("", "completed", "manual_stop") or _stale_schema_stop_marker_is_obsolete(
+                engagement_dir,
+                logged_reason_code=logged_reason_code,
+                logged_reason_text=logged_reason_text,
+            ):
                 completed = db.update_run_status(run.id, "completed")
                 _clear_run_terminal_reason(completed)
                 if project is not None and user is not None:
@@ -827,7 +872,11 @@ def _reconcile_run_status(run: Run, project: Project | None = None, user: User |
         # NOT complete — they fall through to the auto_resume path below so
         # the resume controller can recover the engagement instead of silently
         # being marked completed.
-        completion_class_stop = logged_reason_code in ("", "completed", "manual_stop")
+        completion_class_stop = logged_reason_code in ("", "completed", "manual_stop") or _stale_schema_stop_marker_is_obsolete(
+            engagement_dir,
+            logged_reason_code=logged_reason_code,
+            logged_reason_text=logged_reason_text,
+        )
         if continuous_report_hold and completion_class_stop:
             completed = db.update_run_status(run.id, "completed")
             _clear_run_terminal_reason(completed)
