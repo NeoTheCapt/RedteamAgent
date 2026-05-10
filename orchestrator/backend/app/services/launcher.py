@@ -1733,6 +1733,8 @@ def _report_has_substantive_content(text: str) -> bool:
         "No confirmed findings",
         "No confirmed vulnerabilities",
         "No confirmed vulnerabilities were recorded",
+        "No confirmed exploitable findings",
+        "No confirmed exploitable findings were recorded",
     )
     return any(phrase in stripped for phrase in no_finding_phrases)
 
