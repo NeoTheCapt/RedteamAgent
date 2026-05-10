@@ -85,6 +85,9 @@ async def create_event(
         kind=event.kind,
         phase=event.phase,
         payload=request.payload or {},
+        event_type=event.event_type,
+        agent_name=event.agent_name,
+        summary=event.summary,
     )
     response = _event_response(event)
     await broadcaster.publish(

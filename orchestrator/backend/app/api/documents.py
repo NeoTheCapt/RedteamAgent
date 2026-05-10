@@ -89,7 +89,14 @@ def list_documents(
     def _add_file(p: Path, rel_str: str) -> None:
         if p.name in _SENSITIVE_NAMES:
             return
-        stat = p.stat()
+        try:
+            stat = p.stat()
+        except FileNotFoundError:
+            # Runs can still be writing/rotating engagement artifacts while the
+            # UI lists the document tree.  A file observed by rglob()/is_file()
+            # may disappear before stat(); skip that transient entry instead
+            # of returning a 500 for the whole Documents tab.
+            return
         tree[_categorize(rel_str)].append({
             "name": p.name,
             "path": rel_str,

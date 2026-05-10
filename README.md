@@ -36,7 +36,7 @@ An autonomous red team simulation agent that works with **Claude Code**, **OpenC
 - **Case collection pipeline** — SQLite-backed queue with 4 producers, automatic type classification, zero-token dispatcher, atomic fetch-dispatch pairing
 - **79 reference files** — OWASP Top 10:2025, API Security 2023, offensive tactics, AD/Kerberos attacks
 - **Resume support** — interrupt and continue any engagement without losing progress
-- **Unattended hardening** — auto-resume after stalls, queue stall recovery, finding deduplication, surface coverage enforcement, and automatic report synthesis when report artifacts are missing or incomplete
+- **Unattended hardening** — auto-resume after stalls, queue stall recovery, permission-stall guards (workspace-local scratch/glob scoping prevents OpenCode `external_directory` approval prompts from blocking `/autoengage` runs), finding deduplication, surface coverage enforcement, and automatic report synthesis when report artifacts are missing or incomplete
 
 ## Installation
 

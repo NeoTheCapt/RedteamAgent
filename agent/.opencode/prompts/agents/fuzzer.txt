@@ -42,6 +42,9 @@ workspace-local wordlist under the active engagement directory (`$DIR/scans/`)
 from the supplied endpoint, observed parameters, and the inline seeds below; use
 that file with ffuf. If a required corpus is not already inside `/workspace` or
 `$DIR`, return `REQUEUE` with the blocker instead of asking for permission.
+Do not "check alternatives" by globbing `/usr/share`, `/seclists`, `/wordlists`,
+or broad patterns like `**/*param*`; name the missing corpus in the blocker and
+continue with the workspace-local bounded list.
 
 1. DIRECTORY / FILE DISCOVERY
    ```
@@ -150,7 +153,8 @@ exploit-developer that don't go through the `fuzz_pending` stage), keep using th
 5. Flag critical discoveries but do NOT exploit.
 6. Reduce threads or stop on rate-limiting/errors.
 7. Track total request count.
-8. If wordlist not found, check alternatives and note substitution.
+8. If a workspace-local wordlist is not found, build a bounded `$DIR/scans/` list from observed data
+   or return `REQUEUE` naming the missing corpus. Do NOT check host-global alternatives.
 9. FINDING IDs: Never hand-allocate IDs. Write findings with `## [FINDING-ID] Title`, then append via:
    `./scripts/append_finding.sh "$DIR" fuzzer <finding-body-file>`
    This allocates the next `FINDING-FZ-NNN` under a lock and updates `Finding Count`.

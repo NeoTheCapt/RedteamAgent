@@ -12,12 +12,57 @@ _OUTCOME_TO_STATE = {
     "ERROR": "error",
 }
 
+# Agents that own dispatches in cases.db / dispatches table. Out-of-queue
+# agents (recon-specialist, osint-analyst, report-writer) do not have
+# matching dispatch rows in the orchestrator and are intentionally NOT
+# auto-closed by terminal-summary events.
+_DISPATCH_OWNING_AGENTS = frozenset({
+    "source-analyzer",
+    "vulnerability-analyst",
+    "exploit-developer",
+    "fuzzer",
+})
 
-def apply(*, run_id: int, kind: str, phase: str, payload: dict[str, Any]) -> None:
+
+def _is_terminal_artifact_summary(event_type: str, summary: str) -> bool:
+    """True when an artifact.updated event represents a subagent's terminal
+    log entry — the operator-written `<X> summary` log line that signals the
+    subagent finished its dispatched work.
+
+    Subagent log conventions (per agent/operator-core.md):
+      - exploit-developer    → "Exploit start" / "Exploit summary"
+      - vulnerability-analyst → "Analysis start" / "Analysis summary"
+      - source-analyzer      → "Source analysis start" / "Source analysis summary"
+      - fuzzer               → "Fuzzing start" / "Fuzzing summary"
+
+    The trailing " summary" suffix is the canonical terminal marker.
+    """
+    if (event_type or "").lower() != "artifact.updated":
+        return False
+    s = (summary or "").strip().lower()
+    if not s:
+        return False
+    return s.endswith(" summary")
+
+
+def apply(
+    *,
+    run_id: int,
+    kind: str,
+    phase: str,
+    payload: dict[str, Any],
+    event_type: str = "",
+    agent_name: str = "",
+    summary: str = "",
+) -> None:
     """Inspect a typed event and perform DB side-effects.
 
     Called from the POST /events handler after the event row is persisted.
-    Unknown or legacy kinds are no-ops.
+    Unknown or legacy kinds are no-ops EXCEPT for legacy ``artifact.updated``
+    events that carry a subagent terminal-summary log entry — those close
+    the matching open dispatch row so the dashboard's per-agent dispatch
+    timeline doesn't show a stale RUNNING row long after the subagent
+    finished. (See 2026-05-07 meta-audit decision A.)
     """
     if kind == "dispatch_start":
         _apply_dispatch_start(run_id, phase, payload)
@@ -29,7 +74,45 @@ def apply(*, run_id: int, kind: str, phase: str, payload: dict[str, Any]) -> Non
         _apply_finding(run_id, payload)
     elif kind == "phase_enter":
         _apply_phase_enter(run_id, payload, phase)
-    # legacy / unknown: no-op
+    # legacy / unknown: no-op for the typed-event path. Below is the one
+    # legacy hook we keep — closing stale dispatches when a subagent's
+    # terminal summary log lands.
+    if (
+        agent_name
+        and agent_name in _DISPATCH_OWNING_AGENTS
+        and _is_terminal_artifact_summary(event_type, summary)
+    ):
+        _close_oldest_running_dispatch_for_agent(run_id, agent_name)
+
+
+def _close_oldest_running_dispatch_for_agent(run_id: int, agent: str) -> None:
+    """Close the OLDEST still-running dispatch for ``agent`` in ``run_id``.
+
+    Why oldest-only (and not all): if the same agent is parallel-dispatched,
+    each subagent invocation writes its own ``<X> summary`` log entry, so
+    one summary == one dispatch closure. Closing all would over-close
+    parallel work. Sequencing by ``started_at`` keeps the FIFO mapping.
+    """
+    candidates = [
+        d for d in db.list_dispatches(run_id)
+        if d.agent == agent and d.state == "running"
+    ]
+    if not candidates:
+        return
+    candidates.sort(key=lambda d: (d.started_at or 0, d.id))
+    target = candidates[0]
+    db.upsert_dispatch(
+        dispatch_id=target.id,
+        run_id=run_id,
+        phase=target.phase,
+        round=target.round,
+        agent=target.agent,
+        slot=target.slot,
+        task=target.task,
+        state="done",
+        started_at=target.started_at,
+        finished_at=int(time.time()),
+    )
 
 
 def _apply_dispatch_start(run_id: int, phase: str, payload: dict[str, Any]) -> None:

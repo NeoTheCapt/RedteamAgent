@@ -228,7 +228,7 @@ has_explicit_header() {
 }
 
 build_auth_args() {
-    local cookie_header key value user_agent
+    local cookie_header key value user_agent key_lower auth_ua_added=0
     RTCURL_ARGS=()
 
     [[ -f "$AUTH_FILE" ]] || return 0
@@ -249,10 +249,28 @@ build_auth_args() {
         fi
     fi
 
+    # User-Agent precedence (2026-05-08 fix). Highest wins:
+    #   1. caller's `-A`/`--user-agent` flag (EXPLICIT_USER_AGENT)
+    #   2. caller's `-H 'User-Agent: ...'` flag (has_explicit_header)
+    #   3. auth.json.headers["User-Agent"]
+    #   4. user-agent.txt fallback
+    # Pre-fix bug: auth.json UA was emitted as `-H` even when (1) was set,
+    # which overrode `-A` because curl's `-H` beats `-A`. And the
+    # user-agent.txt fallback always fired even when (3) was set, producing
+    # duplicate User-Agent headers (server picked the last one,
+    # silently clobbering the user's auth.json UA).
     while IFS=$'\t' read -r key value; do
         [[ -n "$key" ]] || continue
-        if has_explicit_header "$(printf '%s' "$key" | tr '[:upper:]' '[:lower:]')"; then
+        key_lower="$(printf '%s' "$key" | tr '[:upper:]' '[:lower:]')"
+        if has_explicit_header "$key_lower"; then
             continue
+        fi
+        if [[ "$key_lower" == "user-agent" ]] && (( EXPLICIT_USER_AGENT )); then
+            # Caller already used `-A`; don't shadow it via -H.
+            continue
+        fi
+        if [[ "$key_lower" == "user-agent" ]]; then
+            auth_ua_added=1
         fi
         RTCURL_ARGS+=("-H" "${key}: ${value}")
     done < <(jq -r '
@@ -261,7 +279,11 @@ build_auth_args() {
         else empty end
     ' "$AUTH_FILE" 2>/dev/null)
 
-    if ! (( EXPLICIT_USER_AGENT )) && ! has_explicit_header "user-agent" && [[ -f "$UA_FILE" ]]; then
+    if ! (( EXPLICIT_USER_AGENT )) \
+       && ! has_explicit_header "user-agent" \
+       && (( auth_ua_added == 0 )) \
+       && [[ -f "$UA_FILE" ]]
+    then
         user_agent="$(grep -v '^[[:space:]]*#' "$UA_FILE" | sed '/^[[:space:]]*$/d' | head -n 1)"
         if [[ -n "$user_agent" ]]; then
             RTCURL_ARGS+=("-H" "User-Agent: ${user_agent}")

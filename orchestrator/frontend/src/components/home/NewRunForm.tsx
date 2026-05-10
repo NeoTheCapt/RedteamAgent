@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import type { Project, ProjectInput } from "../../lib/api";
 import { ModelFields } from "../projects/ProjectForms";
 import "./NewRunForm.css";
@@ -45,7 +45,6 @@ function summarizeAgents(json: string): string {
 
 export function NewRunForm({ projects, onCreateRun, onCreateProject, onEditProject }: NewRunFormProps) {
   const [projectId, setProjectId] = useState<number | "">(projects[0]?.id ?? "");
-  const inheritedEditPointerHandled = useRef(false);
 
   function handleInheritedEdit(project: Project | null) {
     if (!project) return;
@@ -263,20 +262,8 @@ export function NewRunForm({ projects, onCreateRun, onCreateProject, onEditProje
           <button
             type="button"
             className="new-run__edit-project"
-            onClick={() => {
-              if (inheritedEditPointerHandled.current) {
-                inheritedEditPointerHandled.current = false;
-                return;
-              }
-              handleInheritedEdit(selectedProject);
-            }}
-            onPointerDown={(event) => {
-              if (event.pointerType === "mouse" || event.pointerType === "touch" || event.pointerType === "pen") {
-                inheritedEditPointerHandled.current = true;
-                event.preventDefault();
-                handleInheritedEdit(selectedProject);
-              }
-            }}
+            data-project-id={selectedProject.id}
+            onClick={() => handleInheritedEdit(selectedProject)}
           >
             Edit project configuration
           </button>

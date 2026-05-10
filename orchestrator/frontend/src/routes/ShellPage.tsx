@@ -83,6 +83,20 @@ export function ShellPage(props: ShellPageProps) {
     return () => window.removeEventListener("hashchange", handler);
   }, []);
 
+  useEffect(() => {
+    const handler = (event: MouseEvent) => {
+      const target = event.target instanceof Element
+        ? event.target.closest<HTMLButtonElement>(".new-run__edit-project")
+        : null;
+      if (!target) return;
+      const projectId = Number(target.dataset.projectId || "");
+      const project = projects.find((candidate) => candidate.id === projectId);
+      if (project) setEditingProject(project);
+    };
+    document.addEventListener("click", handler);
+    return () => document.removeEventListener("click", handler);
+  }, [projects]);
+
   // Flatten runs + attach projectId
   const allRuns = useMemo(() => {
     const result: (Run & { __projectId: number })[] = [];

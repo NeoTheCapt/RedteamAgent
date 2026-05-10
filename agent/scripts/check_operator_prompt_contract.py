@@ -46,6 +46,8 @@ REQUIRED_SNIPPETS = [
     'both raw and percent-encoded hash-route variants',
     'After `./scripts/update_phase_from_stages.sh "$DIR"` prints `phase: consume_test -> complete`',
     'A standalone final answer such as `[operator] Resume continued... closure work is still ongoing` after queue drain is forbidden',
+    'never write temporary dispatcher/log/requeue output under `/tmp`, `/var`, or any other external directory',
+    'Keep scratch files under the exact active `$DIR`',
     '`surface coverage and CTF recall follow-up still required` / `closure work is still ongoing`',
 ]
 

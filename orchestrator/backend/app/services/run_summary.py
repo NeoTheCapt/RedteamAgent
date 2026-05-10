@@ -757,11 +757,30 @@ def _build_agent_cards(
     scope: dict,
     processing_agents: list[dict] | None = None,
     run_status: str = "running",
+    dispatch_rows: list | None = None,
 ) -> list[dict]:
     scope_phase = _normalize_phase(scope.get("current_phase")) if scope else "unknown"
     latest_by_agent: dict[str, object] = {}
     latest_task_by_agent: dict[str, object] = {}
     terminal = _is_terminal_run_status(run_status)
+
+    # 2026-05-07 fix: per-agent count of still-running dispatches. This is
+    # the authoritative concurrency signal — derived from the dispatches
+    # table, which the auditor's queue-routed agents (source-analyzer,
+    # vulnerability-analyst, exploit-developer, fuzzer) maintain via
+    # dispatch_start / dispatch_done events. The latest log artifact event
+    # alone is not enough: when N dispatches are active in parallel and one
+    # finishes (emitting task.completed via the "<X> summary" log), the
+    # parent agent row was being marked "completed" while N-1 dispatches
+    # were still in flight. This dict lets the loop below override that
+    # mis-classification when run is non-terminal.
+    running_dispatch_by_agent: dict[str, int] = {}
+    for d in dispatch_rows or []:
+        if getattr(d, "state", "") == "running":
+            agent = getattr(d, "agent", "") or ""
+            if agent:
+                running_dispatch_by_agent[agent] = running_dispatch_by_agent.get(agent, 0) + 1
+
     for event in events:
         agent_name = getattr(event, "agent_name", "")
         if not agent_name or agent_name == "launcher":
@@ -804,7 +823,24 @@ def _build_agent_cards(
             elif event_type == "task.completed":
                 status_name = "completed"
 
-        parallel_count = parallel_map.get(agent_name, 0)
+        # 2026-05-07 fix: parallel-dispatch parent-row coherence.
+        # If any dispatches are still running for this agent and the run
+        # itself is not terminal, the parent row MUST stay "active" — even
+        # when the latest event is task.completed (one branch finished while
+        # 1+ siblings are still in flight). Without this override, the
+        # AgentsPanel renders "COMPLETED" while expanded dispatches show
+        # multiple "RUNNING" rows, which is incoherent and also pollutes
+        # _supervise_container's stall-detection signal.
+        running_count = running_dispatch_by_agent.get(agent_name, 0)
+        if not terminal and running_count > 0:
+            status_name = "active"
+
+        # parallel_count picks the larger of cases.db (assigned_agent) and
+        # dispatches table (running rows). The dispatches table is the
+        # post-2026-05-07 authoritative source for parallel work; cases.db
+        # is the legacy signal kept for agents that don't go through the
+        # dispatches table.
+        parallel_count = max(parallel_map.get(agent_name, 0), running_count)
         if parallel_count == 0 and status_name in {"active", "running"}:
             parallel_count = 1
 
@@ -1163,7 +1199,13 @@ def _summarize_existing_run(run: Run, project: Project, user: User) -> RunSummar
         current_phase=effective_current_phase,
         run_status=run.status,
     )
-    agents = _build_agent_cards(events, scope, processing_agents, run.status)
+    # Load dispatch rows once and reuse: _build_agent_cards needs them as the
+    # authoritative concurrency signal (parent-row "active" vs "completed"
+    # cannot be decided from latest-event alone when 1+ dispatches are still
+    # running while another just emitted task.completed). dispatch_agg below
+    # also uses these rows.
+    agent_dispatch_rows = db.list_dispatches(run.id)
+    agents = _build_agent_cards(events, scope, processing_agents, run.status, agent_dispatch_rows)
     phases = _build_phase_cards(scope, events, agents, run.status, effective_current_phase)
 
     latest_task = next((event for event in reversed(events) if event.event_type.startswith("task.")), None)
@@ -1205,7 +1247,7 @@ def _summarize_existing_run(run: Run, project: Project, user: User) -> RunSummar
         available_agents=available_agents,
     )
 
-    dispatch_rows = db.list_dispatches(run.id)
+    dispatch_rows = agent_dispatch_rows
     case_rows = db.list_cases(run.id)
     # "failed" buckets both explicit failures and missing_outcomes orphan-recovery
     # dispatches. These are surfaced separately in the dispatch detail views.
