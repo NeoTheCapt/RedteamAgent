@@ -48,6 +48,7 @@ REQUIRED_SNIPPETS = [
     'A standalone final answer such as `[operator] Resume continued... closure work is still ongoing` after queue drain is forbidden',
     'never write temporary dispatcher/log/requeue output under `/tmp`, `/var`, or any other external directory',
     'Keep scratch files under the exact active `$DIR`',
+    'never use `/tmp/*` as a capture/readback fallback after a closure-gate or log-entry command',
     '`surface coverage and CTF recall follow-up still required` / `closure work is still ongoing`',
 ]
 
