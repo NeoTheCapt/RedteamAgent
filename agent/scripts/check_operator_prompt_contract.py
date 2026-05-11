@@ -38,6 +38,8 @@ REQUIRED_SNIPPETS = [
     'promotion, non-empty `fetch_batch_to_file.sh`, and exploit-developer handoff are inseparable',
     'A closure branch with `BATCH_COUNT>0` sitting in `processing` without the matching exploit-developer task is a queue-stall bug',
     'a `step_finish` or new `step_start` immediately after a non-empty fetch without an intervening matching `task(...)` is a run-failing orphaned batch',
+    'a fetch assistant message is incomplete until it contains BOTH tool calls in order',
+    'Never issue a one-tool message whose only tool call is the fetch command when `BATCH_COUNT` might be positive',
     'a non-empty fetch for `BATCH_AGENT=vulnerability-analyst` MUST be followed by the vulnerability-analyst task before any file read, queue scan, source batch, status text, or final answer',
     '`Forgotten Developer Backup` (developer backup artifact plus `%2500.md`/blocked-file bypass candidate)',
     '`Five-Star Feedback` (rating=5 feedback via `/api/Feedbacks/` or native feedback route)',
