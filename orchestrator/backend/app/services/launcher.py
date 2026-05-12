@@ -2778,17 +2778,30 @@ def _completion_reason_is_bounded_blocker(completion_reason: str) -> bool:
     unresolved_recall_markers = (
         "unresolved peak challenges",
         "remaining peak-solved challenges",
+        "false peak-retention items",
     )
     exhausted_recall_markers = (
         "exhausted exact closure branches",
         "exhaustive bounded closure branches",
         "exhausted bounded closure branches",
+        "exhausted exact bounded closure branches",
+    )
+    recall_completion_markers = (
+        "fresh recall blocker ledger",
+        "fresh recall blockers still remain",
+        "ctf recall blocker ledger",
+        "ctf recall blockers remain",
+        "coverage gates pass",
     )
     has_explicit_blocker = any(marker in normalized for marker in blocker_markers)
-    has_recall_blocker = any(marker in normalized for marker in recall_blocker_markers) and (
-        has_explicit_blocker
-        or any(marker in normalized for marker in unresolved_recall_markers)
-        or any(marker in normalized for marker in exhausted_recall_markers)
+    has_recall_blocker = (
+        any(marker in normalized for marker in recall_completion_markers)
+        and any(marker in normalized for marker in unresolved_recall_markers)
+        and (
+            has_explicit_blocker
+            or any(marker in normalized for marker in exhausted_recall_markers)
+            or "exhausted exact" in normalized
+        )
     )
     auth_blocker_markers = (
         "auth-gated",
