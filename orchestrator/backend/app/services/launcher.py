@@ -2806,9 +2806,24 @@ def _completion_reason_is_bounded_blocker(completion_reason: str) -> bool:
         "auth.json still has no validated credentials",
     )
     real_session_markers = ("requires a real", "requiring a real")
+    captcha_blocker_markers = (
+        "captcha-gated",
+        "bounded browser-flow attempts",
+    )
+    human_captcha_markers = (
+        "human-assisted captcha solve",
+        "manual captcha guesses",
+        "incorrect-code responses",
+    )
+    has_captcha_blocker = all(marker in normalized for marker in captcha_blocker_markers) and (
+        "remaining active case" in normalized
+        or "only next requestable action" in normalized
+        or any(marker in normalized for marker in human_captcha_markers)
+    )
     return (
         has_explicit_blocker
         or has_recall_blocker
+        or has_captcha_blocker
         or (
             all(marker in normalized for marker in auth_blocker_markers)
             and any(marker in normalized for marker in real_session_markers)
