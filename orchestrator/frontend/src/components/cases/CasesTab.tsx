@@ -106,7 +106,7 @@ export function CasesTab({ token, projectId, runId }: CasesTabProps) {
         <CasesTable
           cases={filtered}
           selectedId={selectedId}
-          onSelect={(id) => setSelectedId((prev) => (prev === id ? null : id))}
+          onSelect={(id, source) => setSelectedId((prev) => (source === "keyboard" ? id : (prev === id ? null : id)))}
         />
       </div>
       {selectedId !== null && (

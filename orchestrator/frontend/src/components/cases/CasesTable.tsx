@@ -2,10 +2,12 @@ import { useRef } from "react";
 import type { Case } from "../../lib/api";
 import { formatDuration } from "../../lib/formatDuration";
 
+type CaseSelectionSource = "pointer" | "keyboard";
+
 type CasesTableProps = {
   cases: Case[];
   selectedId: number | null;
-  onSelect: (caseId: number) => void;
+  onSelect: (caseId: number, source: CaseSelectionSource) => void;
 };
 
 function stateGlyph(state: string): string {
@@ -27,12 +29,12 @@ export function CasesTable({ cases, selectedId, onSelect }: CasesTableProps) {
       suppressClickCaseIdRef.current = null;
       return;
     }
-    onSelect(caseId);
+    onSelect(caseId, "pointer");
   }
 
   function selectFromKeyboard(caseId: number) {
     suppressClickCaseIdRef.current = caseId;
-    onSelect(caseId);
+    onSelect(caseId, "keyboard");
   }
 
   return (
