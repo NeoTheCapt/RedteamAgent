@@ -2820,10 +2820,19 @@ def _completion_reason_is_bounded_blocker(completion_reason: str) -> bool:
         or "only next requestable action" in normalized
         or any(marker in normalized for marker in human_captcha_markers)
     )
+    signed_request_blocker_markers = (
+        "stage=vuln_confirmed",
+        "still require wallet-signed",
+        "prior exact bounded attempts",
+    )
+    has_signed_request_blocker = all(
+        marker in normalized for marker in signed_request_blocker_markers
+    )
     return (
         has_explicit_blocker
         or has_recall_blocker
         or has_captcha_blocker
+        or has_signed_request_blocker
         or (
             all(marker in normalized for marker in auth_blocker_markers)
             and any(marker in normalized for marker in real_session_markers)
