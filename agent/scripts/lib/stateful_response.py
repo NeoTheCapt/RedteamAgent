@@ -123,8 +123,13 @@ def _decode_json_object(snippet: str) -> dict | None:
 
 def _has_stateful_key(obj: dict, depth: int = 0) -> bool:
     """Recursive scan for stateful key names. Capped depth to bound
-    cost on huge responses. Case-insensitive."""
-    if depth > 4 or not isinstance(obj, dict):
+    cost on huge responses. Case-insensitive.
+
+    Post-L3 fix: depth cap raised from 4 to 6 to handle JSON:API
+    framework responses which commonly nest like
+    `{data: {attributes: {meta: {audit: {created_at: ...}}}}}` — a
+    depth-5 structure that pre-L3 silently fell through to False."""
+    if depth > 6 or not isinstance(obj, dict):
         return False
     for key, value in obj.items():
         if not isinstance(key, str):

@@ -59,11 +59,19 @@ case_utils = importlib.util.module_from_spec(_spec)  # type: ignore[arg-type]
 _spec.loader.exec_module(case_utils)  # type: ignore[union-attr]
 _decode_params_shared = case_utils.decode_params
 
-# Authentication entry points. Either an explicit auth verb segment
-# (`/login`, `/signin`, `/authenticate`, `/auth/<x>`) or a registration
-# verb (`/register`, `/signup`). Trailing-slash and case tolerance.
+# Authentication entry points. Post-H2 fix: extended to OAuth / OIDC /
+# session-establishment endpoints (`/oauth`, `/oauth/authorize`,
+# `/authn`, `/signon`, `/sso`, `/session/new`) which OWASP explicitly
+# lists as canonical auth_entry surfaces. Pre-H2 the regex required
+# `auth` to be a whole path segment, missing `/oauth`, `/authn`, and
+# any hyphen/underscore prefixed form (`/auth-login`, `/auth_login`).
 _AUTH_LOGIN_PATH = re.compile(
-    r"(?:^|/)(?:login|signin|sign[-_]in|authenticate|auth)(?:/|$)",
+    r"(?:^|/)(?:"
+    r"login|signin|sign[-_]in|authenticate|auth"        # classic forms
+    r"|oauth|oauth2|oidc|sso|saml"                       # federated
+    r"|authn|authentication|signon|sign[-_]on"           # variants
+    r"|sessions?(?:/new)?"                                # /sessions, /session/new
+    r")(?:/|[-_]|$)",                                    # allow trailing -, _, /, end
     re.IGNORECASE,
 )
 _AUTH_REGISTER_PATH = re.compile(

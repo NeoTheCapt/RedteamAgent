@@ -62,11 +62,28 @@ from typing import Iterable
 # npm — package.json and package-lock.json
 # ---------------------------------------------------------------------------
 
+# npm range specifiers are messy: `^1.2.3`, `~1.2.0`, `>=1.2.0 || ^2.0.0`,
+# `1.x`, etc. Post-L1 fix: extract the leading concrete SemVer with a
+# regex rather than the buggy `lstrip("^~>=<=")` which (a) treated `=`
+# twice (charset, not prefix), (b) left whitespace, and (c) preserved
+# everything after the first range alternative. OSV.dev wants a clean
+# version string; garbage in the version field silently zeros out the
+# CVE lookup.
+_NPM_VERSION_LEAD = re.compile(r"\s*[\^~<>=v]*\s*([0-9][^\s|,]*)")
+
+
+def _sanitize_npm_version(raw: str) -> str:
+    if not raw:
+        return ""
+    m = _NPM_VERSION_LEAD.match(str(raw))
+    return m.group(1) if m else ""
+
+
 def _emit_npm_dep(name: str, version: str, source: str, dev: bool = False):
     return {
         "ecosystem": "npm",
         "name": name,
-        "version": str(version or "").lstrip("^~>=<="),
+        "version": _sanitize_npm_version(version),
         "source": source,
         "dev": dev,
     }
