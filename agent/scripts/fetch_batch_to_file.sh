@@ -96,17 +96,20 @@ BATCH_SURFACE_TYPES=""
 BATCH_STATEFUL=""
 BATCH_SECURITY_CONTEXT=""
 if [[ "$batch_count" != "0" ]] && command -v python3 >/dev/null 2>&1; then
-    if shape_summary="$(python3 "$SCRIPT_DIR/lib/input_shapes.py" --batch "$OUT_FILE" 2>/dev/null)"; then
-        BATCH_INPUT_SHAPES="${shape_summary#input_shapes_summary=}"
-    fi
-    if surface_summary="$(python3 "$SCRIPT_DIR/lib/surface_tags.py" --batch "$OUT_FILE" 2>/dev/null)"; then
-        BATCH_SURFACE_TYPES="${surface_summary#surface_types_summary=}"
-    fi
-    if stateful_summary="$(python3 "$SCRIPT_DIR/lib/stateful_response.py" --batch "$OUT_FILE" 2>/dev/null)"; then
-        BATCH_STATEFUL="${stateful_summary#stateful_summary=}"
-    fi
-    if security_summary="$(python3 "$SCRIPT_DIR/lib/security_question.py" --batch "$OUT_FILE" 2>/dev/null)"; then
-        BATCH_SECURITY_CONTEXT="${security_summary#security_context_summary=}"
+    # Single-process driver runs all 4 classifiers in one interpreter
+    # cold-start. Pre-H4 fix this was 4 separate python3 invocations
+    # (~57 ms / 73 % overhead per batch); collapsing them shaved ~57 ms
+    # off every fetch. The driver writes one summary line per classifier
+    # to stdout so the grep below still finds each prefix.
+    if classify_out="$(python3 "$SCRIPT_DIR/lib/classify_batch.py" "$OUT_FILE" 2>/dev/null)"; then
+        while IFS= read -r line; do
+            case "$line" in
+                input_shapes_summary=*) BATCH_INPUT_SHAPES="${line#input_shapes_summary=}" ;;
+                surface_types_summary=*) BATCH_SURFACE_TYPES="${line#surface_types_summary=}" ;;
+                stateful_summary=*) BATCH_STATEFUL="${line#stateful_summary=}" ;;
+                security_context_summary=*) BATCH_SECURITY_CONTEXT="${line#security_context_summary=}" ;;
+            esac
+        done <<< "$classify_out"
     fi
 fi
 

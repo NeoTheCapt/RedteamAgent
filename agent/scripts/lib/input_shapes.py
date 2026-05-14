@@ -48,21 +48,34 @@ import sys
 from pathlib import Path
 from typing import Any
 
-# Generic SSRF-prone parameter names. Anchored to the whole param name so
-# substrings like "user" don't false-positive. Pattern keeps target-agnostic:
-# every name listed appears in OWASP/CWE SSRF guidance for any framework.
-_SSRF_PARAM_NAME = re.compile(
-    r"^(?:"
-    r"url|uri|src|source|target|dest|destination|"
-    r"callback|return|return_to|return_url|"
-    r"redirect|redirect_to|redirect_url|redirect_uri|"
-    r"next|continue|forward|forward_to|"
-    r"origin|fetch|fetch_from|proxy|webhook|webhook_url|"
-    r"image|image_url|avatar|avatar_url|"
-    r"thumbnail|thumbnail_url|file_url|link|href|location"
-    r")$",
-    re.IGNORECASE,
-)
+# Generic SSRF-prone parameter token vocabulary. Real SPAs commonly carry
+# prefixed/compound names (`user_url`, `avatar_url`, `redirectUrl`,
+# `webhook_callback`), so we match against TOKENIZED forms — split the
+# param name on snake_case / kebab-case / camelCase boundaries, lowercase,
+# and check whether any resulting token is in our vocabulary. Substring
+# false-positives are avoided because we compare against discrete tokens,
+# not raw substrings.
+_SSRF_TOKENS = frozenset({
+    "url", "uri", "src", "source", "target", "dest", "destination",
+    "callback", "return", "returnto", "returnurl",
+    "redirect", "redirectto", "redirecturl", "redirecturi",
+    "next", "continue", "forward", "forwardto",
+    "origin", "fetch", "fetchfrom", "proxy", "webhook", "webhookurl",
+    "image", "imageurl", "avatar", "avatarurl",
+    "thumbnail", "thumbnailurl", "fileurl", "link", "href", "location",
+})
+
+# Insert a delimiter before any capital that follows a lowercase letter,
+# so `redirectUrl` tokenizes to `redirect`, `Url` — both lowercase-folded
+# to `redirect`, `url`.
+_CAMEL_SPLIT = re.compile(r"([a-z0-9])([A-Z])")
+
+
+def _is_ssrf_param_name(name: str) -> bool:
+    if not name:
+        return False
+    snake = _CAMEL_SPLIT.sub(r"\1_\2", name).lower()
+    return any(t for t in re.split(r"[_\-\s.]+", snake) if t in _SSRF_TOKENS)
 
 # A param VALUE that is itself a URL also signals url_input. Covers
 # absolute http(s) and protocol-relative.
@@ -137,7 +150,7 @@ def classify(case: dict) -> list[str]:
     # on opaque APIs that name params generically (e.g. "q", "src") but
     # carry a URL in the value.
     for name, value in pairs:
-        if _SSRF_PARAM_NAME.match(name):
+        if _is_ssrf_param_name(name):
             shapes.add("url_input")
             break
         if isinstance(value, str) and _URL_VALUE.match(value):

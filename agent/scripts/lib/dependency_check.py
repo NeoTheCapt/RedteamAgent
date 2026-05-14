@@ -257,23 +257,111 @@ def osv_query(ecosystem: str, name: str, version: str, endpoint: str, timeout: f
 
 
 def osv_severity(vuln: dict) -> str:
+    """Map an OSV.dev vuln record to a four-bucket severity label.
+
+    OSV records sometimes carry `database_specific.severity` as a string
+    label (e.g. GHSA always does), but for many advisories only the
+    CVSS v3 vector string is present. The earlier implementation of
+    this function dropped the vector path entirely and returned INFO —
+    so Log4Shell (CVSS 10.0) came back as INFO and got buried alongside
+    informational disclosures.
+
+    Severity ranges follow FIRST.org's CVSS v3 spec:
+        9.0 - 10.0  CRITICAL
+        7.0 - 8.9   HIGH
+        4.0 - 6.9   MEDIUM
+        0.1 - 3.9   LOW
+        0.0        INFO (treated same as missing)
+    """
     sev = vuln.get("database_specific") or {}
     if isinstance(sev, dict):
-        score = str(sev.get("severity") or sev.get("cvss_severity") or "").upper()
-        if score in {"CRITICAL", "HIGH", "MEDIUM", "LOW"}:
-            return score
+        label = str(sev.get("severity") or sev.get("cvss_severity") or "").upper()
+        if label in {"CRITICAL", "HIGH", "MEDIUM", "LOW"}:
+            return label
+
     sevs = vuln.get("severity") or []
     if isinstance(sevs, list):
         for entry in sevs:
             if not isinstance(entry, dict):
                 continue
             t = str(entry.get("type") or "").upper()
-            if t in {"CVSS_V3", "CVSS_V4"} and isinstance(entry.get("score"), str):
-                # CVSS vector -> map by base-score range. The score format
-                # is "CVSS:3.1/AV:N/.../<base>". We rely on `database_specific`
-                # above when available; this fallback returns INFO.
-                pass
+            score = entry.get("score")
+            if t in {"CVSS_V3", "CVSS_V4"} and isinstance(score, str):
+                computed = _cvss_label_from_vector(score)
+                if computed:
+                    return computed
     return "INFO"
+
+
+# CVSS v3.x metric weights from FIRST.org §7.1. Same numbers used by
+# every CVSS calculator on the planet — not target-specific.
+_CVSS_V3_AV = {"N": 0.85, "A": 0.62, "L": 0.55, "P": 0.2}
+_CVSS_V3_AC = {"L": 0.77, "H": 0.44}
+_CVSS_V3_PR_UNCHANGED = {"N": 0.85, "L": 0.62, "H": 0.27}
+_CVSS_V3_PR_CHANGED = {"N": 0.85, "L": 0.68, "H": 0.50}
+_CVSS_V3_UI = {"N": 0.85, "R": 0.62}
+_CVSS_V3_CIA = {"H": 0.56, "L": 0.22, "N": 0.0}
+
+
+def _cvss_label_from_vector(vector: str) -> str:
+    """Compute the CVSS v3 base score from a vector string and return
+    its severity label. Returns "" if the vector is malformed.
+
+    Vector shape: `CVSS:3.[01]/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H`
+    (plus optional temporal / environmental tail we ignore).
+    """
+    if not vector or not vector.upper().startswith("CVSS:3"):
+        return ""
+    metrics: dict[str, str] = {}
+    for chunk in vector.split("/"):
+        if ":" not in chunk:
+            continue
+        key, _, value = chunk.partition(":")
+        metrics[key.upper()] = value.upper()
+    try:
+        av = _CVSS_V3_AV[metrics["AV"]]
+        ac = _CVSS_V3_AC[metrics["AC"]]
+        ui = _CVSS_V3_UI[metrics["UI"]]
+        scope_changed = metrics["S"] == "C"
+        pr_table = _CVSS_V3_PR_CHANGED if scope_changed else _CVSS_V3_PR_UNCHANGED
+        pr = pr_table[metrics["PR"]]
+        c = _CVSS_V3_CIA[metrics["C"]]
+        i = _CVSS_V3_CIA[metrics["I"]]
+        a = _CVSS_V3_CIA[metrics["A"]]
+    except KeyError:
+        return ""
+
+    isc_base = 1.0 - (1.0 - c) * (1.0 - i) * (1.0 - a)
+    if scope_changed:
+        impact = 7.52 * (isc_base - 0.029) - 3.25 * (isc_base - 0.02) ** 15
+    else:
+        impact = 6.42 * isc_base
+    if impact <= 0:
+        base = 0.0
+    else:
+        exploitability = 8.22 * av * ac * pr * ui
+        raw = (exploitability + impact) * (1.08 if scope_changed else 1.0)
+        # CVSS roundup: ceiling to one decimal place.
+        base = min(_cvss_roundup(raw), 10.0)
+
+    if base >= 9.0:
+        return "CRITICAL"
+    if base >= 7.0:
+        return "HIGH"
+    if base >= 4.0:
+        return "MEDIUM"
+    if base >= 0.1:
+        return "LOW"
+    return ""
+
+
+def _cvss_roundup(value: float) -> float:
+    """CVSS-spec roundup: round x up to the nearest tenth, then return.
+    FIRST.org §6 defines this as `ceil(x * 10) / 10` for x > 0."""
+    if value <= 0:
+        return 0.0
+    import math
+    return math.ceil(value * 10) / 10
 
 
 # ---------------------------------------------------------------------------

@@ -173,14 +173,34 @@ def classify(case: dict) -> list[str]:
         tags.add("file_handling")
 
     # workflow_token: any URL path under a token-issuance/verification
-    # verb. Also triggered if the request body or response snippet
-    # mentions a token-class field (covers user/session endpoints that
-    # return JWTs without naming "token" in the route).
+    # verb. Also triggered if the response snippet contains a token-class
+    # field in a position that proves issuance rather than mere
+    # documentation. The bare substring `bearer ` was removed because it
+    # over-fires on help pages, error messages, and API docs that just
+    # mention bearer auth without issuing a token.
     if _TOKEN_PATH.search(url_path):
         tags.add("workflow_token")
     else:
-        snippet = str(case.get("response_snippet") or "").lower()
-        if any(kw in snippet for kw in ("\"token\"", "\"jwt\"", "bearer ", "\"access_token\"", "\"refresh_token\"")):
+        snippet = str(case.get("response_snippet") or "")
+        # JSON-encoded token field (quoted key on the left of a colon)
+        # proves the response is structurally returning a token value,
+        # not just describing one in prose.
+        if re.search(
+            r"['\"](?:token|jwt|access_token|refresh_token|"
+            r"id_token|session_token|bearer_token)['\"]\s*:",
+            snippet,
+            re.IGNORECASE,
+        ):
+            tags.add("workflow_token")
+        # `Authorization: Bearer <value>` echoed in a Set-Cookie / header
+        # dump or curl-style transcript also proves issuance. Bare prose
+        # like "use Bearer auth" does NOT match because we require the
+        # full `Authorization:` prefix on the same line.
+        elif re.search(
+            r"Authorization\s*:\s*Bearer\s+[A-Za-z0-9._\-]{8,}",
+            snippet,
+            re.IGNORECASE,
+        ):
             tags.add("workflow_token")
 
     # object_reference: REST-style /<noun>/<id> at path tail. Numeric
