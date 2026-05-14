@@ -82,6 +82,55 @@ source-analysis
    curl -sL <target> | grep -oE 'window\.__\w+__\s*=\s*\{[^}]*\}'
    ```
 
+6. DEPENDENCY MANIFEST ANALYSIS
+
+   When a case URL ends in a known package-manifest filename
+   (`package.json`, `package-lock.json`, `requirements.txt`,
+   `Pipfile.lock`, `go.mod`, `composer.json`, `Gemfile.lock`) OR when
+   you can fetch any of those via misconfig disclosure / `/.well-known`
+   / a backup endpoint, parse it through the local extractor and check
+   each declared dependency for supply-chain anomalies. Source-only
+   probes — no DoS, no fuzz, no target writes.
+
+   Two helpers:
+
+   * `agent/scripts/lib/dependency_extract.py` — pure-stdlib parser for
+     the 6 manifest formats listed above, plus CDN URL extraction from
+     HTML/JS bodies (catches `<script src=".../jquery-1.4.2.min.js">`
+     and similar version pinning in pages that don't expose a manifest).
+   * `agent/scripts/lib/dependency_check.py` — typosquatting heuristic
+     against an embedded popular-package list per ecosystem (Damerau-
+     Levenshtein distance 1-2 against the top npm/pypi/go/packagist/
+     rubygems names). Opt-in OSV.dev CVE query when the engagement
+     allows it (`--osv` flag or `REDTEAM_DEPENDENCY_OSV=1` env).
+
+   Pipeline:
+
+   ```bash
+   # When the case is a manifest disclosure
+   curl -sL <target>/package.json \
+     | python3 agent/scripts/lib/dependency_extract.py --filename package.json \
+     | python3 agent/scripts/lib/dependency_check.py --offline-only
+
+   # CDN URL hunt across any HTML/JS body
+   curl -sL <target> \
+     | python3 agent/scripts/lib/dependency_extract.py --filename page.html --cdn \
+     | python3 agent/scripts/lib/dependency_check.py --offline-only
+
+   # Authorized full CVE pass (only when engagement allows external OSV.dev call)
+   curl -sL <target>/package-lock.json \
+     | python3 agent/scripts/lib/dependency_extract.py --filename package-lock.json \
+     | REDTEAM_DEPENDENCY_OSV=1 python3 agent/scripts/lib/dependency_check.py
+   ```
+
+   Treat every output line as a draft finding (one per anomaly). Map
+   to OWASP A06 (Vulnerable Components) for `vulnerable` rows and A08
+   (Software & Data Integrity Failures) for `typosquatting` rows.
+   Include the manifest source + package name + version in the
+   evidence section. Do NOT skip a `typosquatting` row just because
+   the package is unfamiliar — the heuristic is conservative and the
+   operator decides whether to escalate.
+
 === OUTPUT FORMAT ===
 
 ### Source Analysis Results: <objective>
