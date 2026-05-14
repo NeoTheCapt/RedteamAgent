@@ -4,16 +4,17 @@
 Track A binds 6 surface tags to required workflow mutations (empty-body,
 duplicate ×3, boundary, mass-assignment, unauthorized session). That
 covers most "submit and forget" write bugs. The residual gap is multi-
-step state bugs:
+step state bugs, three categories the single-shot mutations miss:
 
-  * accumulation:    duplicate submission increments a counter (Multiple
-                     Likes, Mass Dispel)
+  * accumulation:    duplicate submission increments a counter and the
+                     server does not reject the second submission as
+                     a duplicate.
   * state pivot:     a successful write returns an id/balance/quantity
-                     that an attacker can target in a follow-up (Wallet
-                     Depletion, Mint the Honey Pot)
+                     that an attacker can target in a follow-up,
+                     typically a withdraw / spend / mint flow.
   * cross-session:   a state mutation is accepted by one session but
-                     should reflect for / be inaccessible to another
-                     (Manipulate Basket, View Basket)
+                     observable to / mutates state for another session
+                     (cart, basket, profile, document share flows).
 
 These bugs require **read-back verification** — fire the write, observe
 the response (or a follow-up GET), and compare to baseline. Vuln-analyst
@@ -22,10 +23,13 @@ on a structural signal: does the response shape say "I mutated state"?
 
 Generic stateful markers (web-app vocabulary, never target-specific):
 
-  * Response body contains a key from {id, _id, uuid, count, total,
-    balance, quantity, amount, score, status, version, etag, revision,
-    created_at, updated_at, deleted_at, expires_at}.
-  * Response status is 201 (Created) or 204 (No Content with Location).
+  * Response body contains a key from the canonical REST/JSON:API/HAL
+    vocabulary: identifier (id/_id/uuid/guid), counter (count/total/
+    quantity/balance/score/likes/votes/rating), versioning (etag/
+    revision/rev), timestamp (created_at/updated_at/deleted_at/
+    expires_at and their camelCase variants), or side-effect cardinality
+    (affected/modified/matched).
+  * Response status is 201 (Created), 202 (Accepted), or 204 (No Content).
   * Response status is 200 AND the body is JSON containing a numeric
     value alongside one of the stateful keys.
 
@@ -76,6 +80,10 @@ _STATEFUL_KEYS = frozenset({
     "createdAt", "updatedAt", "deletedAt", "expiresAt",
     # cardinality of side effects
     "affected", "modified", "matched",
+    # write-acknowledgment keys (added post-Codex-review). These are
+    # less FP-prone than `status`/`success` because they explicitly
+    # name a write operation, not a generic outcome marker.
+    "created", "inserted", "updated", "deleted",
 })
 
 

@@ -205,8 +205,10 @@ source-analysis
 #### Recommended Follow-Up (return to operator — do NOT execute)
 
 #### Surface Candidates
-Emit only when the mapping is reasonably clear. Use one JSON line per candidate:
-`{"surface_type":"workflow_token","target":"GET /rest/2fa/status","source":"source-analyzer","rationale":"bundle discloses setup-token flow","evidence_ref":"downloads/source-analysis/assets/main.js","status":"discovered"}`
+Emit only when the mapping is reasonably clear. Use one JSON line per candidate.
+Example shape (use the target's own paths — this is the field schema, not a
+specific endpoint to look for):
+`{"surface_type":"<canonical type>","target":"<METHOD> <path>","source":"source-analyzer","rationale":"<one-line evidence>","evidence_ref":"downloads/source-analysis/<file>","status":"discovered"}`
 
 #### Intelligence
 Extracted intel for intel.md. ONLY include items actually discovered — omit empty tables.

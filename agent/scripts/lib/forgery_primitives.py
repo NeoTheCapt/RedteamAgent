@@ -90,12 +90,19 @@ _ALGORITHM_TOKEN = re.compile(
 )
 
 
-# Secret literal pattern. Matches a quoted string of >=8 printable
+# Secret literal pattern. Matches a quoted string of >=6 printable
 # characters following a key-shaped identifier (`secret`, `key`,
 # `signing_key`, `jwt_secret`, `password`, ...).
+#
+# Post-Codex-review fix: bounded the prefix character class to {0,40}.
+# The earlier unbounded `[\w.\-]*` caused catastrophic backtracking on
+# large unmatched word-character runs — a synthetic body of 50000
+# `A`-characters followed by an unclosed `jwt_secret = "` took ~100
+# seconds in re.search. Source-analyzer regularly scans large webpack
+# bundles, so an unbounded backtrack is a real pipeline stall.
 _SECRET_DECL = re.compile(
     r"(?xi)"
-    r"(?P<name>[\w.\-]*(?:secret|signing[_-]?key|signkey|hmac[_-]?key|"
+    r"(?P<name>[\w.\-]{0,40}(?:secret|signing[_-]?key|signkey|hmac[_-]?key|"
     r"jwt[_-]?key|jwt[_-]?secret|api[_-]?secret|access[_-]?secret|"
     r"sign[_-]?secret|app[_-]?secret|client[_-]?secret|symmetric[_-]?key|"
     r"shared[_-]?secret|private[_-]?key|encryption[_-]?key|salt))"
@@ -176,16 +183,45 @@ _TAG_CONTEXT_MARKERS = re.compile(
 def _tag_sample_near(text: str, span: tuple[int, int], window: int = 200) -> str:
     """Return the first hex/base64 candidate near `span` that also has
     a tag-context marker within ±`window` chars. Without the context
-    marker, the candidate is rejected as too-likely-a-FP."""
+    marker, the candidate is rejected as too-likely-a-FP.
+
+    Post-Codex-review fix: prefer the candidate CLOSEST to a context
+    marker, not just the first one in regex iteration order. With the
+    original "first hit wins" rule, a long base64 filler appearing
+    before the real `signature=` could capture and shadow the
+    real signed value. The tighter rule iterates context markers and
+    picks the nearest candidate to each, then keeps the best.
+    """
     lo = max(0, span[0] - window * 4)
     hi = min(len(text), span[1] + window * 4)
     region = text[lo:hi]
+    if not region:
+        return ""
+
+    # Index context markers first; the candidate must be near one of
+    # them, not just anywhere in the search window.
+    contexts = [(m.start(), m.end()) for m in _TAG_CONTEXT_MARKERS.finditer(region)]
+    if not contexts:
+        return ""
+
+    best_distance = window + 1
+    best_sample = ""
     for tag_m in _TAG_SAMPLE.finditer(region):
-        ctx_lo = max(0, tag_m.start() - window)
-        ctx_hi = min(len(region), tag_m.end() + window)
-        if _TAG_CONTEXT_MARKERS.search(region[ctx_lo:ctx_hi]):
-            return tag_m.group(0)
-    return ""
+        t_start, t_end = tag_m.start(), tag_m.end()
+        # Distance to the nearest context marker.
+        for c_start, c_end in contexts:
+            if t_end < c_start:
+                d = c_start - t_end
+            elif c_end < t_start:
+                d = t_start - c_end
+            else:
+                d = 0
+            if d <= window and d < best_distance:
+                best_distance = d
+                best_sample = tag_m.group(0)
+                if d == 0:
+                    return best_sample
+    return best_sample
 
 
 def _mask(value: str, keep: int = 4) -> str:

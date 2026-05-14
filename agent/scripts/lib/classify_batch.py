@@ -69,6 +69,19 @@ def _load(name: str):
     return module
 
 
+def _tag_aggregate(payload: list, field: str) -> dict[str, int]:
+    """Aggregate tag counts from a batch payload, tolerant of non-dict
+    entries. Post-Codex-review fix: previously a non-dict entry raised
+    AttributeError on `.get()` and the whole summary line was lost."""
+    agg: dict[str, int] = {}
+    for entry in payload:
+        if not isinstance(entry, dict):
+            continue
+        for tag in entry.get(field) or []:
+            agg[str(tag)] = agg.get(str(tag), 0) + 1
+    return agg
+
+
 def _input_shapes_summary(mod, path: Path) -> str:
     import json
     annotated = mod._annotate_batch(path)
@@ -78,10 +91,7 @@ def _input_shapes_summary(mod, path: Path) -> str:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return "input_shapes_summary=parse_error"
-    agg: dict[str, int] = {}
-    for entry in payload:
-        for tag in entry.get("input_shapes") or []:
-            agg[tag] = agg.get(tag, 0) + 1
+    agg = _tag_aggregate(payload if isinstance(payload, list) else [], "input_shapes")
     if not agg:
         return "input_shapes_summary=none"
     return "input_shapes_summary=" + ",".join(
@@ -98,10 +108,7 @@ def _surface_types_summary(mod, path: Path) -> str:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return "surface_types_summary=parse_error"
-    agg: dict[str, int] = {}
-    for entry in payload:
-        for tag in entry.get("surface_types") or []:
-            agg[tag] = agg.get(tag, 0) + 1
+    agg = _tag_aggregate(payload if isinstance(payload, list) else [], "surface_types")
     if not agg:
         return "surface_types_summary=none"
     return "surface_types_summary=" + ",".join(

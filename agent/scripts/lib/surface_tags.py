@@ -99,8 +99,12 @@ _RECOVERY_PATH = re.compile(
 # File upload vocabulary. Either an explicit upload path or a generic
 # upload-like noun. The multipart content-type signal is checked
 # separately and either alone triggers `file_handling`.
+# Post-Codex-review fix: removed one target-specific workflow token
+# (a feedback-form route that accepted attachments). Generic
+# upload-noun vocabulary only — every entry here appears in OWASP/
+# RFC vocabulary for any framework.
 _UPLOAD_PATH = re.compile(
-    r"(?:^|/)(?:upload|uploads|files?|attachments?|documents?|complain|media|photos?|images?)(?:/|$)",
+    r"(?:^|/)(?:upload|uploads|files?|attachments?|documents?|media|photos?|images?)(?:/|$)",
     re.IGNORECASE,
 )
 
