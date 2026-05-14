@@ -70,25 +70,33 @@ else
     batch_paths="$(jq -r 'map(.url_path // .url // "") | join(",")' "$OUT_FILE")"
 fi
 
-# Annotate each case with two complementary target-agnostic tag families:
-#   * input_shapes  — describes INPUT SHAPE (url-input, xml-input,
-#                     template-renderer, json-writer, image-loader);
-#                     bound to required INJECTION probe families.
-#   * surface_types — describes FUNCTIONAL ROLE (auth_entry,
-#                     account_recovery, privileged_write, file_handling,
-#                     workflow_token, object_reference); bound to required
-#                     WORKFLOW-MUTATION families.
-# Vuln-analyst enforces both bindings within its probe budget. The two
-# classifiers are independent and additive; either can be absent and
-# the batch falls back to legacy buffet behavior.
+# Annotate each case with three complementary target-agnostic tag families:
+#   * input_shapes      — INPUT SHAPE (url-input, xml-input, template-
+#                         renderer, json-writer, image-loader); bound to
+#                         required INJECTION probe families.
+#   * surface_types     — FUNCTIONAL ROLE (auth_entry, account_recovery,
+#                         privileged_write, file_handling, workflow_token,
+#                         object_reference); bound to required
+#                         WORKFLOW-MUTATION families.
+#   * stateful_response — boolean — does this write's response shape
+#                         imply a state mutation? When true, vuln-analyst
+#                         adds read-back / accumulation / cross-session
+#                         sub-probes that A's serial mutations don't
+#                         reach. When false, the legacy A workflow runs.
+# Each classifier is independent and additive; missing python3 / parse
+# error / unrecognized payload leaves the batch untouched.
 BATCH_INPUT_SHAPES=""
 BATCH_SURFACE_TYPES=""
+BATCH_STATEFUL=""
 if [[ "$batch_count" != "0" ]] && command -v python3 >/dev/null 2>&1; then
     if shape_summary="$(python3 "$SCRIPT_DIR/lib/input_shapes.py" --batch "$OUT_FILE" 2>/dev/null)"; then
         BATCH_INPUT_SHAPES="${shape_summary#input_shapes_summary=}"
     fi
     if surface_summary="$(python3 "$SCRIPT_DIR/lib/surface_tags.py" --batch "$OUT_FILE" 2>/dev/null)"; then
         BATCH_SURFACE_TYPES="${surface_summary#surface_types_summary=}"
+    fi
+    if stateful_summary="$(python3 "$SCRIPT_DIR/lib/stateful_response.py" --batch "$OUT_FILE" 2>/dev/null)"; then
+        BATCH_STATEFUL="${stateful_summary#stateful_summary=}"
     fi
 fi
 
@@ -104,6 +112,9 @@ if [[ -n "$BATCH_INPUT_SHAPES" ]]; then
 fi
 if [[ -n "$BATCH_SURFACE_TYPES" ]]; then
     printf 'BATCH_SURFACE_TYPES=%s\n' "$BATCH_SURFACE_TYPES"
+fi
+if [[ -n "$BATCH_STATEFUL" ]]; then
+    printf 'BATCH_STATEFUL=%s\n' "$BATCH_STATEFUL"
 fi
 
 if [[ -s "$stderr_file" ]]; then
