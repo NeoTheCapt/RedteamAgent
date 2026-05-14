@@ -70,7 +70,7 @@ else
     batch_paths="$(jq -r 'map(.url_path // .url // "") | join(",")' "$OUT_FILE")"
 fi
 
-# Annotate each case with three complementary target-agnostic tag families:
+# Annotate each case with four complementary target-agnostic tag families:
 #   * input_shapes      — INPUT SHAPE (url-input, xml-input, template-
 #                         renderer, json-writer, image-loader); bound to
 #                         required INJECTION probe families.
@@ -82,12 +82,19 @@ fi
 #                         imply a state mutation? When true, vuln-analyst
 #                         adds read-back / accumulation / cross-session
 #                         sub-probes that A's serial mutations don't
-#                         reach. When false, the legacy A workflow runs.
+#                         reach.
+#   * security_context  — {identifier, question, confidence} — when a
+#                         password-recovery case exposes a security-
+#                         question shape, vuln-analyst writes the pair
+#                         into intel.md so the existing intel_changed
+#                         hook auto-dispatches osint-analyst to research
+#                         candidate answers.
 # Each classifier is independent and additive; missing python3 / parse
 # error / unrecognized payload leaves the batch untouched.
 BATCH_INPUT_SHAPES=""
 BATCH_SURFACE_TYPES=""
 BATCH_STATEFUL=""
+BATCH_SECURITY_CONTEXT=""
 if [[ "$batch_count" != "0" ]] && command -v python3 >/dev/null 2>&1; then
     if shape_summary="$(python3 "$SCRIPT_DIR/lib/input_shapes.py" --batch "$OUT_FILE" 2>/dev/null)"; then
         BATCH_INPUT_SHAPES="${shape_summary#input_shapes_summary=}"
@@ -97,6 +104,9 @@ if [[ "$batch_count" != "0" ]] && command -v python3 >/dev/null 2>&1; then
     fi
     if stateful_summary="$(python3 "$SCRIPT_DIR/lib/stateful_response.py" --batch "$OUT_FILE" 2>/dev/null)"; then
         BATCH_STATEFUL="${stateful_summary#stateful_summary=}"
+    fi
+    if security_summary="$(python3 "$SCRIPT_DIR/lib/security_question.py" --batch "$OUT_FILE" 2>/dev/null)"; then
+        BATCH_SECURITY_CONTEXT="${security_summary#security_context_summary=}"
     fi
 fi
 
@@ -115,6 +125,9 @@ if [[ -n "$BATCH_SURFACE_TYPES" ]]; then
 fi
 if [[ -n "$BATCH_STATEFUL" ]]; then
     printf 'BATCH_STATEFUL=%s\n' "$BATCH_STATEFUL"
+fi
+if [[ -n "$BATCH_SECURITY_CONTEXT" ]]; then
+    printf 'BATCH_SECURITY_CONTEXT=%s\n' "$BATCH_SECURITY_CONTEXT"
 fi
 
 if [[ -s "$stderr_file" ]]; then

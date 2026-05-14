@@ -46,6 +46,55 @@ osint-recon
    - Organizational structure and employee enumeration
    - Tools: theHarvester, spiderfoot, curl (GitHub API, Hunter.io API)
 
+5. SECURITY-QUESTION ANSWER RESEARCH
+
+   When the engagement's `intel.md` carries entries under
+   `## Security Questions` (written by vuln-analyst when a password-
+   recovery case exposes a security-question shape), produce a
+   bounded list of CANDIDATE answers per (identifier, question) pair
+   and write them back so vuln-analyst can rotate them on the next
+   recovery probe.
+
+   For each unanswered row in the Security Questions table:
+
+   - Use Domain 4 (Social & Organizational) sources keyed off the
+     identifier (email local-part, full name, github handle if known)
+     — public profiles, blog posts, leaked dumps, OSS commits.
+     Avoid speculative guessing; only record what a public source
+     attributes to that identifier.
+   - Map the question shape to a generic answer-class hint
+     (e.g. "your pet name?" → animal nouns near the identifier in
+     social posts; "mother's maiden name?" → public family records;
+     "first school?" → education sections of public profiles).
+     Cite the source URL with each candidate.
+   - Bound the candidate count to 6 per (identifier, question) — a
+     hard ceiling so vuln-analyst's rotation stays under one probe
+     budget. Sort by confidence (top OSINT evidence first).
+
+   Output the candidates as a `Candidate Answers` block under the
+   row in intel.md AND append a structured record to
+   `$DIR/auth.json` under the `security_answer_candidates` array
+   (create the field if absent). One JSON object per pair:
+
+   ```json
+   {
+     "identifier": "<email or username>",
+     "question": "<question text or 'unknown'>",
+     "candidates": ["<candidate1>", "<candidate2>", ...],
+     "sources": ["<url1>", "<url2>", ...],
+     "confidence": "HIGH" | "MEDIUM" | "LOW"
+   }
+   ```
+
+   Preserve any existing entries in `security_answer_candidates`
+   (append, never overwrite). Vuln-analyst's account_recovery row
+   reads this array and rotates the candidates on the next recovery
+   case for the same identifier.
+
+   When OSINT yields zero plausible candidates, still append the
+   record with an empty `candidates` array so vuln-analyst knows the
+   research happened and won't keep re-triggering on the same row.
+
 === TOOL EXECUTION MODEL ===
 
 Host-allowed: curl, jq, dig, whois
