@@ -131,6 +131,55 @@ source-analysis
    the package is unfamiliar — the heuristic is conservative and the
    operator decides whether to escalate.
 
+7. CRYPTOGRAPHIC FORGERY PRIMITIVES
+
+   A leaked secret is HALF a forgery primitive. The other half is a
+   matching algorithm + a sample signed value (a JWT, an HMAC-tagged
+   token, a signed cookie). When all three appear in the same source
+   body, the operator can hand off ONE finding to exploit-developer
+   with everything needed to craft a forgery in one bounded step.
+   Without this co-location the same information stays scattered
+   across multiple disclosure findings and the forge attempt never
+   happens.
+
+   For every JS/HTML/config body you analyze, also run the local
+   extractor:
+
+   ```bash
+   curl -sL <main-js> \
+     | python3 agent/scripts/lib/forgery_primitives.py --source main.js
+
+   # Or directly on a downloaded artifact
+   python3 agent/scripts/lib/forgery_primitives.py downloads/source-analysis/main.js
+   ```
+
+   The extractor uses purely STRUCTURAL detection: RFC 7518 algorithm
+   names (HS256/RS256/...), RFC 7519 JWT shape (`eyJ`-prefixed three-
+   segment base64), HMAC API call sites (`crypto.createHmac`,
+   `hmac.new`, `hash_hmac`, `OpenSSL::HMAC`), and PEM private-key
+   armor headers. No target-specific values.
+
+   Output kinds:
+
+   | kind          | algorithm     | secret               | sample               |
+   |---------------|---------------|----------------------|----------------------|
+   | `jwt_signing` | HS256/RS256/… | embedded JWT secret  | sample JWT token     |
+   | `hmac_signed` | sha256/…      | embedded HMAC key    | hex/base64 tag       |
+   | `rsa_signed`  | RS256/EdDSA   | PEM private key      | optional JWT sample  |
+
+   Hand every emitted row to the operator as a forge-ready primitive:
+
+   ```
+   #### Forgery Primitives
+   | kind | algorithm | secret (truncated) | sample (truncated) | source |
+   |------|-----------|--------------------|--------------------|--------|
+   ```
+
+   These primitives map to OWASP A02 (Cryptographic Failures) and
+   should be handed off as a `forgery_primitive` follow-up so
+   exploit-developer can attempt the forge in one bounded step. Do NOT
+   stop at the disclosure finding — the primitive is the action item.
+
 === OUTPUT FORMAT ===
 
 ### Source Analysis Results: <objective>
