@@ -53,16 +53,24 @@ from pathlib import Path
 # Generic stateful field names. Each appears in JSON:API / HAL / OpenAPI
 # canonical examples. Adding a target-specific key here would be a
 # contract violation enforced by the unit test grep.
+#
+# Post-M1 fix: dropped `status`, `state`, `phase`, `version` from the
+# set. Those four over-fire on extremely common non-mutating responses:
+#   * `{"status":"ok"}` — every ack response in every framework
+#   * `{"appName":"x","version":"1.2.3"}` — every config / metadata GET
+#   * `{"phase":"prod","state":"active"}` — env / health endpoints
+# The 201/202/204 status-code branch still catches genuine state
+# mutations that signal only via response code. `etag`/`revision`/`rev`
+# stay in the set because they're unambiguous resource-versioning
+# markers (rarely appear on metadata responses).
 _STATEFUL_KEYS = frozenset({
     # identifiers
     "id", "_id", "uuid", "guid",
     # counts / quantities
     "count", "total", "quantity", "qty", "amount", "balance", "score",
     "likes", "votes", "rating",
-    # state markers
-    "status", "state", "phase",
-    # versioning / locks
-    "version", "etag", "revision", "rev",
+    # resource versioning / locks (NOT app version)
+    "etag", "revision", "rev",
     # timestamps
     "created_at", "updated_at", "deleted_at", "expires_at",
     "createdAt", "updatedAt", "deletedAt", "expiresAt",

@@ -48,10 +48,18 @@ sees the user is recovery-target.
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import re
 import sys
 from pathlib import Path
+
+
+_HERE = Path(__file__).resolve().parent
+_spec = importlib.util.spec_from_file_location("case_utils", _HERE / "case_utils.py")
+case_utils = importlib.util.module_from_spec(_spec)  # type: ignore[arg-type]
+_spec.loader.exec_module(case_utils)  # type: ignore[union-attr]
+_decode_params_shared = case_utils.decode_params
 
 
 # Canonical recovery-vocabulary field names. Either snake_case or
@@ -102,18 +110,8 @@ _QUESTION_TEXT_RE = re.compile(
 )
 
 
-def _decode_params(raw) -> dict:
-    if not raw:
-        return {}
-    if isinstance(raw, dict):
-        return raw
-    if isinstance(raw, str):
-        try:
-            parsed = json.loads(raw)
-            return parsed if isinstance(parsed, dict) else {}
-        except (TypeError, ValueError):
-            return {}
-    return {}
+# Post-M4 fix: use the shared decoder.
+_decode_params = _decode_params_shared
 
 
 def _normalize(name: str) -> str:
@@ -128,6 +126,27 @@ def _has_recovery_field(params: dict) -> bool:
         if norm in {_normalize(n) for n in _RECOVERY_FIELD_NAMES}:
             return True
     return False
+
+
+# Post-M5 fix: when params dict is empty (form-encoded body the recon
+# pipeline didn't parse), scan the raw body string for canonical field
+# names. Treat `securityAnswer=`, `security_answer=`, etc. anywhere in
+# the body as equivalent to a parsed field hit.
+_RECOVERY_FIELD_IN_BODY = re.compile(
+    r"(?ix)"
+    r"(?:^|[&?\s])("
+    r"security[-_]?question|secret[-_]?question|"
+    r"security[-_]?answer|secret[-_]?answer|"
+    r"recovery[-_]?question|recovery[-_]?answer|"
+    r"challenge[-_]?question|challenge[-_]?answer"
+    r")\s*="
+)
+
+
+def _body_string_has_recovery_field(body: str) -> bool:
+    if not body:
+        return False
+    return bool(_RECOVERY_FIELD_IN_BODY.search(body))
 
 
 def _extract_identifier(params: dict, body: str, headers: str) -> str:
@@ -191,7 +210,11 @@ def detect(case: dict) -> dict | None:
     for col in ("body_params", "query_params", "path_params", "cookie_params"):
         params.update(_decode_params(case.get(col)))
 
-    has_field = _has_recovery_field(params)
+    has_field = (
+        _has_recovery_field(params)
+        # M5 fallback: form-encoded body that wasn't decoded into params.
+        or _body_string_has_recovery_field(body)
+    )
     question_text = _extract_question_text(snippet, body)
 
     # We need at least one of: (a) explicit recovery field name, OR

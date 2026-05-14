@@ -152,6 +152,41 @@ _TAG_SAMPLE = re.compile(
     r")"
 )
 
+# Post-M2 fix: the raw _TAG_SAMPLE pattern matches ANY 32+ hex string,
+# which routinely catches unrelated cache keys, image hashes, commit
+# SHAs, and ETag values that happen to land near an HMAC call. To
+# avoid handing those false primitives to exploit-developer, require
+# the candidate tag to appear in a context that proves it's actually
+# emitted by a signing/digest operation — e.g. a `digest(...)`,
+# `hexdigest()`, `b64encode`, signature/Authorization/X-Signature
+# header transcript, or an explicit `sig=`/`signature=` assignment.
+_TAG_CONTEXT_MARKERS = re.compile(
+    r"(?xi)"
+    r"\.digest\s*\(\s*['\"]?(?:hex|base64)?"        # crypto.digest('hex') style
+    r"|\.hexdigest\s*\("                            # hmac.hexdigest() style
+    r"|\bb64encode\b|\bbase64\.b64encode\b"         # python base64
+    r"|X-Signature\s*:|X-HMAC\s*:"                  # signed-request transports
+    r"|Authorization\s*:\s*HMAC"                    # HMAC scheme
+    r"|\bsignature\s*[=:]"                          # signature= / signature:
+    r"|\bsig\s*[=:]"                                # sig=
+    r"|\bmac\s*[=:]"                                # mac=
+)
+
+
+def _tag_sample_near(text: str, span: tuple[int, int], window: int = 200) -> str:
+    """Return the first hex/base64 candidate near `span` that also has
+    a tag-context marker within ±`window` chars. Without the context
+    marker, the candidate is rejected as too-likely-a-FP."""
+    lo = max(0, span[0] - window * 4)
+    hi = min(len(text), span[1] + window * 4)
+    region = text[lo:hi]
+    for tag_m in _TAG_SAMPLE.finditer(region):
+        ctx_lo = max(0, tag_m.start() - window)
+        ctx_hi = min(len(region), tag_m.end() + window)
+        if _TAG_CONTEXT_MARKERS.search(region[ctx_lo:ctx_hi]):
+            return tag_m.group(0)
+    return ""
+
 
 def _mask(value: str, keep: int = 4) -> str:
     if not value:
@@ -291,15 +326,20 @@ def extract(text: str, source: str = "stdin") -> list[dict]:
             if _within(call_span, (ss, se)):
                 chosen_secret = value
                 break
-        chosen_sample = ""
-        for tag_m in _TAG_SAMPLE.finditer(text):
-            t_span = (tag_m.start(), tag_m.end())
-            # Avoid re-using a known JWT segment as the HMAC sample.
-            if any(t_span[0] >= j[1] and t_span[1] <= j[2] for j in jwts):
-                continue
-            if _within(call_span, t_span):
-                chosen_sample = tag_m.group(0)
-                break
+        # Post-M2 fix: use context-aware tag finder. Without proximity
+        # to a digest()/hexdigest()/X-Signature/signature= marker, a
+        # random 32-char hex would be picked up as an HMAC sample and
+        # exploit-developer would burn budget on a non-HMAC string. The
+        # JWT-overlap guard still applies — JWT segments are emitted as
+        # `jwt_signing` primitives, not HMAC.
+        chosen_sample = _tag_sample_near(text, call_span)
+        # If the chosen sample happens to overlap a JWT segment, retry
+        # with a tighter window that excludes the JWT range.
+        if chosen_sample:
+            for jwt_text, j_start, j_end in jwts:
+                if chosen_sample in jwt_text:
+                    chosen_sample = ""
+                    break
         if not chosen_secret and not chosen_sample:
             continue
         sig = ("hmac_signed", alg, chosen_secret, chosen_sample)

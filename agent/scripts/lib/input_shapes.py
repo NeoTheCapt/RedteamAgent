@@ -42,11 +42,22 @@ with the field added. The field is sorted/deduped and may be empty [].
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import re
 import sys
 from pathlib import Path
 from typing import Any
+
+
+# Import case_utils via spec-load so this module stays runnable from any
+# cwd (the unit tests load each classifier in isolation). Path is fixed
+# relative to this file.
+_HERE = Path(__file__).resolve().parent
+_spec = importlib.util.spec_from_file_location("case_utils", _HERE / "case_utils.py")
+case_utils = importlib.util.module_from_spec(_spec)  # type: ignore[arg-type]
+_spec.loader.exec_module(case_utils)  # type: ignore[union-attr]
+_decode_params_shared = case_utils.decode_params
 
 # Generic SSRF-prone parameter token vocabulary. Real SPAs commonly carry
 # prefixed/compound names (`user_url`, `avatar_url`, `redirectUrl`,
@@ -81,14 +92,20 @@ def _is_ssrf_param_name(name: str) -> bool:
 # absolute http(s) and protocol-relative.
 _URL_VALUE = re.compile(r"^\s*(?:https?:|//)", re.IGNORECASE)
 
-# Unrendered template-engine markers visible in response (or echoed back in
-# request body). Conservative — only flags clearly bracketed forms so plain
-# JSON like {"a": 1} doesn't trigger.
+# Unrendered template-engine markers. Post-M6 fix: dropped two
+# patterns that collided with JS / FreeMarker syntax common in JS
+# bundles:
+#   * `${...}` matches ES6 template literals (every modern JS bundle
+#     has `${variable}` strings reflected back to clients)
+#   * `<#...>` matches FreeMarker but also any HTML tag whose first
+#     character is `#` (rare but possible in some doc layouts)
+# Kept the two unambiguous server-template-engine markers: Jinja /
+# Twig / Handlebars `{{...}}` and ERB / EJS `<%...%>`. Both signal a
+# server-side template engine that didn't render its placeholders —
+# a strong SSTi indicator regardless of framework.
 _TEMPLATE_MARKER = re.compile(
-    r"\{\{\s*[^{}\s][^{}]*\}\}"     # Jinja / Twig / Handlebars: {{ x }}
-    r"|\$\{\s*[^{}\s][^{}]*\}"        # Java EL / Velocity: ${x}
+    r"\{\{\s*[^{}\s][^{}]*\}\}"     # Jinja / Twig / Handlebars / Vue / Angular: {{ x }}
     r"|<%\s*[^%]+%>"                  # ERB / EJS: <% x %>
-    r"|<#\s*[^>]+>"                   # FreeMarker: <#assign x>
 )
 
 # url_path tokens that indicate an image consumer endpoint. Generic web-app
@@ -103,26 +120,9 @@ _IMAGE_CONSUMER_PATH = re.compile(
 _XML_BODY_PREFIX = re.compile(r"^\s*(?:<\?xml|<!DOCTYPE\b|<[A-Za-z][^>]*\bxmlns=)", re.IGNORECASE)
 
 
-def _decode_params(raw: Any) -> dict:
-    """Return a dict from query/body/path/cookie params. Tolerates JSON
-    string, dict, list of [k,v], or None. Never raises."""
-    if not raw:
-        return {}
-    if isinstance(raw, dict):
-        return raw
-    if isinstance(raw, list):
-        out = {}
-        for entry in raw:
-            if isinstance(entry, (list, tuple)) and len(entry) == 2:
-                out[str(entry[0])] = entry[1]
-        return out
-    if isinstance(raw, str):
-        try:
-            parsed = json.loads(raw)
-        except (TypeError, ValueError):
-            return {}
-        return _decode_params(parsed)
-    return {}
+# Use the shared param decoder so every classifier sees the same view
+# of a case. See agent/scripts/lib/case_utils.py.
+_decode_params = _decode_params_shared
 
 
 def _all_param_pairs(case: dict) -> list[tuple[str, Any]]:

@@ -46,10 +46,18 @@ be empty [].
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import re
 import sys
 from pathlib import Path
+
+
+_HERE = Path(__file__).resolve().parent
+_spec = importlib.util.spec_from_file_location("case_utils", _HERE / "case_utils.py")
+case_utils = importlib.util.module_from_spec(_spec)  # type: ignore[arg-type]
+_spec.loader.exec_module(case_utils)  # type: ignore[union-attr]
+_decode_params_shared = case_utils.decode_params
 
 # Authentication entry points. Either an explicit auth verb segment
 # (`/login`, `/signin`, `/authenticate`, `/auth/<x>`) or a registration
@@ -104,20 +112,10 @@ _OBJECT_ID_TAIL = re.compile(
 )
 
 
-def _decode_params(raw):
-    """Tolerant JSON-or-dict decode. Mirrors input_shapes._decode_params
-    semantics but kept local so the two classifiers stay independent."""
-    if not raw:
-        return {}
-    if isinstance(raw, dict):
-        return raw
-    if isinstance(raw, str):
-        try:
-            parsed = json.loads(raw)
-            return parsed if isinstance(parsed, dict) else {}
-        except (TypeError, ValueError):
-            return {}
-    return {}
+# Post-M4 fix: share the decoder so list-form params (commonly produced
+# by certain recon scrapers as `[["k","v"],...]`) get parsed by every
+# classifier identically. See agent/scripts/lib/case_utils.py.
+_decode_params = _decode_params_shared
 
 
 def classify(case: dict) -> list[str]:
