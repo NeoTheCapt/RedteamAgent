@@ -70,6 +70,20 @@ else
     batch_paths="$(jq -r 'map(.url_path // .url // "") | join(",")' "$OUT_FILE")"
 fi
 
+# Annotate each case with target-agnostic input-shape tags (url_input,
+# xml_input, template_renderer, json_writer, image_loader). Vuln-analyst
+# binds these to required probe families so structural surfaces (SSRF,
+# XXE, SSTi, NoSQL operator injection, cross-site imaging) are no longer
+# skipped under tight probe budgets. Best-effort: if python3 is absent
+# or the classifier fails, the batch is left untouched and the operator
+# falls back to the legacy buffet behavior.
+BATCH_INPUT_SHAPES=""
+if [[ "$batch_count" != "0" ]] && command -v python3 >/dev/null 2>&1; then
+    if shape_summary="$(python3 "$SCRIPT_DIR/lib/input_shapes.py" --batch "$OUT_FILE" 2>/dev/null)"; then
+        BATCH_INPUT_SHAPES="${shape_summary#input_shapes_summary=}"
+    fi
+fi
+
 printf 'BATCH_FILE=%s\n' "$OUT_FILE"
 printf 'BATCH_TYPE=%s\n' "$BATCH_TYPE"
 printf 'BATCH_AGENT=%s\n' "$BATCH_AGENT"
@@ -77,6 +91,9 @@ printf 'BATCH_STAGE=%s\n' "$BATCH_STAGE"
 printf 'BATCH_COUNT=%s\n' "$batch_count"
 printf 'BATCH_IDS=%s\n' "$batch_ids"
 printf 'BATCH_PATHS=%s\n' "$batch_paths"
+if [[ -n "$BATCH_INPUT_SHAPES" ]]; then
+    printf 'BATCH_INPUT_SHAPES=%s\n' "$BATCH_INPUT_SHAPES"
+fi
 
 if [[ -s "$stderr_file" ]]; then
     printf 'BATCH_NOTE=%s\n' "$(tr '\n' ' ' < "$stderr_file" | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//')"
