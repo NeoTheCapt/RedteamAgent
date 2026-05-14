@@ -70,17 +70,25 @@ else
     batch_paths="$(jq -r 'map(.url_path // .url // "") | join(",")' "$OUT_FILE")"
 fi
 
-# Annotate each case with target-agnostic input-shape tags (url_input,
-# xml_input, template_renderer, json_writer, image_loader). Vuln-analyst
-# binds these to required probe families so structural surfaces (SSRF,
-# XXE, SSTi, NoSQL operator injection, cross-site imaging) are no longer
-# skipped under tight probe budgets. Best-effort: if python3 is absent
-# or the classifier fails, the batch is left untouched and the operator
-# falls back to the legacy buffet behavior.
+# Annotate each case with two complementary target-agnostic tag families:
+#   * input_shapes  — describes INPUT SHAPE (url-input, xml-input,
+#                     template-renderer, json-writer, image-loader);
+#                     bound to required INJECTION probe families.
+#   * surface_types — describes FUNCTIONAL ROLE (auth_entry,
+#                     account_recovery, privileged_write, file_handling,
+#                     workflow_token, object_reference); bound to required
+#                     WORKFLOW-MUTATION families.
+# Vuln-analyst enforces both bindings within its probe budget. The two
+# classifiers are independent and additive; either can be absent and
+# the batch falls back to legacy buffet behavior.
 BATCH_INPUT_SHAPES=""
+BATCH_SURFACE_TYPES=""
 if [[ "$batch_count" != "0" ]] && command -v python3 >/dev/null 2>&1; then
     if shape_summary="$(python3 "$SCRIPT_DIR/lib/input_shapes.py" --batch "$OUT_FILE" 2>/dev/null)"; then
         BATCH_INPUT_SHAPES="${shape_summary#input_shapes_summary=}"
+    fi
+    if surface_summary="$(python3 "$SCRIPT_DIR/lib/surface_tags.py" --batch "$OUT_FILE" 2>/dev/null)"; then
+        BATCH_SURFACE_TYPES="${surface_summary#surface_types_summary=}"
     fi
 fi
 
@@ -93,6 +101,9 @@ printf 'BATCH_IDS=%s\n' "$batch_ids"
 printf 'BATCH_PATHS=%s\n' "$batch_paths"
 if [[ -n "$BATCH_INPUT_SHAPES" ]]; then
     printf 'BATCH_INPUT_SHAPES=%s\n' "$BATCH_INPUT_SHAPES"
+fi
+if [[ -n "$BATCH_SURFACE_TYPES" ]]; then
+    printf 'BATCH_SURFACE_TYPES=%s\n' "$BATCH_SURFACE_TYPES"
 fi
 
 if [[ -s "$stderr_file" ]]; then
