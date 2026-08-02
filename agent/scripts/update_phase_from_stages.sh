@@ -91,7 +91,7 @@ phase_index() {
 current_idx=$(phase_index "$current")
 derived_idx=$(phase_index "$derived")
 
-tmp="$(mktemp "${TMPDIR:-/tmp}/scope-XXXXXX.json")"
+tmp="$(mktemp "$ENG_DIR/.scope-XXXXXX.json")"
 if (( derived_idx > current_idx )); then
     # Forward transition — backfill predecessors.
     jq --arg phase "$derived" '
@@ -113,5 +113,6 @@ else
     jq --arg phase "$derived" '.current_phase = $phase' "$SCOPE_JSON" > "$tmp"
 fi
 
+chmod 0664 "$tmp"
 mv "$tmp" "$SCOPE_JSON"
 echo "phase: $current -> $derived  (active=$ACTIVE processing=$PROCESSING vuln_confirmed=$VULN_CONFIRMED)" >&2

@@ -81,13 +81,14 @@ observation_interval_seconds() {
 
 mark_scope_in_progress_for_observation() {
     local tmp_scope
-    tmp_scope="$(mktemp "${TMPDIR:-/tmp}/scope-observation.XXXXXX")"
+    tmp_scope="$(mktemp "$ENG_DIR/.scope-observation.XXXXXX")"
     jq '
       .status = "in_progress"
       | .current_phase = "report"
       | del(.end_time)
       | .phases_completed = (((.phases_completed // []) + ["report"]) | unique)
     ' "$SCOPE_FILE" >"$tmp_scope"
+    chmod 0664 "$tmp_scope"
     mv "$tmp_scope" "$SCOPE_FILE"
     if [[ -f "$EMIT_RUNTIME_EVENT" ]]; then
         bash "$EMIT_RUNTIME_EVENT" \
@@ -103,11 +104,12 @@ mark_scope_in_progress_for_observation() {
 
 mark_log_in_progress_for_observation() {
     local tmp_log
-    tmp_log="$(mktemp "${TMPDIR:-/tmp}/log-observation.XXXXXX")"
+    tmp_log="$(mktemp "$ENG_DIR/.log-observation.XXXXXX")"
     awk '
       /^- \*\*Status\*\*:/ { print "- **Status**: In Progress"; next }
       { print }
     ' "$LOG_FILE" >"$tmp_log"
+    chmod 0664 "$tmp_log"
     mv "$tmp_log" "$LOG_FILE"
 }
 
@@ -120,7 +122,7 @@ mark_report_in_progress_for_observation() {
     else
         eng_date="$(engagement_header_date_today)"
     fi
-    tmp_report="$(mktemp "${TMPDIR:-/tmp}/report-observation.XXXXXX")"
+    tmp_report="$(mktemp "$ENG_DIR/.report-observation.XXXXXX")"
     awk -v date_line="**Date**: ${eng_date} — In Progress" '
       BEGIN { date_done = 0 }
       /^\*\*Date\*\*:/ {
@@ -144,6 +146,7 @@ mark_report_in_progress_for_observation() {
           }
       }
     ' "$REPORT_FILE" >"$tmp_report"
+    chmod 0664 "$tmp_report"
     mv "$tmp_report" "$REPORT_FILE"
 }
 
@@ -301,13 +304,14 @@ else
     ENG_DATE="$(engagement_header_date_today)"
 fi
 
-tmp_scope="$(mktemp "${TMPDIR:-/tmp}/scope-finalize.XXXXXX")"
+tmp_scope="$(mktemp "$ENG_DIR/.scope-finalize.XXXXXX")"
 jq --arg end_time "$END_TIME" '
   .status = "complete"
   | .current_phase = "complete"
   | .end_time = $end_time
   | .phases_completed = (((.phases_completed // []) + ["report"]) | unique)
 ' "$SCOPE_FILE" >"$tmp_scope"
+chmod 0664 "$tmp_scope"
 mv "$tmp_scope" "$SCOPE_FILE"
 
 if [[ -f "$EMIT_RUNTIME_EVENT" ]]; then
@@ -321,15 +325,16 @@ if [[ -f "$EMIT_RUNTIME_EVENT" ]]; then
         --payload-json '{"phase":"complete"}' || true
 fi
 
-tmp_log="$(mktemp "${TMPDIR:-/tmp}/log-finalize.XXXXXX")"
+tmp_log="$(mktemp "$ENG_DIR/.log-finalize.XXXXXX")"
 awk '
   /^- \*\*Status\*\*:/ { print "- **Status**: Completed"; next }
   { print }
 ' "$LOG_FILE" >"$tmp_log"
+chmod 0664 "$tmp_log"
 mv "$tmp_log" "$LOG_FILE"
 
 if [[ -f "$REPORT_FILE" ]]; then
-    tmp_report="$(mktemp "${TMPDIR:-/tmp}/report-finalize.XXXXXX")"
+    tmp_report="$(mktemp "$ENG_DIR/.report-finalize.XXXXXX")"
     awk -v date_line="**Date**: ${ENG_DATE} — Completed" '
       BEGIN { date_done = 0; target_done = 0 }
       /^\*\*Date\*\*:/ {
@@ -354,6 +359,7 @@ if [[ -f "$REPORT_FILE" ]]; then
           }
       }
     ' "$REPORT_FILE" >"$tmp_report"
+    chmod 0664 "$tmp_report"
     mv "$tmp_report" "$REPORT_FILE"
 fi
 
