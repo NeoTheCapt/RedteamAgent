@@ -2946,6 +2946,7 @@ def _sync_agent_source_into_workspace(run: Run) -> None:
     if workspace_root.exists():
         shutil.rmtree(workspace_root, ignore_errors=True)
     workspace_root.mkdir(parents=True, exist_ok=True)
+    workspace_root.chmod(0o2775)
 
     for child in source_root.iterdir():
         if child.name in excluded_children:

@@ -70,7 +70,7 @@ update_finding_count() {
     local count tmp_file
 
     count="$(rg -c '^## \[FINDING-[A-Z]{2}-[0-9]{3}\]' "$findings_file" 2>/dev/null || printf '0')"
-    tmp_file="$(mktemp "${TMPDIR:-/tmp}/findings-count.XXXXXX")"
+    tmp_file="$(mktemp "$(dirname "$findings_file")/.findings-count.XXXXXX")"
 
     awk -v count="$count" '
         BEGIN { updated = 0 }
@@ -88,6 +88,7 @@ update_finding_count() {
         }
     ' "$findings_file" >"$tmp_file"
 
+    chmod 0664 "$tmp_file"
     mv "$tmp_file" "$findings_file"
 }
 

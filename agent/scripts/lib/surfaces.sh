@@ -131,7 +131,7 @@ upsert_surface_record() {
 
     ensure_surface_file "$eng_dir"
     surface_file="$(surface_file_path "$eng_dir")"
-    tmp_file="$(mktemp "${TMPDIR:-/tmp}/surfaces-jsonl.XXXXXX")"
+    tmp_file="$(mktemp "$eng_dir/.surfaces-jsonl.XXXXXX")"
 
     python3 - <<'PY' "$surface_file" "$tmp_file" "$surface_type" "$target" "$source" "$rationale" "$evidence_ref" "$status"
 import json,sys
@@ -169,5 +169,6 @@ with open(tmp_file, "w", encoding="utf-8") as out:
         out.write(json.dumps(row, ensure_ascii=True) + "\n")
 PY
 
+    chmod 0664 "$tmp_file"
     mv "$tmp_file" "$surface_file"
 }
